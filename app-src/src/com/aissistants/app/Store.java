@@ -30,7 +30,7 @@ final class Store {
 
     void save(int maxSteps, int temperature, int timeoutSec, boolean autoRun, int thinking) {
         sp.edit()
-                .putInt("maxSteps", Math.max(1, Math.min(40, maxSteps)))
+                .putInt("maxSteps", Math.max(1, Math.min(5000, maxSteps)))
                 .putInt("temperature", Math.max(0, Math.min(100, temperature)))
                 .putInt("timeoutSec", Math.max(20, Math.min(1800, timeoutSec)))
                 .putBoolean("autoRun", autoRun)
@@ -53,6 +53,13 @@ final class Store {
 
     boolean allowAlways(String cat) { return sp.getBoolean("allow_" + cat, false); }
     void setAllowAlways(String cat, boolean b) { sp.edit().putBoolean("allow_" + cat, b).apply(); }
+
+    /** per-conversation grant ("di percakapan ini") - keyed by session id so it survives a restart */
+    boolean allowChat(String cat, String sid) { return sp.getBoolean("allowc_" + cat + "_" + sid, false); }
+    void setAllowChat(String cat, String sid, boolean b) {
+        if (sid == null || sid.isEmpty()) return;
+        sp.edit().putBoolean("allowc_" + cat + "_" + sid, b).apply();
+    }
 
     // ---- legacy single endpoint (migration source only) ---------------------------------
 

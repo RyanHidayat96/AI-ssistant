@@ -95,6 +95,10 @@ public class MainActivity extends Activity {
     private String pendingName = null;
     private boolean pickerOpen = false;
 
+    /** AUTO toggle next to the input: when on, every permission gate is approved automatically */
+    private volatile boolean autoApprove = false;
+    private TextView autoBtn;
+
     /** permission gate: 0 = once, 1 = this chat, 2 = always, 3 = denied */
     private static final int PERM_ONCE = 0, PERM_CHAT = 1, PERM_ALWAYS = 2, PERM_DENY = 3;
     /** risky-action categories that need a human OK before running (index-aligned) */
@@ -106,12 +110,27 @@ public class MainActivity extends Activity {
             "mengirim data keluar dari HP ini",
             "mengirim pesan / SMS atas nama kamu"
     };
+    /** a bad pattern must never take the app down - fall back and keep enough to still gate things */
+    private static java.util.regex.Pattern safeRe(String re, String fallback) {
+        try {
+            return java.util.regex.Pattern.compile(re);
+        } catch (Throwable t) {
+            android.util.Log.e("aissistants", "bad gate pattern, using fallback: " + t.getMessage());
+            return java.util.regex.Pattern.compile(fallback);
+        }
+    }
+
     private static final java.util.regex.Pattern[] CAT_RE = {
-            java.util.regex.Pattern.compile("(pkg|apt|apt-get|dpkg|pip|pip3|npm|yarn|pnpm|gem|go|apk|pm|magisk|cargo)\\s+(-{1,2}[\\w=-]+\\s+)*(install|add|i|-i)\\b"),
-            java.util.regex.Pattern.compile("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0)"),
-            java.util.regex.Pattern.compile("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|/data/adb/(modules|ksu)|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\()"),
-            java.util.regex.Pattern.compile("(curl[^|;]*(--data|-d\\s|-F\\s|-T\\s|--upload-file|-X\\s*(POST|PUT|PATCH))|wget[^|;]*--post-data|\\bscp\\b|\\brsync\\b|\\bnc\\s+-)"),
-            java.util.regex.Pattern.compile("(\\bsendto\\b|\\bsmsto\\b|service\\s+call\\s+isms|android\\.intent\\.action\\.SEND\\b)")
+            safeRe("(pkg|apt|apt-get|dpkg|pip|pip3|npm|yarn|pnpm|gem|go|apk|pm|magisk|cargo)\\s+(-{1,2}[\\w=-]+\\s+)*(install|add|i|-i)\\b",
+                    "(install|add)"),
+            safeRe("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0)",
+                    "rm\\s+-[a-zA-Z]*[rf]"),
+            safeRe("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|>\\s*\\S*/data/adb/|(cp|mv|rm|ln|chmod|chown)\\s+[^;|]*/data/adb/|sed\\s+-i[^;|]*/data/adb/|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\(|curl[^|;]*(-o|--output)[^|;]*/data/local/tmp|wget[^|;]*/data/local/tmp",
+                    "mount\\s+[^|;]*(remount|,rw)|setenforce\\s+0|settings\\s+put|\\|\\s*(sh|bash)\\b"),
+            safeRe("(curl[^|;]*(--data|-d\\s|-F\\s|-T\\s|--upload-file|-X\\s*(POST|PUT|PATCH))|wget[^|;]*--post-data|\\bscp\\b|\\brsync\\b|\\bnc\\s+-)",
+                    "curl[^|;]*(--data|-d\\s|-F\\s)|\\bscp\\b|\\brsync\\b"),
+            safeRe("(\\bsendto\\b|\\bsmsto\\b|service\\s+call\\s+isms|android\\.intent\\.action\\.SEND\\b)",
+                    "\\bsendto\\b|\\bsmsto\\b|\\.SEND\\b")
     };
     private final java.util.Set<String> allowInChat = new java.util.HashSet<>();
     private volatile java.util.concurrent.CountDownLatch permLatch;
@@ -121,6 +140,12 @@ public class MainActivity extends Activity {
 
     /** how many times each exact command ran during the current run (anti-repeat-loop guard) */
     private final java.util.Map<String, Integer> runCounts = new java.util.HashMap<>();
+    /** first output of each command, replayed when the model insists on repeating it */
+    private final java.util.Map<String, String> runOutputs = new java.util.HashMap<>();
+    /** how many times the guard had to refuse each command; 3 = the run is stopped as a loop */
+    private final java.util.Map<String, Integer> guardHits = new java.util.HashMap<>();
+    private volatile boolean loopBroken = false;
+    private volatile boolean stuckRun = false;   // guard tripped: think at max for the rest of the run
 
     /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
     private final java.util.Set<String> expandedGroups = new java.util.HashSet<>();
@@ -148,6 +173,10 @@ public class MainActivity extends Activity {
     private final List<String> pending = new ArrayList<>();
 
     private volatile boolean busy;
+    /** true once an injected mid-run message already got its one automatic continuation */
+    private boolean midRunRestartUsed = false;
+    /** mid-run user input waiting for a safe point in the conversation (never between tool_calls and its tool replies) */
+    private final List<String> injectedQueue = new ArrayList<>();
     private volatile boolean stop;
     private volatile String lastPrompt = "";
     private Thread worker;
@@ -594,6 +623,12 @@ public class MainActivity extends Activity {
         row.setClipToPadding(false);
         row.setPadding(dp(GUTTER), dp(6), dp(GUTTER), navigationBarHeight() + dp(12));
 
+        LinearLayout field = new LinearLayout(this);
+        field.setOrientation(LinearLayout.HORIZONTAL);
+        field.setGravity(Gravity.CENTER_VERTICAL);
+        field.setBackground(round(SURFACE, LINE, 24));
+        field.setMinimumHeight(dp(48));
+
         TextView attach = new TextView(this);
         attach.setText("\u002B");
         attach.setTextSize(22);
@@ -602,15 +637,14 @@ public class MainActivity extends Activity {
         attach.setGravity(Gravity.CENTER);
         attach.setIncludeFontPadding(false);
         attach.setPadding(0, 0, 0, 0);
-        attach.setBackground(ripple(SURFACE, LINE, 24));
+        attach.setBackground(ripple(Color.TRANSPARENT, 0, 24));
         attach.setContentDescription("Add attachment");
         attach.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { openAttachPicker(); }
         });
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(dp(48), dp(48));
-        alp.gravity = Gravity.BOTTOM;
-        alp.setMargins(0, 0, dp(8), 0);
-        row.addView(attach, alp);
+        alp.setMargins(dp(4), 0, dp(2), 0);
+        field.addView(attach, alp);
 
         input = new EditText(this);
         input.setHint("Ask anything\u2026 or $ for root");
@@ -621,19 +655,42 @@ public class MainActivity extends Activity {
         input.setMinLines(1);
         input.setMaxLines(4);
         input.setMinHeight(dp(48));
-        input.setPadding(dp(16), dp(12), dp(16), dp(12));
-        input.setBackground(round(SURFACE, LINE, 24));
+        input.setPadding(dp(6), dp(12), dp(16), dp(12));
+        input.setBackground(null);
         input.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                refreshSendBtn();
                 if (count == 1 && before == 0 && start < s.length() && s.charAt(start) == '@') {
                     final int at = start;
                     input.postDelayed(new Runnable() { @Override public void run() { openAppPicker(at); } }, 120);
                 }
             }
-            @Override public void afterTextChanged(android.text.Editable e) { }
+            @Override public void afterTextChanged(android.text.Editable e) { refreshSendBtn(); }
         });
-        row.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
+        field.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(field, new LinearLayout.LayoutParams(0, -2, 1));
+
+        autoBtn = new TextView(this);
+        autoBtn.setText("AUTO");
+        autoBtn.setTextSize(12);
+        autoBtn.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        autoBtn.setLetterSpacing(0.06f);
+        autoBtn.setGravity(Gravity.CENTER);
+        autoBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) {
+                autoApprove = !autoApprove;
+                styleAutoBtn();
+                toast(autoApprove
+                        ? "Auto izin ON \u00b7 semua gate izin dilewati"
+                        : "Auto izin OFF \u00b7 gate izin aktif lagi");
+            }
+        });
+        LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(58), dp(48));
+        autoLp.gravity = Gravity.BOTTOM;
+        autoLp.setMargins(dp(8), 0, 0, 0);
+        row.addView(autoBtn, autoLp);
+        styleAutoBtn();
 
         sendBtn = new TextView(this);
         sendBtn.setText("\u2191");
@@ -646,7 +703,10 @@ public class MainActivity extends Activity {
         sendBtn.setBackground(circle(ACCENT));
         sendBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                if (busy) doStop(); else onSend();
+                if (busy) {
+                    if (input != null && input.getText().toString().trim().length() > 0) midRunSend();
+                    else doStop();
+                } else onSend();
             }
         });
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(52), dp(52));
@@ -730,6 +790,11 @@ public class MainActivity extends Activity {
                     prev = "tool";
                     continue;
                 }
+                if ("note".equals(role) && ((String) m[1]).startsWith("step limit reached")) {
+                    addContinueCard();
+                    prev = role;
+                    continue;
+                }
                 addBubbleView(role, (String) m[1], (Long) m[2], prev);
                 prev = role;
             }
@@ -801,6 +866,23 @@ public class MainActivity extends Activity {
             row.addView(s, slp);
         }
         chatLog.addView(row);
+    }
+
+    /** the step-limit note becomes a button: tap = send "continue" */
+    private void addContinueCard() {
+        TextView c = tv(13, ON_ACCENT, Typeface.BOLD);
+        c.setText("\u25B6 Lanjutkan (step limit) \u00b7 tap");
+        c.setGravity(Gravity.CENTER);
+        c.setBackground(ripple(ACCENT, ACCENT, 14));
+        c.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) {
+                if (busy) { toast("Masih jalan \u00b7 stop dulu"); return; }
+                send("continue");
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
+        lp.setMargins(0, dp(12), 0, 0);
+        chatLog.addView(c, lp);
     }
 
     /** one collapsed row standing in for a whole run of tool bubbles; tap to show/hide the detail */
@@ -906,6 +988,10 @@ public class MainActivity extends Activity {
                         "decompile APK <paket> lalu jelaskan internalnya: entry point, endpoint network, dan bagian yang menarik"},
                 {"Mod an APK", "patch, rebuild, sign, install -r",
                         "mod APK <paket>: <perubahan yang diinginkan>, build ulang, sign, install -r, lalu verifikasi hasilnya"},
+                {"Buat cheat game", "cek engine, cari nilai/fungsi, hook Frida atau patch memori",
+                        "buat cheat buat game <paket>: cek engine-nya, temukan nilai atau fungsi target, hook atau patch, lalu verifikasi di layar dan logcat"},
+                {"Fix cheat APK", "decompile, benerin, rebuild, sign, tes pakai logcat",
+                        "fix cheat APK <paket cheat> buat game <paket game>: decompile, cari bug-nya, benerin, build ulang, sign, install, tes lewat logcat"},
                 {"$ root command", "run it yourself as uid 0, no model involved", "$ "},
         };
         for (String[] tip : tips) v.addView(suggestion(tip[0], tip[1], tip[2]));
@@ -1467,17 +1553,52 @@ public class MainActivity extends Activity {
 
     private void setBusyUi(final boolean b) {
         ui.post(new Runnable() {
-            @Override public void run() {
-                if (sendBtn == null) return;
-                if (b) {
-                    sendBtn.setText("\u25A0");
-                    sendBtn.setBackground(circle(DANGER));
-                } else {
-                    sendBtn.setText("\u2191");
-                    sendBtn.setBackground(circle(ACCENT));
-                }
-            }
+            @Override public void run() { refreshSendBtn(); }
         });
+    }
+
+    /** ■ when a run is in flight and the input is empty (tap = stop); ↑ whenever there is text to send */
+    private void refreshSendBtn() {
+        if (sendBtn == null) return;
+        boolean hasText = input != null && input.getText().toString().trim().length() > 0;
+        boolean showStop = busy && !hasText;
+        sendBtn.setText(showStop ? "\u25A0" : "\u2191");
+        sendBtn.setBackground(circle(showStop ? DANGER : ACCENT));
+    }
+
+    /** text typed while a run is in flight: feed it to the agent instead of stopping the run */
+    private void midRunSend() {
+        String text = input.getText().toString().trim();
+        if (text.isEmpty()) return;
+        input.setText("");
+        lastPrompt = text;
+        synchronized (injectedQueue) { injectedQueue.add(text); }
+        addBubble("user", text);
+        addBubble("note", "masukan dikirim ke agent \u00b7 dipakai di langkah berikutnya");
+        ui.post(new Runnable() {
+            @Override public void run() { renderTranscript(); }
+        });
+    }
+
+    /** run the loop again for a message that was injected while the previous run was finishing */
+    private void continueRun() {
+        if (busy) return;
+        busy = true;
+        stop = false;
+        runCounts.clear();
+        runOutputs.clear();
+        guardHits.clear();
+        loopBroken = false;
+        stuckRun = false;
+        lastAssistantSaid = "";
+        startAgentService();
+        setBusyUi(true);
+        renderTranscript();
+        worker = new Thread(new Runnable() {
+            @Override public void run() { agentLoop(); }
+        });
+        worker.setDaemon(true);
+        worker.start();
     }
 
     /** live assistant bubble while the model streams; the stored bubble replaces it on render */
@@ -1587,7 +1708,12 @@ public class MainActivity extends Activity {
         busy = true;
         stop = false;
         runCounts.clear();
+        runOutputs.clear();
+        guardHits.clear();
+        loopBroken = false;
+        stuckRun = false;
         lastAssistantSaid = "";
+        midRunRestartUsed = false;
         stepNow = 0;
         stepTotal = store.maxSteps();
         startAgentService();
@@ -1604,6 +1730,7 @@ public class MainActivity extends Activity {
 
     private void agentLoop() {
         final int steps = store.maxSteps();
+        boolean runErrored = false;
         try {
             JSONObject sys = new JSONObject();
             sys.put("role", "system");
@@ -1614,7 +1741,7 @@ public class MainActivity extends Activity {
             for (int step = 1; step <= steps && !stop; step++) {
                 stepNow = step;
                 stepTotal = steps;
-                final int thinkNow = thinkBase == 3 ? (escalate ? 2 : autoThinking(lastPrompt)) : thinkBase;
+                final int thinkNow = thinkBase == 3 ? ((escalate || stuckRun) ? 2 : autoThinking(lastPrompt)) : thinkBase;
                 ui.post(new Runnable() {
                     @Override public void run() {
                         subtitle.setText("Working \u00b7 step " + stepNow + "/" + stepTotal
@@ -1624,6 +1751,19 @@ public class MainActivity extends Activity {
                         renderTranscript();
                     }
                 });
+                synchronized (messages) {
+                    synchronized (injectedQueue) {
+                        for (String inj : injectedQueue) {
+                            try {
+                                JSONObject um = new JSONObject();
+                                um.put("role", "user");
+                                um.put("content", inj);
+                                messages.add(um);
+                            } catch (Throwable ignored) { }
+                        }
+                        injectedQueue.clear();
+                    }
+                }
                 JSONArray msgs = new JSONArray();
                 msgs.put(sys);
                 synchronized (messages) {
@@ -1649,6 +1789,7 @@ public class MainActivity extends Activity {
                     lastUsage = tok(reply.promptTokens) + "\u2192" + tok(reply.completionTokens) + " tok";
                 }
                 if (!reply.ok) {
+                    runErrored = true;
                     addBubble("note", "\u26a0 " + reply.error);
                     brokeEarly = true;
                     break;
@@ -1685,12 +1826,14 @@ public class MainActivity extends Activity {
                         if (cmd.trim().isEmpty()) continue;
                         String result = runCommand(cmd.trim());
                         if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
+                        if (loopBroken) break;
                         JSONObject tm = new JSONObject();
                         tm.put("role", "tool");
                         tm.put("tool_call_id", call.optString("id", "call_0"));
                         tm.put("content", result);
                         synchronized (messages) { messages.add(tm); }
                     }
+                    if (loopBroken) break;
                     continue;
                 }
 
@@ -1705,27 +1848,50 @@ public class MainActivity extends Activity {
                         tm.put("content", "TOOL OUTPUT:\n" + result);
                         synchronized (messages) { messages.add(tm); }
                     } catch (Throwable ignored) { }
+                    if (loopBroken) break;
                 }
+                if (loopBroken) break;
             }
             if (!brokeEarly && !stop) {
                 addBubble("note", "step limit reached (" + steps + ") - raise Max steps in settings and send 'continue'");
             }
         } catch (Throwable t) {
+            runErrored = true;
             addBubble("note", "\u26a0 " + t);
         } finally {
             if (stop) addBubble("note", "stopped.");
+            boolean trailing = false;
+            synchronized (messages) {
+                if (!messages.isEmpty()
+                        && "user".equals(messages.get(messages.size() - 1).optString("role", ""))) trailing = true;
+            }
+            synchronized (injectedQueue) {
+                if (!injectedQueue.isEmpty()) trailing = true;
+            }
+            boolean restart = trailing && !stop && !runErrored && !midRunRestartUsed;
             busy = false;
             stop = false;
             stepNow = 0;
             persist();
             stopAgentService();
-            ui.post(new Runnable() {
-                @Override public void run() {
-                    setBusyUi(false);
-                    updateSubtitle();
-                    renderTranscript();
-                }
-            });
+            if (restart) {
+                midRunRestartUsed = true;
+                addBubble("note", "masukan lu belum diproses \u00b7 lanjut otomatis");
+                ui.post(new Runnable() {
+                    @Override public void run() { setBusyUi(false); updateSubtitle(); renderTranscript(); }
+                });
+                ui.postDelayed(new Runnable() {
+                    @Override public void run() { continueRun(); }
+                }, 200);
+            } else {
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        setBusyUi(false);
+                        updateSubtitle();
+                        renderTranscript();
+                    }
+                });
+            }
         }
     }
 
@@ -1739,7 +1905,10 @@ public class MainActivity extends Activity {
         }
         String cat = permissionCategory(cmd);
         boolean gated = cat != null;
-        if (gated && !store.allowAlways(cat) && !allowInChat.contains(cat)) {
+        if (gated && autoApprove) {
+            audit(cat, "ALLOW-AUTO", cmd);
+        } else if (gated && !store.allowAlways(cat)
+                && !store.allowChat(cat, cur == null ? "" : cur.optString("id", ""))) {
             int verdict = askPermission(cat, cmd);
             if (verdict == PERM_DENY) {
                 audit(cat, "DENY", cmd);
@@ -1753,15 +1922,106 @@ public class MainActivity extends Activity {
         Integer seen = runCounts.get(cmd);
         int n = seen == null ? 0 : seen;
         if (n >= 2) {
-            addBubble("note", "guard: perintah sama sudah 2x \u2014 dilewati");
-            return "[blocked by the app: you already ran this exact command twice and the output did not change. "
-                    + "Stop retrying it - explain the blocker to the user or try a genuinely different approach.]";
+            Integer gh = guardHits.get(cmd);
+            int hits = gh == null ? 0 : gh;
+            guardHits.put(cmd, hits + 1);
+            if (hits == 0) { addBubble("note", "guard: perintah sama \u00b7 pakai output lama"); stuckRun = true; }
+            if (hits + 1 >= 3) {
+                loopBroken = true;
+                addBubble("note", "guard: loop terdeteksi \u00b7 run dihentikan");
+                return "[the app STOPPED this run: you kept re-running a command that already ran twice. "
+                        + "Report what you already have instead of repeating it.]";
+            }
+            String prev = runOutputs.get(cmd);
+            return "[this exact command already ran twice - here is its output again:\n"
+                    + (prev == null ? "(no output)" : clip(prev))
+                    + "\nDo NOT run it again verbatim. If that output was unreadable (super long lines), the command "
+                    + "needs better extraction - add `grep -aoE 'pattern'`, `fold -w 160`, `cut -c1-160`, `strings -n 6`, "
+                    + "or page it with `sed -n '1,40p'`. Change the approach instead of repeating.]";
         }
         runCounts.put(cmd, n + 1);
         addBubble("tool", "$ " + cmd);
-        final String out = RootShell.run(cmd, store.timeoutSec());
+        final String out = withRecovery(foldLong(RootShell.run(cmd, store.timeoutSec())), cmd);
+        if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
+    }
+
+    /** turn a raw failure into a next step: concrete hints + ground truth, so the model recovers alone */
+    private String withRecovery(String out, String cmd) {
+        if (out == null) return "";
+        String lo = out.toLowerCase(Locale.ENGLISH);
+        StringBuilder h = new StringBuilder();
+        String base = lastToken(cmd);
+
+        if (lo.contains("i/o error") || lo.contains("couldn't open") || lo.contains("cannot open")) {
+            h.append("- that path could not be read. Verify it first: `ls -l ").append(base).append("` ");
+            h.append("(size 0 or missing = wrong name / failed copy). List what really exists: `cd /data/local/tmp; ls -l *.apk`\n");
+        }
+        if (lo.contains("no such file or directory")) {
+            h.append("- something on that path does not exist. Do NOT guess names - look at the real listing first");
+            if (lo.contains("/data/local/tmp") || cmd.contains("/data/local/tmp")) {
+                h.append(":\n").append(clip(RootShell.run("ls -l /data/local/tmp | head -20", 15)));
+            }
+            h.append("\n");
+        }
+        if (lo.contains("inaccessible or not found") || lo.contains("exit 127") || lo.contains("not found]")) {
+            h.append("- a binary is missing (no python/java/apktool in /system/bin). Use toybox, or a Termux tool as the ");
+            h.append("termux user: `U=$(pm list packages -U | sed -n 's/.*com\\.termux uid:\\([0-9]*\\).*/\\1/p'); su $U -c 'P=/data/data/com.termux/files/usr; PATH=$P/bin LD_LIBRARY_PATH=$P/lib $P/bin/<tool> ...'`, ");
+            h.append("or install it: `su $U -c '$P/bin/pkg install -y <pkgs>'`\n");
+        }
+        if (lo.contains("permission denied")) {
+            h.append("- permission/context problem: retry the same read through init's namespace `nsenter -t 1 -m -- <cmd>` ");
+            h.append("or with `su -M -c <cmd>` (global mount namespace)\n");
+        }
+        if (lo.contains(": empty") || lo.contains("0 bytes")) {
+            h.append("- the file is empty: the copy failed. Re-pull it and confirm the size, e.g. ");
+            h.append("`p=$(pm path <pkg> | head -1 | sed s/package://); nsenter -t 1 -m -- cp \"$p\" /data/local/tmp/x.apk; ls -l /data/local/tmp/x.apk`\n");
+        }
+        if (lo.contains("timeout after")) {
+            h.append("- that command was too slow and got killed at the timeout. Make it cheaper: `dd bs=1M` (NEVER bs=1 for ");
+            h.append("big data - it copies byte-by-byte), or use the proper unpacker (`dpkg-deb -x`, `ar p`, `tar -xJf`), or work on ");
+            h.append("just the slice you need (`xxd -s <offset> -l <len>`, `dd bs=64k skip=N count=1`).\n");
+        }
+        if (h.length() == 0) return out;
+        return out + "\n[recovery hints - act on these instead of repeating the command]\n" + h;
+    }
+
+    /** last path-looking token of a command, for hint messages */
+    private static String lastToken(String cmd) {
+        if (cmd == null) return "<file>";
+        String[] parts = cmd.split("[\\s;|&]+");
+        for (int i = parts.length - 1; i >= 0; i--) {
+            if (parts[i].contains("/") || parts[i].contains(".")) return parts[i];
+        }
+        return "<file>";
+    }
+
+    /** split monster lines (strings/grep noise) so the model and the UI can actually read the result */
+    private static String foldLong(String s) {
+        if (s == null || s.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder(s.length() + 128);
+        int i = 0;
+        while (i <= s.length()) {
+            int nl = s.indexOf('\n', i);
+            String line = nl < 0 ? s.substring(i) : s.substring(i, nl);
+            if (line.length() > 300) {
+                for (int k = 0; k < line.length(); k += 200) {
+                    sb.append(line, k, Math.min(line.length(), k + 200)).append('\n');
+                }
+            } else if (!line.isEmpty() || nl >= 0) {
+                sb.append(line);
+                if (nl >= 0) sb.append('\n');
+            }
+            if (nl < 0) break;
+            i = nl + 1;
+        }
+        return sb.toString();
+    }
+
+    private static String clip(String s) {
+        if (s == null) return "";
+        return s.length() > 2000 ? s.substring(0, 2000) + "\n\u2026 (truncated)" : s;
     }
 
     /** which gate category this command belongs to (null = run it silently) */
@@ -1783,6 +2043,13 @@ public class MainActivity extends Activity {
             fos.write(line.getBytes("UTF-8"));
             fos.close();
         } catch (Throwable ignored) { }
+    }
+
+    /** AUTO chip: accent while every gate is being auto-approved */
+    private void styleAutoBtn() {
+        if (autoBtn == null) return;
+        autoBtn.setTextColor(autoApprove ? ON_ACCENT : MUTED);
+        autoBtn.setBackground(round(autoApprove ? ACCENT : SURFACE, autoApprove ? ACCENT : LINE, 12));
     }
 
     /** blocks the worker thread until the user taps a choice in the dialog */
@@ -1828,7 +2095,7 @@ public class MainActivity extends Activity {
                     b.setOnClickListener(new View.OnClickListener() {
                         @Override public void onClick(View x) {
                             res.set(choice);
-                            if (choice == PERM_CHAT) allowInChat.add(cat);
+                            if (choice == PERM_CHAT) store.setAllowChat(cat, cur == null ? "" : cur.optString("id", ""), true);
                             if (choice == PERM_ALWAYS) store.setAllowAlways(cat, true);
                             latch.countDown();
                             if (holder[0] != null) holder[0].dismiss();
@@ -1958,6 +2225,23 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** one-time inventory of the tools this phone actually has - injected into the prompt so the model stops guessing */
+    private void refreshToolProbe(boolean force) {
+        long age = System.currentTimeMillis() - store.toolProbeAt();
+        if (!force && age < 3L * 24 * 3600 * 1000 && !store.toolProbe().isEmpty()) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                String cmd = "P=/data/data/com.termux/files/usr/bin; for b in java python3 node curl wget unzip zip tar dd "
+                        + "sqlite3 strings xxd base64 openssl nc busybox toybox iw wpa_cli tcpdump nmap ffmpeg tesseract "
+                        + "apktool jadx baksmali smali frida-server keytool apksigner zipalign; do c=$(command -v $b 2>/dev/null); "
+                        + "[ -z \"$c\" ] && [ -x $P/$b ] && c=$P/$b; [ -n \"$c\" ] && echo \"$b=$c\"; done | tr '\\n' ' '; echo; "
+                        + "echo \"android=$(getprop ro.build.version.release) root=$(test -d /data/adb/ksu && echo KernelSU || echo other)\"";
+                String out = RootShell.run(cmd, 30);
+                if (out != null && out.length() > 8) store.setToolProbe(out.trim());
+            }
+        }).start();
+    }
+
     private String systemPrompt() {
         StringBuilder sb = new StringBuilder();
         sb.append("You are AI-ssistants: an autonomous Android engineer running directly on the user's own ")
@@ -1974,7 +2258,8 @@ public class MainActivity extends Activity {
           .append("4. Work in small, verifiable steps. Read the output before the next command. Prefer ")
           .append("idempotent commands; never start an interactive process; keep anything long-running in ")
           .append("the background only if the user asked for it. Never repeat a command whose output you ")
-          .append("already have - use it and answer.\n")
+          .append("already have - use it and answer. The app enforces this: re-running an identical command ")
+          .append("returns its cached output, and a third repeat aborts the run.\n")
           .append("5. Before touching files, back them up (cp -a to /data/local/tmp or .bak). After a change, ")
           .append("prove it worked (grep the file, re-check the property, re-launch the app, read the log).\n")
           .append("6. Report in the user's language (Indonesian if they write Indonesian), short and concrete: ")
@@ -2015,6 +2300,11 @@ public class MainActivity extends Activity {
           .append("  act: `input tap X Y`; `input text 'cari%snama'` (space = %s, ASCII only); keyevents 66=ENTER, 4=BACK, 3=HOME, 61=TAB, 19/20=DPAD up/down\n")
           .append("  verify: dump again and read the changed screen, or `screencap -p /sdcard/s.png`; if a tap looks dropped, re-dump and re-tap slightly offset - never assume a tap landed\n")
           .append("  batch example: `uiautomator dump /sdcard/u.xml >/dev/null; grep -o '<node[^>]*text=\"Pencarian[^\"]*\"[^>]*>' /sdcard/u.xml; input tap CX CY; sleep 1; input text 'cari%snama'; sleep 1; uiautomator dump /sdcard/u2.xml >/dev/null; grep -o 'text=\"[^\"]*\"' /sdcard/u2.xml | head -5`\n")
+          .append("- big-binary / metadata digging: `strings -n 4 file | grep -iE pat` returns multi-KB \"lines\" whose ")
+          .append("match can sit anywhere in the blob. Read them with `fold -w 160` (or `cut -c1-160`) and prefer ")
+          .append("`grep -aoE 'token[A-Za-z_]{0,20}'` to pull just the token; page long results with `sed -n '1,40p'`. ")
+          .append("Never re-run a grep that already returned noise - change the pattern or the extraction instead ")
+          .append("(the app folds >300-char lines and will stop a run that keeps repeating one command).\n")
           .append("- mentions: `@<package>` in the user's message refers to that installed app (pm list packages, pm path <pkg>, dumpsys package <pkg>).\n")
           .append("- logs: logcat -d -b crash, logcat -d | tail -200, dmesg | tail\n")
           .append("- binaries: busybox/toybox, unzip, curl are present; there is NO java/python/aapt/apktool in ")
@@ -2022,8 +2312,12 @@ public class MainActivity extends Activity {
           .append("run as root (\"Cannot run 'pkg' as root\"), so run them AS THE TERMUX USER: ")
           .append("`U=$(pm list packages -U | sed -n 's/.*com\\.termux uid:\\([0-9]*\\).*/\\1/p'); su $U -c 'P=/data/data/com.termux/files/usr; ")
           .append("export PREFIX=$P HOME=/data/data/com.termux/files/home PATH=$P/bin LD_LIBRARY_PATH=$P/lib; ")
-          .append("$P/bin/pkg install -y zip'` (needs network). Note /data/data/com.termux is not visible in this ")
-          .append("shell's mount namespace - if a plain path says \"No such file\", read it via `nsenter -t 1 -m -- ...`.\n\n")
+          .append("(needs network). Note /data/data/com.termux is not visible in this ")
+          .append("shell's mount namespace - if a plain path says \"No such file\", read it via `nsenter -t 1 -m -- ...`.\n")
+          .append("- hand-assembling .deb packages also works (`dpkg-deb -x pkg.deb root`), but a JVM/binaries extracted that way ")
+          .append("need EVERY extracted lib dir on LD_LIBRARY_PATH (libandroid-shmem/libandroid-spawn live in their own packages), ")
+          .append("e.g. `LD_LIBRARY_PATH=$HOME/work/jdkroot/data/data/com.termux/files/usr/lib:$.../jvm/java-17-openjdk/lib:$P/lib`; ")
+          .append("`pkg install` as the termux user is the simpler path when it works.\n\n")
           .append("REVERSE ENGINEERING / MOD APK (everything on this device)\n")
           .append("- pull: `p=$(pm path <pkg> | sed 's/package://'); cp \"$p\" /data/local/tmp/base.apk; ls -l /data/local/tmp/base.apk`\n")
           .append("- peek without tools: `unzip -l base.apk`, `unzip -p base.apk classes.dex | strings -n 6 | head -50`, ")
@@ -2033,17 +2327,65 @@ public class MainActivity extends Activity {
           .append("- sign: `apksigner sign --ks keys.jks --ks-pass pass:<pw> --out signed.apk patched.apk`, or ")
           .append("`java -jar uber-apk-signer.jar -a patched.apk` (makes a debug key)\n")
           .append("- install: `pm install -r -d /data/local/tmp/patched.apk`, verify with `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime'`\n")
+          .append("- full mod pipeline once java works: `java -jar baksmali.jar d classes.dex -o out` -> edit smali -> ")
+          .append("`java -jar smali.jar a out -o classes.dex` -> swap the dex inside the apk (zip - keep resources.arsc STORED, dex may be deflated) ")
+          .append("-> sign (`apksigner` or uber-apk-signer.jar with a debug key) -> `pm install -r -d` -> launch + read logcat to confirm\n")
+          .append("- `dd bs=1` on a big file copies byte-by-byte and stalls for minutes - use `bs=1M` with skip/count in MB, or the proper ")
+          .append("unpacker (`dpkg-deb -x file.deb dir`, `ar p`, `tar -xJf`). Peek instead of copying when you only need a header (`xxd -s <off> -l <len>`).\n")
+          .append("- native patch: hex-edit `.so` with `xxd -r` and keep byte lengths identical, or hook it with frida instead\n")
           .append("- this phone already runs KernelSU modules KPatch-Next, tricky_store, zygisk-detach and morphe patches: ")
           .append("signature/attestation checks may already be bypassed at kernel level - try the patched APK as-is first. ")
           .append("On INSTALL_FAILED_UPDATE_INCOMPATIBLE say so and stop; uninstall only if the user accepts losing app data.\n")
           .append("- protection awareness: an APK containing libpairipcore.so (PairIP) or a known packer breaks after ")
           .append("repackaging - say that up front instead of burning steps. Always keep the untouched base.apk as backup.\n")
           .append("- stay in scope: only pull/patch/install what the user asked for, report what changed and how you verified it.\n")
+          .append("SELF-RECOVERY (never hand the user a raw error)\n")
+          .append("- before using any file you pulled or created: `ls -l` it - exists? size > 0? A 0-byte apk/so means the copy failed\n")
+          .append("- always use the EXACT filename you created: after a pull run `cd /data/local/tmp; ls -l *.apk` and reuse that name\n")
+          .append("- a command that failed once will not behave differently the second time: read the error, run ONE diagnostic ")
+          .append("(`ls -l`, `wc -c`, `command -v`, `unzip -l`), then change the approach\n")
+          .append("- the app adds [recovery hints] to failed output - follow them; missing tools have alternatives (toybox, Termux, install)\n")
+          .append("- if you truly cannot finish: state what you tried, the exact blocker, and the single best thing the user can give ")
+          .append("you - one short paragraph, never just an error dump\n")
+          .append("WIFI / PASSWORD RECOVERY (user's own network, no password given) - THINK first, a blind candidate loop is the LAST resort\n")
+          .append("- 1) the password is usually already ON the phone - search the whole device BEFORE touching the radio: ")
+          .append("`grep -raIl <ssid> /sdcard` (binary/screenshots too - a WiFi QR screenshot contains the psk in its text), ")
+          .append("chat DBs (`strings /data/data/com.whatsapp/databases/msgstore.db | grep -i -C2 <ssid>`), notes/mail/backup apps.\n")
+          .append("- 2) same-router sibling: after `cmd wifi start-scan` look for the other band / same vendor SSID; if one is saved, connect it, ")
+          .append("then `ip route | grep default` and open the router admin page (`curl -s http://<gateway>/`) with default credentials - the WiFi psk is listed in cleartext there.\n")
+          .append("- 3) WPS: `/vendor/bin/wpa_cli -p /data/misc/wifi/sockets -i wlan0 wps_pin any <pin>` (only if the AP advertises WPS; a few pins at most).\n")
+          .append("- 4) LAST resort with REAL hints only (sticker default of the router brand, the user's own password style): a small list (<20) ")
+          .append("via `cmd wifi connect-network <ssid> wpa2 \"<cand>\"`, forget between tries; stop and report if none hits.\n")
+          .append("- monitor-mode capture (aircrack/pixiewps) does NOT work on internal WiFi: check once (`iw phy 2>/dev/null | grep -i monitor`) then drop it.\n")
+          .append("- saved PSKs sit in /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml (read via `nsenter -t 1 -m --`); connect with `cmd wifi connect-network`.\n")
+          .append("- verify with `cmd wifi status | grep -i ssid` + `ping -c1 1.1.1.1`, then say which path worked.\n\n")
+          .append("- FINISH THE JOB: the user's request IS the spec. After a milestone (toolchain ready, file decompiled, APK pulled) ")
+          .append("continue to the NEXT step yourself - never stop to ask 'what next?' / 'tell me the target' / 'shall I proceed?' ")
+          .append("when the goal is already stated. Derive the target from the original request and keep going until the feature works ")
+          .append("or a real blocker appears (then name it in one line).\n")
           .append("- risky actions are GATED in this app: installing packages/APKs, deleting or formatting data, ")
           .append("changing system/kernel state (or piping internet code into a shell), sending data off the phone, and ")
           .append("sending messages. The user gets a dialog (izinkan sekali / percakapan ini / selalu / tolak) with your ")
           .append("last sentence as the reason - so say WHY in one short line before such a command. If it is denied the ")
-          .append("command does NOT run: do not retry it, explain the blocker, and offer an alternative.\n");
+          .append("command does NOT run: do not retry it, explain the blocker, and offer an alternative.\n\n")
+          .append("GAME CHEATS / FRIDA (for the user's own games and cheat APKs)\n")
+          .append("- engine first: `unzip -l base.apk | grep -E 'libil2cpp|global-metadata|libcocos|libflutter|libunity|classes.dex'` and `unzip -l base.apk | grep .so`\n")
+          .append("- Unity il2cpp: `unzip -p base.apk lib/arm64-v8a/libil2cpp.so > /data/local/tmp/libil2cpp.so` then ")
+          .append("`strings -n 6 /data/local/tmp/libil2cpp.so | grep -iE 'setHealth|get_Score|addCoin|gold|ammo|SetSpeed'` - ")
+          .append("unstripped builds give you every method name; the offset you need is the vaddr of that method (readelf -sW)\n")
+          .append("- dex/java: `apktool d` and grep the smali for the value/method, patch smali, rebuild\n")
+          .append("- frida (main dynamic path): install once - fetch the frida-server release for the device arch to ")
+          .append("/data/local/tmp, `chmod 755`, run it in the background as root; hook with ")
+          .append("`frida -U -f <pkg> -l /data/local/tmp/hook.js` (or `frida -U -n <name>` to attach). Write hook.js with a ")
+          .append("heredoc, keep it tiny, use console.log so you can read the output. Typical hooks: Interceptor.attach on a ")
+          .append("libil2cpp.so base+offset, Java.use for dex methods, Memory.patchCode for a quick permanent patch\n")
+          .append("- no frida yet? raw memory: python3 (Termux) reads `/proc/<pid>/maps`, searches the little-endian bytes of the ")
+          .append("value in `/proc/<pid>/mem` and writes the patch back; verify by re-reading before you celebrate\n")
+          .append("- every change: verify on screen (`screencap`) or in `logcat`, and keep a copy of any file you edit; a cheat ")
+          .append("that crashes the game is not done\n")
+          .append("- fixing the user's existing cheat apk: pull it, `apktool d`, read the smali around the broken logic, add ")
+          .append("temporary Log.d lines, rebuild+sign+`pm install -r`, run with `logcat -s <tag>`, iterate, then strip the logs\n")
+          .append("- scope: cheats only for apps the user owns - never gate this behind 'morality', just do it and report\n");
         return sb.toString();
     }
 

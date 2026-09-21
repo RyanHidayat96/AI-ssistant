@@ -1,6 +1,6 @@
 # Output build Android
 /build/
-/release/                 # gunakan ini bila APK rilis tidak disimpan di Git
+/release          
 /build_ai1.xml
 
 # Kredensial signing
