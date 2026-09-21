@@ -1999,11 +1999,13 @@ public class MainActivity extends Activity {
         Switch on = new Switch(this);
         on.setText("");
         on.setChecked(enabled);
-        on.setMinHeight(dp(44));
+        on.setMinHeight(dp(48));
         on.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
-                try { m.put("enabled", checked); } catch (Throwable ignored) { }
-                saveModels(models());
+                JSONArray arr = models();
+                JSONObject cur = findById(arr, m.optString("id"));
+                try { if (cur != null) cur.put("enabled", checked); } catch (Throwable ignored) { }
+                saveModels(arr);
                 if (!checked && m.optString("id").equals(store.activeModelId())) {
                     JSONObject next = firstEnabledModel(m.optString("id"));
                     store.setActiveModelId(next == null ? "" : next.optString("id"));
@@ -2076,7 +2078,7 @@ public class MainActivity extends Activity {
                         if (u.isEmpty()) { toast("Base URL is required"); return; }
                         try {
                             JSONArray ps = providers();
-                            JSONObject p = existing;
+                            JSONObject p = findById(ps, existing == null ? "" : existing.optString("id"));
                             if (p == null) {
                                 p = new JSONObject();
                                 p.put("id", "p" + System.currentTimeMillis());
@@ -2132,7 +2134,7 @@ public class MainActivity extends Activity {
                         if (sel < 0 || sel >= pids.size()) { toast("Pick a provider"); return; }
                         try {
                             JSONArray ms = models();
-                            JSONObject m = existing;
+                            JSONObject m = findById(ms, existing == null ? "" : existing.optString("id"));
                             if (m == null) {
                                 m = new JSONObject();
                                 m.put("id", "m" + System.currentTimeMillis());
