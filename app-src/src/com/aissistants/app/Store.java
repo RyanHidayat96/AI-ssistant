@@ -4,9 +4,12 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 /**
- * Endpoint configuration + chat history, kept in the app's PRIVATE SharedPreferences so the API
- * key never lands in a world-readable file. Nothing here is ever sent anywhere except the
+ * Endpoint configuration + all chat sessions, kept in the app's PRIVATE SharedPreferences so the
+ * API key never lands in a world-readable file. Nothing here is ever sent anywhere except the
  * endpoint the user configured.
+ *
+ * Sessions are one JSON array under "sessions"; the active one's id lives under "activeId".
+ * A single legacy transcript ("history") from older builds is migrated by MainActivity.
  */
 final class Store {
 
@@ -17,6 +20,8 @@ final class Store {
         this.sp = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
     }
 
+    // ---- endpoint / agent configuration ------------------------------------------------
+
     String baseUrl() { return sp.getString("baseUrl", ""); }
     String apiKey() { return sp.getString("apiKey", ""); }
     String model() { return sp.getString("model", ""); }
@@ -24,7 +29,6 @@ final class Store {
     int temperature() { return sp.getInt("temperature", 30); }        // percent, 0..100
     int timeoutSec() { return sp.getInt("timeoutSec", 180); }
     boolean autoRun() { return sp.getBoolean("autoRun", true); }
-    String history() { return sp.getString("history", ""); }
 
     void save(String baseUrl, String apiKey, String model, int maxSteps, int temperature,
               int timeoutSec, boolean autoRun) {
@@ -39,7 +43,25 @@ final class Store {
                 .apply();
     }
 
-    void saveHistory(String json) { sp.edit().putString("history", json == null ? "" : json).apply(); }
-
     boolean configured() { return !baseUrl().isEmpty() && !model().isEmpty(); }
+
+    // ---- chat sessions ------------------------------------------------------------------
+
+    String sessionsJson() { return sp.getString("sessions", ""); }
+
+    void saveSessions(String json) {
+        sp.edit().putString("sessions", json == null ? "" : json).apply();
+    }
+
+    String activeId() { return sp.getString("activeId", ""); }
+
+    void setActiveId(String id) {
+        sp.edit().putString("activeId", id == null ? "" : id).apply();
+    }
+
+    // ---- legacy single-transcript (pre-sessions builds) ---------------------------------
+
+    String legacyHistory() { return sp.getString("history", ""); }
+
+    void clearLegacyHistory() { sp.edit().remove("history").apply(); }
 }
