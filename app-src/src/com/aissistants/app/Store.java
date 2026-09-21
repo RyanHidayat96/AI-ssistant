@@ -28,6 +28,11 @@ final class Store {
     boolean autoRun() { return sp.getBoolean("autoRun", true); }
     int thinking() { return sp.getInt("thinking", 3); }   // 0 off, 1 low, 2 high, 3 auto
 
+    /** cached inventory of the device's tools, injected into the system prompt */
+    String toolProbe() { return sp.getString("toolProbe", ""); }
+    long toolProbeAt() { return sp.getLong("toolProbeAt", 0L); }
+    void setToolProbe(String s) { sp.edit().putString("toolProbe", s).putLong("toolProbeAt", System.currentTimeMillis()).apply(); }
+
     void save(int maxSteps, int temperature, int timeoutSec, boolean autoRun, int thinking) {
         sp.edit()
                 .putInt("maxSteps", Math.max(1, Math.min(5000, maxSteps)))
