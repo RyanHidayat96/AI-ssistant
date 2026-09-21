@@ -27,6 +27,14 @@ final class AiClient {
 
     private AiClient() { }
 
+    /** the live connection, so the Stop button can abort a blocked read */
+    private static volatile HttpURLConnection active;
+
+    static void cancel() {
+        HttpURLConnection c = active;
+        if (c != null) { try { c.disconnect(); } catch (Throwable ignored) { } }
+    }
+
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int timeoutSec) {
         Reply out = new Reply();
@@ -57,6 +65,7 @@ final class AiClient {
 
             byte[] payload = body.toString().getBytes("UTF-8");
             conn = (HttpURLConnection) new URL(url).openConnection();
+            active = conn;
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(20000);
             conn.setReadTimeout(Math.max(30, timeoutSec) * 1000);
@@ -115,6 +124,7 @@ final class AiClient {
             out.error = String.valueOf(t);
             return out;
         } finally {
+            if (active == conn) active = null;
             if (conn != null) conn.disconnect();
         }
     }

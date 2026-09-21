@@ -144,6 +144,7 @@ public class MainActivity extends Activity {
         pill = tv(11, WARN, Typeface.BOLD);
         pill.setGravity(Gravity.CENTER);
         pill.setPadding(dp(12), dp(6), dp(12), dp(6));
+        pill.setMinHeight(dp(48));
         pill.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { requestRoot(); }
         });
@@ -162,7 +163,7 @@ public class MainActivity extends Activity {
         root.addView(bar);
 
         // settings panel (hidden until the gear is tapped)
-        settingsScroll = new ScrollView(this);
+        settingsScroll = new MaxHeightScrollView(this, (int) (getResources().getDisplayMetrics().heightPixels * 0.55f));
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
         settingsScroll.addView(settingsPanel, new ScrollView.LayoutParams(-1, -2));
@@ -202,7 +203,7 @@ public class MainActivity extends Activity {
                 {"Logcat", "tail the last 200 logcat lines and explain anything that looks like a crash"},
                 {"Storage", "show disk usage per partition in human units and where the space went"},
                 {"Network", "list listening sockets, current connections and the wifi/ip configuration"},
-                {"$ shell", "$ "},
+                {"$ root cmd", "$ "},
         };
         for (String[] tr : tricks) {
             Button b = chipButton(tr[0]);
@@ -228,7 +229,7 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.BOTTOM);
         row.setPadding(dp(GUTTER), 0, dp(GUTTER), navigationBarHeight() + dp(10));
         input = new EditText(this);
-        input.setHint("Ask for anything\u2026 or start with $ to run a root command");
+        input.setHint("Ask anything\u2026 or $ for root");
         input.setHintTextColor(MUTED);
         input.setTextColor(FG);
         input.setTextSize(15);
@@ -261,6 +262,7 @@ public class MainActivity extends Activity {
         stopBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 stop = true;
+                AiClient.cancel();
                 addBubble("note", "stopping\u2026");
             }
         });
@@ -525,6 +527,7 @@ public class MainActivity extends Activity {
             JSONObject sys = new JSONObject();
             sys.put("role", "system");
             sys.put("content", systemPrompt());
+            boolean brokeEarly = false;
             for (int step = 1; step <= steps && !stop; step++) {
                 final int s = step;
                 ui.post(new Runnable() {
@@ -538,7 +541,9 @@ public class MainActivity extends Activity {
                 AiClient.Reply reply = AiClient.complete(store.baseUrl(), store.apiKey(), store.model(),
                         msgs, tools(), store.temperature() / 100.0, 300);
                 if (!reply.ok) {
-                    addBubble("note", "\u26a0 " + reply.error);
+                    if (stop) addBubble("note", "stopped.");
+                    else addBubble("note", "\u26a0 " + reply.error);
+                    brokeEarly = true;
                     break;
                 }
                 boolean hasToolCalls = reply.toolCalls != null && reply.toolCalls.length() > 0;
@@ -580,7 +585,7 @@ public class MainActivity extends Activity {
                     continue;
                 }
 
-                if (cmds.isEmpty()) break;
+                if (cmds.isEmpty()) { brokeEarly = true; break; }
                 for (String cmd : cmds) {
                     if (stop) break;
                     String result = runCommand(cmd);
@@ -591,6 +596,9 @@ public class MainActivity extends Activity {
                         synchronized (messages) { messages.add(tm); }
                     } catch (Throwable ignored) { }
                 }
+            }
+            if (!brokeEarly && !stop) {
+                addBubble("note", "step limit reached (" + steps + ") - raise Max steps in settings and send 'continue'");
             }
         } catch (Throwable t) {
             addBubble("note", "\u26a0 " + t);
@@ -733,7 +741,8 @@ public class MainActivity extends Activity {
           .append("tools). Commands run as root; output comes back to you as the next message.\n")
           .append("4. Work in small, verifiable steps. Read the output before the next command. Prefer ")
           .append("idempotent commands; never start an interactive process; keep anything long-running in ")
-          .append("the background only if the user asked for it.\n")
+          .append("the background only if the user asked for it. Never repeat a command whose output you ")
+          .append("already have - use it and answer.\n")
           .append("5. Before touching files, back them up (cp -a to /data/local/tmp or .bak). After a change, ")
           .append("prove it worked (grep the file, re-check the property, re-launch the app, read the log).\n")
           .append("6. Report in the user's language (Indonesian if they write Indonesian), short and concrete: ")
@@ -750,6 +759,7 @@ public class MainActivity extends Activity {
         sb.append("HANDY SURFACE\n")
           .append("- packages: pm list packages -3, pm path <pkg>, dumpsys package <pkg>, cmd package compile\n")
           .append("- apps/files: /data/data/<pkg>, /sdcard, /data/local/tmp (use `cat`, `cp`, `sed -i`)\n")
+          .append("- NOTE: /data/data in THIS shell is a tmpfs overlay that mostly shows only your own dir, so plain `ls/du /data/data/<pkg>` can fail or lie even as uid 0. Go through init's namespace right away: `nsenter -t 1 -m -- ls -la /data/data/<pkg>`, `nsenter -t 1 -m -- du -sh /data/data/<pkg>` (same for cat/cp/sed).\n")
           .append("- system: /system, /vendor, mount -o rw,remount /system, magisk --path, ksud\n")
           .append("- kernel: /proc, /sys, lsmod, insmod, dmesg, /dev/*\n")
           .append("- ui: am start -n pkg/.Activity, input tap/text/keyevent, screencap -p /sdcard/s.png\n")
@@ -844,7 +854,7 @@ public class MainActivity extends Activity {
         b.setTextColor(FG);
         b.setBackground(round(SURFACE, LINE, 20));
         b.setPadding(dp(16), 0, dp(16), 0);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(40));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(48));
         lp.setMargins(0, 0, dp(8), 0);
         b.setLayoutParams(lp);
         return b;
@@ -856,5 +866,14 @@ public class MainActivity extends Activity {
         if (stroke != 0) g.setStroke(dp(1), stroke);
         g.setCornerRadius(dp(radius));
         return g;
+    }
+
+    /** ScrollView that never grows past a slice of the screen, so the chat + input row stay reachable */
+    private static class MaxHeightScrollView extends ScrollView {
+        private final int maxH;
+        MaxHeightScrollView(android.content.Context c, int maxH) { super(c); this.maxH = maxH; }
+        @Override protected void onMeasure(int w, int h) {
+            super.onMeasure(w, MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST));
+        }
     }
 }
