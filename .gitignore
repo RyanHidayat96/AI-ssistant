@@ -1,28 +1,27 @@
-# Android build outputs
+# Output build Android
 /build/
-/release/*.apk
-/release/*.aab
-/release/*.idsig
-*.class
-*.dex
+/release/                 # gunakan ini bila APK rilis tidak disimpan di Git
+/build_ai1.xml
 
-# Signing credentials
+# Kredensial signing
 *.keystore
 *.jks
 *.p12
 *.pfx
 key.properties
 
-# Local Android and build-tool configuration
+# Konfigurasi lokal dan IDE
 local.properties
 .gradle/
-
-# IDE workspace files
 .idea/
 *.iml
 .vscode/
 
-# Operating-system and temporary files
+# Cache script Python
+__pycache__/
+*.py[cod]
+
+# File temporer
 .DS_Store
 Thumbs.db
 *.log

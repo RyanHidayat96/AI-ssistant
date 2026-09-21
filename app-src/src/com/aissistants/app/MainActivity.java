@@ -97,9 +97,30 @@ public class MainActivity extends Activity {
 
     /** permission gate: 0 = once, 1 = this chat, 2 = always, 3 = denied */
     private static final int PERM_ONCE = 0, PERM_CHAT = 1, PERM_ALWAYS = 2, PERM_DENY = 3;
-    private boolean allowInstallInChat = false;
+    /** risky-action categories that need a human OK before running (index-aligned) */
+    private static final String[] CAT_KEYS = { "install", "destructive", "system", "egress", "messaging" };
+    private static final String[] CAT_LABEL = {
+            "meng-install paket / APK",
+            "menghapus, memformat, atau menimpa data",
+            "mengubah sistem/kernel - atau menjalankan kode dari internet sebagai root",
+            "mengirim data keluar dari HP ini",
+            "mengirim pesan / SMS atas nama kamu"
+    };
+    private static final java.util.regex.Pattern[] CAT_RE = {
+            java.util.regex.Pattern.compile("(pkg|apt|apt-get|dpkg|pip|pip3|npm|yarn|pnpm|gem|go|apk|pm|magisk|cargo)\\s+(-{1,2}[\\w=-]+\\s+)*(install|add|i|-i)\\b"),
+            java.util.regex.Pattern.compile("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0)"),
+            java.util.regex.Pattern.compile("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|/data/adb/(modules|ksu)|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\()"),
+            java.util.regex.Pattern.compile("(curl[^|;]*(--data|-d\\s|-F\\s|-T\\s|--upload-file|-X\\s*(POST|PUT|PATCH))|wget[^|;]*--post-data|\\bscp\\b|\\brsync\\b|\\bnc\\s+-)"),
+            java.util.regex.Pattern.compile("(\\bsendto\\b|\\bsmsto\\b|service\\s+call\\s+isms|android\\.intent\\.action\\.SEND\\b)")
+    };
+    private final java.util.Set<String> allowInChat = new java.util.HashSet<>();
     private volatile java.util.concurrent.CountDownLatch permLatch;
     private volatile java.util.concurrent.atomic.AtomicInteger permResult;
+    /** the model's last sentence, shown in the dialog so the user knows WHY it wants the command */
+    private volatile String lastAssistantSaid = "";
+
+    /** how many times each exact command ran during the current run (anti-repeat-loop guard) */
+    private final java.util.Map<String, Integer> runCounts = new java.util.HashMap<>();
 
     /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
     private final java.util.Set<String> expandedGroups = new java.util.HashSet<>();
@@ -1234,7 +1255,7 @@ public class MainActivity extends Activity {
         }
         messages.clear();
         pending.clear();
-        allowInstallInChat = false;
+        allowInChat.clear();
         if (pendingBar != null) pendingBar.setVisibility(View.GONE);
         showChat();
         toast("New chat");
@@ -1248,7 +1269,7 @@ public class MainActivity extends Activity {
                 cur = o;
                 synchronized (lock) { store.setActiveId(id); }
                 messages.clear();
-                allowInstallInChat = false;
+                allowInChat.clear();
                 rebuildModelMessages();
                 showChat();
                 return;
@@ -1565,6 +1586,8 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) { }
         busy = true;
         stop = false;
+        runCounts.clear();
+        lastAssistantSaid = "";
         stepNow = 0;
         stepTotal = store.maxSteps();
         startAgentService();
@@ -1633,7 +1656,7 @@ public class MainActivity extends Activity {
                 boolean hasToolCalls = reply.toolCalls != null && reply.toolCalls.length() > 0;
                 List<String> cmds = extractCommands(reply.text);
                 String visible = stripFences(reply.text).trim();
-                if (!visible.isEmpty()) addBubble("assistant", visible);
+                if (!visible.isEmpty()) { addBubble("assistant", visible); lastAssistantSaid = visible; }
 
                 try {
                     JSONObject am = new JSONObject();
@@ -1714,31 +1737,56 @@ public class MainActivity extends Activity {
             showPendingBar();
             return "[not executed: auto-run is disabled]";
         }
-        if (needsInstallPermission(cmd)) {
-            int verdict = askInstallPermission(cmd);
+        String cat = permissionCategory(cmd);
+        boolean gated = cat != null;
+        if (gated && !store.allowAlways(cat) && !allowInChat.contains(cat)) {
+            int verdict = askPermission(cat, cmd);
             if (verdict == PERM_DENY) {
-                addBubble("note", "install ditolak \u00b7 " + firstLine(cmd));
-                return "[denied by the user - the install was NOT executed. Do not retry it; report and continue.]";
+                audit(cat, "DENY", cmd);
+                addBubble("note", "ditolak \u00b7 " + cat + " \u00b7 " + firstLine(cmd));
+                return "[denied by the user - this command was NOT executed. Do not retry it; report and continue.]";
             }
+            audit(cat, verdict == PERM_ALWAYS ? "ALLOW-ALWAYS" : (verdict == PERM_CHAT ? "ALLOW-CHAT" : "ALLOW-ONCE"), cmd);
+        } else if (gated) {
+            audit(cat, "ALLOW-POLICY", cmd);
         }
+        Integer seen = runCounts.get(cmd);
+        int n = seen == null ? 0 : seen;
+        if (n >= 2) {
+            addBubble("note", "guard: perintah sama sudah 2x \u2014 dilewati");
+            return "[blocked by the app: you already ran this exact command twice and the output did not change. "
+                    + "Stop retrying it - explain the blocker to the user or try a genuinely different approach.]";
+        }
+        runCounts.put(cmd, n + 1);
         addBubble("tool", "$ " + cmd);
         final String out = RootShell.run(cmd, store.timeoutSec());
         addBubble("tool", out);
         return out;
     }
 
-    /** installs must be approved by the human before they run */
-    private boolean needsInstallPermission(String cmd) {
-        if (cmd == null) return false;
-        return java.util.regex.Pattern
-                .compile("(^|[;&|({]\\s*)(su\\s+-c\\s+['\"]?)?(pkg|apt|apt-get|dpkg|pip|pip3|npm|yarn|pnpm|gem|go|apk|pm|magisk|cargo)\\s+(install|add|i)\\b")
-                .matcher(cmd).find();
+    /** which gate category this command belongs to (null = run it silently) */
+    private String permissionCategory(String cmd) {
+        if (cmd == null) return null;
+        for (int i = 0; i < CAT_RE.length; i++) {
+            if (CAT_RE[i].matcher(cmd).find()) return CAT_KEYS[i];
+        }
+        return null;
+    }
+
+    /** append every gated decision to <files>/audit.log */
+    private void audit(String cat, String verdict, String cmd) {
+        try {
+            String line = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date())
+                    + " | " + cat + " | " + verdict + " | " + firstLine(cmd) + "\n";
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(
+                    new java.io.File(getFilesDir(), "audit.log"), true);
+            fos.write(line.getBytes("UTF-8"));
+            fos.close();
+        } catch (Throwable ignored) { }
     }
 
     /** blocks the worker thread until the user taps a choice in the dialog */
-    private int askInstallPermission(final String cmd) {
-        if (store.allowInstallAlways()) return PERM_ALWAYS;
-        if (allowInstallInChat) return PERM_CHAT;
+    private int askPermission(final String cat, final String cmd) {
         final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
         final java.util.concurrent.atomic.AtomicInteger res =
                 new java.util.concurrent.atomic.AtomicInteger(PERM_DENY);
@@ -1746,27 +1794,63 @@ public class MainActivity extends Activity {
         permResult = res;
         ui.post(new Runnable() {
             @Override public void run() {
-                final String[] opts = { "Izinkan sekali", "Izinkan di percakapan ini", "Izinkan selalu", "Tolak" };
+                LinearLayout box = new LinearLayout(MainActivity.this);
+                box.setOrientation(LinearLayout.VERTICAL);
+                box.setPadding(dp(20), dp(2), dp(20), dp(10));
+
+                String why = lastAssistantSaid == null ? "" : lastAssistantSaid.trim();
+                if (why.length() > 220) why = why.substring(0, 220) + "\u2026";
+                if (!why.isEmpty()) {
+                    TextView r = tv(13, FG, Typeface.NORMAL);
+                    r.setText(why);
+                    box.addView(r, new LinearLayout.LayoutParams(-1, -2));
+                }
+                TextView msg = tv(12, MUTED, Typeface.NORMAL);
                 String line = firstLine(cmd);
-                if (line.length() > 200) line = line.substring(0, 200) + "\u2026";
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Asisten mau meng-install sesuatu")
-                        .setMessage(line + "\n\nSetujui yang mana?")
-                        .setItems(opts, new DialogInterface.OnClickListener() {
-                            @Override public void onClick(DialogInterface d, int w) {
-                                res.set(w);
-                                if (w == PERM_CHAT) allowInstallInChat = true;
-                                if (w == PERM_ALWAYS) store.setAllowInstallAlways(true);
-                                latch.countDown();
-                            }
-                        })
-                        .setOnCancelListener(new DialogInterface.OnCancelListener() {
-                            @Override public void onCancel(DialogInterface d) {
-                                res.set(PERM_DENY);
-                                latch.countDown();
-                            }
-                        })
-                        .show();
+                if (line.length() > 220) line = line.substring(0, 220) + "\u2026";
+                msg.setText("$ " + line);
+                msg.setTypeface(Typeface.MONOSPACE);
+                LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
+                mlp.setMargins(0, dp(6), 0, 0);
+                box.addView(msg, mlp);
+
+                final int ci = Math.max(0, java.util.Arrays.asList(CAT_KEYS).indexOf(cat));
+                final String[] labels = { "Izinkan sekali", "Izinkan di percakapan ini", "Izinkan selalu (" + CAT_KEYS[ci] + ")", "Tolak" };
+                final AlertDialog[] holder = new AlertDialog[1];
+                for (int i = 0; i < labels.length; i++) {
+                    final int choice = i;
+                    TextView b = tv(15, choice == PERM_DENY ? DANGER : FG,
+                            choice == PERM_DENY ? Typeface.NORMAL : Typeface.BOLD);
+                    b.setText(labels[i]);
+                    b.setGravity(Gravity.CENTER_VERTICAL);
+                    b.setPadding(dp(14), 0, dp(14), 0);
+                    b.setBackground(ripple(SURFACE, LINE, 12));
+                    b.setOnClickListener(new View.OnClickListener() {
+                        @Override public void onClick(View x) {
+                            res.set(choice);
+                            if (choice == PERM_CHAT) allowInChat.add(cat);
+                            if (choice == PERM_ALWAYS) store.setAllowAlways(cat, true);
+                            latch.countDown();
+                            if (holder[0] != null) holder[0].dismiss();
+                        }
+                    });
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
+                    lp.setMargins(0, dp(8), 0, 0);
+                    box.addView(b, lp);
+                }
+
+                AlertDialog dlg = new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Butuh izin: " + CAT_LABEL[ci])
+                        .setView(box)
+                        .create();
+                holder[0] = dlg;
+                dlg.setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override public void onCancel(DialogInterface d) {
+                        res.set(PERM_DENY);
+                        latch.countDown();
+                    }
+                });
+                dlg.show();
             }
         });
         try { latch.await(); } catch (Throwable ignored) { }
@@ -1934,12 +2018,12 @@ public class MainActivity extends Activity {
           .append("- mentions: `@<package>` in the user's message refers to that installed app (pm list packages, pm path <pkg>, dumpsys package <pkg>).\n")
           .append("- logs: logcat -d -b crash, logcat -d | tail -200, dmesg | tail\n")
           .append("- binaries: busybox/toybox, unzip, curl are present; there is NO java/python/aapt/apktool in ")
-          .append("/system/bin. On-device tooling lives in Termux (installed on this phone, its packages usually not) - ")
-          .append("call its binaries straight from this root shell with the Termux env, e.g. ")
-          .append("`T=/data/data/com.termux/files/usr; env HOME=/data/data/com.termux/files/home PATH=$T/bin:$PATH ")
-          .append("LD_LIBRARY_PATH=$T/lib $T/bin/python3 --version`, and install what is missing with ")
-          .append("`env HOME=/data/data/com.termux/files/home PATH=$T/bin:$PATH $T/bin/pkg install -y python openjdk-17 ")
-          .append("apktool jadx zip apksigner` (needs network, takes minutes).\n\n")
+          .append("/system/bin. Tooling lives in Termux (installed here, its packages mostly not). apt/pkg REFUSE to ")
+          .append("run as root (\"Cannot run 'pkg' as root\"), so run them AS THE TERMUX USER: ")
+          .append("`U=$(pm list packages -U | sed -n 's/.*com\\.termux uid:\\([0-9]*\\).*/\\1/p'); su $U -c 'P=/data/data/com.termux/files/usr; ")
+          .append("export PREFIX=$P HOME=/data/data/com.termux/files/home PATH=$P/bin LD_LIBRARY_PATH=$P/lib; ")
+          .append("$P/bin/pkg install -y zip'` (needs network). Note /data/data/com.termux is not visible in this ")
+          .append("shell's mount namespace - if a plain path says \"No such file\", read it via `nsenter -t 1 -m -- ...`.\n\n")
           .append("REVERSE ENGINEERING / MOD APK (everything on this device)\n")
           .append("- pull: `p=$(pm path <pkg> | sed 's/package://'); cp \"$p\" /data/local/tmp/base.apk; ls -l /data/local/tmp/base.apk`\n")
           .append("- peek without tools: `unzip -l base.apk`, `unzip -p base.apk classes.dex | strings -n 6 | head -50`, ")
@@ -1955,9 +2039,11 @@ public class MainActivity extends Activity {
           .append("- protection awareness: an APK containing libpairipcore.so (PairIP) or a known packer breaks after ")
           .append("repackaging - say that up front instead of burning steps. Always keep the untouched base.apk as backup.\n")
           .append("- stay in scope: only pull/patch/install what the user asked for, report what changed and how you verified it.\n")
-          .append("- installs are GATED in this app: `pkg/apt/pip/npm/pm ... install` pauses and the user gets a dialog ")
-          .append("(izinkan sekali / percakapan ini / selalu / tolak). If it is denied the command does NOT run - do not ")
-          .append("retry the same install, say what you need it for, and offer the alternative.\n");
+          .append("- risky actions are GATED in this app: installing packages/APKs, deleting or formatting data, ")
+          .append("changing system/kernel state (or piping internet code into a shell), sending data off the phone, and ")
+          .append("sending messages. The user gets a dialog (izinkan sekali / percakapan ini / selalu / tolak) with your ")
+          .append("last sentence as the reason - so say WHY in one short line before such a command. If it is denied the ")
+          .append("command does NOT run: do not retry it, explain the blocker, and offer an alternative.\n");
         return sb.toString();
     }
 

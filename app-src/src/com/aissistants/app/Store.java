@@ -51,8 +51,8 @@ final class Store {
 
     // ---- permission gate (installs etc.) -------------------------------------------------
 
-    boolean allowInstallAlways() { return sp.getBoolean("allowInstallAlways", false); }
-    void setAllowInstallAlways(boolean b) { sp.edit().putBoolean("allowInstallAlways", b).apply(); }
+    boolean allowAlways(String cat) { return sp.getBoolean("allow_" + cat, false); }
+    void setAllowAlways(String cat, boolean b) { sp.edit().putBoolean("allow_" + cat, b).apply(); }
 
     // ---- legacy single endpoint (migration source only) ---------------------------------
 
