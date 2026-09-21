@@ -135,6 +135,14 @@ public class MainActivity extends Activity {
                 return wi;
             }
         });
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+                }
+            } catch (Throwable ignored) { }
+        }
         buildChatScreen();
         loadSessions();
         screen = 0;
@@ -166,9 +174,11 @@ public class MainActivity extends Activity {
             showChat();
             final String cmd = run;
             addBubble("user", "$ " + cmd);
+            startAgentService();
             new Thread(new Runnable() { @Override public void run() {
                 addBubble("tool", RootShell.run(cmd, store.timeoutSec()));
                 persist();
+                stopAgentService();
             } }).start();
             return;
         }
@@ -1033,6 +1043,24 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** foreground service: keeps the loop alive and on the network while other apps are in front */
+    private void startAgentService() {
+        try {
+            Intent si = new Intent(this, AgentService.class);
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(si);
+            else startService(si);
+        } catch (Throwable ignored) { }
+    }
+
+    private void stopAgentService() {
+        try { stopService(new Intent(this, AgentService.class)); } catch (Throwable ignored) { }
+        try {
+            android.app.NotificationManager nm =
+                    (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(AgentService.ID);
+        } catch (Throwable ignored) { }
+    }
+
     private void setBusyUi(final boolean b) {
         ui.post(new Runnable() {
             @Override public void run() {
@@ -1102,10 +1130,12 @@ public class MainActivity extends Activity {
             final String cmd = text.substring(1).trim();
             if (cmd.isEmpty()) { toast("Type a command after $"); return; }
             addBubble("user", "$ " + cmd);
+            startAgentService();
             new Thread(new Runnable() {
                 @Override public void run() {
                     addBubble("tool", RootShell.run(cmd, store.timeoutSec()));
                     persist();
+                    stopAgentService();
                 }
             }).start();
             return;
@@ -1127,6 +1157,7 @@ public class MainActivity extends Activity {
         stop = false;
         stepNow = 0;
         stepTotal = store.maxSteps();
+        startAgentService();
         setBusyUi(true);
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
@@ -1151,6 +1182,7 @@ public class MainActivity extends Activity {
                 ui.post(new Runnable() {
                     @Override public void run() {
                         subtitle.setText("Working \u00b7 step " + stepNow + "/" + stepTotal);
+                        AgentService.status(MainActivity.this, "Working \u00b7 step " + stepNow + "/" + stepTotal);
                         renderTranscript();
                     }
                 });
@@ -1234,6 +1266,7 @@ public class MainActivity extends Activity {
             stop = false;
             stepNow = 0;
             persist();
+            stopAgentService();
             ui.post(new Runnable() {
                 @Override public void run() {
                     setBusyUi(false);
@@ -1283,6 +1316,7 @@ public class MainActivity extends Activity {
         final List<String> queue = new ArrayList<>(pending);
         pending.clear();
         showPendingBar();
+        startAgentService();
         new Thread(new Runnable() {
             @Override public void run() {
                 for (String cmd : queue) {
@@ -1290,6 +1324,7 @@ public class MainActivity extends Activity {
                     addBubble("tool", RootShell.run(cmd, store.timeoutSec()));
                 }
                 persist();
+                stopAgentService();
             }
         }).start();
     }
@@ -1396,7 +1431,11 @@ public class MainActivity extends Activity {
           .append("- NOTE: /data/data in THIS shell is a tmpfs overlay that mostly shows only your own dir, so plain `ls/du /data/data/<pkg>` can fail or lie even as uid 0. Go through init's namespace right away: `nsenter -t 1 -m -- ls -la /data/data/<pkg>`, `nsenter -t 1 -m -- du -sh /data/data/<pkg>` (same for cat/cp/sed).\n")
           .append("- system: /system, /vendor, mount -o rw,remount /system, magisk --path, ksud\n")
           .append("- kernel: /proc, /sys, lsmod, insmod, dmesg, /dev/*\n")
-          .append("- ui: am start -n pkg/.Activity, input tap/text/keyevent, screencap -p /sdcard/s.png\n")
+          .append("- ui automation (for open/use/type-in-app requests):\n")
+          .append("  launch: `monkey -p <pkg> -c android.intent.category.LAUNCHER 1`; confirm it is on top with `dumpsys window | grep mCurrentFocus`\n")
+          .append("  find: `uiautomator dump /sdcard/ui.xml >/dev/null; cat /sdcard/ui.xml` - each node has bounds=\"[x1,y1][x2,y2]\" in SCREEN PIXELS; tap the centre of the target node\n")
+          .append("  act: `input tap X Y`; `input text 'cari%snama'` (space = %s, ASCII only); keyevents 66=ENTER, 4=BACK, 3=HOME, 61=TAB, 19/20=DPAD up/down\n")
+          .append("  verify: dump again and read the changed screen, or `screencap -p /sdcard/s.png`; if a tap looks dropped, re-dump and re-tap slightly offset - never assume a tap landed\n")
           .append("- logs: logcat -d -b crash, logcat -d | tail -200, dmesg | tail\n")
           .append("- binaries: busybox/toybox, apktool, apksigner, zipalign if installed; otherwise fetch or ")
           .append("use the platform tools already present.\n");
