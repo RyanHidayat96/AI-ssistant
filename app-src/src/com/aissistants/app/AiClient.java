@@ -30,6 +30,7 @@ final class AiClient {
     static final class Reply {
         boolean ok;
         String text = "";
+        String reasoning = "";
         JSONArray toolCalls = new JSONArray();
         String error = "";
         int promptTokens;
@@ -47,7 +48,7 @@ final class AiClient {
     }
 
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
-                          JSONArray tools, double temperature, int timeoutSec, StreamCb cb) {
+                          JSONArray tools, double temperature, int thinking, int timeoutSec, StreamCb cb) {
         Reply out = new Reply();
         HttpURLConnection conn = null;
         try {
@@ -69,6 +70,16 @@ final class AiClient {
             body.put("temperature", temperature);
             body.put("max_tokens", 4096);
             body.put("stream", true);
+            // thinking is ON by default on DeepSeek v4 - off is the fastest path for UI work
+            if (thinking == 0) {
+                JSONObject t = new JSONObject();
+                t.put("type", "disabled");
+                body.put("thinking", t);
+            } else if (thinking == 1) {
+                body.put("reasoning_effort", "low");
+            } else if (thinking == 2) {
+                body.put("reasoning_effort", "high");
+            }
             if (tools != null && tools.length() > 0) {
                 body.put("tools", tools);
                 body.put("tool_choice", "auto");
@@ -186,6 +197,7 @@ final class AiClient {
             if (sse) {
                 out.ok = true;
                 out.text = content.toString();
+                out.reasoning = reasoning.toString();
                 JSONArray arr = new JSONArray();
                 for (JSONObject c : calls.values()) arr.put(c);
                 out.toolCalls = arr;
@@ -213,6 +225,8 @@ final class AiClient {
             }
             out.ok = true;
             out.text = message.optString("content", "");
+            Object rc = message.opt("reasoning_content");
+            if (rc instanceof String) out.reasoning = (String) rc;
             JSONArray callsArr = message.optJSONArray("tool_calls");
             if (callsArr != null) out.toolCalls = callsArr;
             JSONObject usage = resp.optJSONObject("usage");

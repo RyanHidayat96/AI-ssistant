@@ -20,30 +20,41 @@ final class Store {
         this.sp = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE);
     }
 
-    // ---- endpoint / agent configuration ------------------------------------------------
+    // ---- agent parameters ---------------------------------------------------------------
 
-    String baseUrl() { return sp.getString("baseUrl", ""); }
-    String apiKey() { return sp.getString("apiKey", ""); }
-    String model() { return sp.getString("model", ""); }
     int maxSteps() { return sp.getInt("maxSteps", 12); }
     int temperature() { return sp.getInt("temperature", 30); }        // percent, 0..100
     int timeoutSec() { return sp.getInt("timeoutSec", 180); }
     boolean autoRun() { return sp.getBoolean("autoRun", true); }
+    int thinking() { return sp.getInt("thinking", 3); }   // 0 off, 1 low, 2 high, 3 auto
 
-    void save(String baseUrl, String apiKey, String model, int maxSteps, int temperature,
-              int timeoutSec, boolean autoRun) {
+    void save(int maxSteps, int temperature, int timeoutSec, boolean autoRun, int thinking) {
         sp.edit()
-                .putString("baseUrl", baseUrl == null ? "" : baseUrl.trim())
-                .putString("apiKey", apiKey == null ? "" : apiKey.trim())
-                .putString("model", model == null ? "" : model.trim())
                 .putInt("maxSteps", Math.max(1, Math.min(40, maxSteps)))
                 .putInt("temperature", Math.max(0, Math.min(100, temperature)))
                 .putInt("timeoutSec", Math.max(20, Math.min(1800, timeoutSec)))
                 .putBoolean("autoRun", autoRun)
+                .putInt("thinking", Math.max(0, Math.min(3, thinking)))
                 .apply();
     }
 
-    boolean configured() { return !baseUrl().isEmpty() && !model().isEmpty(); }
+    // ---- providers & models -------------------------------------------------------------
+
+    String providersJson() { return sp.getString("providers", ""); }
+    void saveProviders(String json) { sp.edit().putString("providers", json == null ? "" : json).apply(); }
+
+    String modelsJson() { return sp.getString("models", ""); }
+    void saveModels(String json) { sp.edit().putString("models", json == null ? "" : json).apply(); }
+
+    String activeModelId() { return sp.getString("activeModelId", ""); }
+    void setActiveModelId(String id) { sp.edit().putString("activeModelId", id == null ? "" : id).apply(); }
+
+    // ---- legacy single endpoint (migration source only) ---------------------------------
+
+    String legacyBaseUrl() { return sp.getString("baseUrl", ""); }
+    String legacyApiKey() { return sp.getString("apiKey", ""); }
+    String legacyModel() { return sp.getString("model", ""); }
+    void clearLegacyEndpoint() { sp.edit().remove("baseUrl").remove("apiKey").remove("model").apply(); }
 
     // ---- chat sessions ------------------------------------------------------------------
 

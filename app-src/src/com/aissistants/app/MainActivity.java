@@ -82,11 +82,17 @@ public class MainActivity extends Activity {
     private ScrollView chatScroll;
     private TextView barTitle, subtitle, pill;
     private EditText input;
-    private Button sendBtn;
+    private TextView sendBtn;
     private LinearLayout inputRow;
+    private LinearLayout attachBar;
     private int lastIme = -1;
     private TextView streamView;
     private View busyView;
+    private String pendingPath = null;
+    private String pendingName = null;
+    private boolean pickerOpen = false;
+    private static ArrayList<String[]> installedApps = null;
+    private static final int REQ_ATTACH = 7;
 
     private JSONArray sessions = new JSONArray();
     private JSONObject cur;
@@ -95,6 +101,7 @@ public class MainActivity extends Activity {
 
     private volatile boolean busy;
     private volatile boolean stop;
+    private volatile String lastPrompt = "";
     private Thread worker;
     private int stepNow, stepTotal;
     private String lastUsage = "";
@@ -144,6 +151,7 @@ public class MainActivity extends Activity {
             } catch (Throwable ignored) { }
         }
         buildChatScreen();
+        migrateEndpoints();
         loadSessions();
         screen = 0;
         root.removeAllViews();
@@ -162,6 +170,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (screen == 3) { showSettings(); return; }
         if (screen != 0) { showChat(); return; }
         super.onBackPressed();
     }
@@ -340,10 +349,51 @@ public class MainActivity extends Activity {
         sc.addView(panel, new ScrollView.LayoutParams(-1, -2));
         v.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        panel.addView(sectionLabel("ENDPOINT"));
-        final EditText base = field(panel, "Base URL", store.baseUrl(), "https://api.openai.com/v1", false);
-        final EditText key = field(panel, "API key", store.apiKey(), "sk-\u2026 (empty for local servers)", true);
-        final EditText model = field(panel, "Model", store.model(), "gpt-4o-mini / deepseek-chat / qwen2.5\u2026", false);
+        panel.addView(sectionLabel("ACTIVE MODEL"));
+        LinearLayout mcard = new LinearLayout(this);
+        mcard.setOrientation(LinearLayout.HORIZONTAL);
+        mcard.setGravity(Gravity.CENTER_VERTICAL);
+        mcard.setBackground(ripple(SURFACE, LINE, 14));
+        mcard.setPadding(dp(14), dp(12), dp(14), dp(12));
+        LinearLayout minfo = new LinearLayout(this);
+        minfo.setOrientation(LinearLayout.VERTICAL);
+        TextView m1 = tv(15, FG, Typeface.BOLD);
+        m1.setText(activeLabel());
+        m1.setSingleLine(true);
+        TextView m2 = tv(12, MUTED, Typeface.NORMAL);
+        JSONObject am = activeModelObj();
+        JSONObject amp = providerOf(am);
+        m2.setText(am == null ? "no model yet \u2014 tap to add one"
+                : (am.optBoolean("enabled", true) ? "" : "(disabled)  ")
+                  + (amp == null ? "no provider" : amp.optString("name", "") + "  \u00b7  " + hostOf(amp.optString("baseUrl", ""))));
+        m2.setSingleLine(true);
+        m2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        minfo.addView(m1);
+        minfo.addView(m2);
+        mcard.addView(minfo, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView mchev = tv(16, MUTED, Typeface.NORMAL);
+        mchev.setText("\u25B8");
+        mcard.addView(mchev);
+        mcard.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { showModels(); }
+        });
+        LinearLayout.LayoutParams mclp = new LinearLayout.LayoutParams(-1, -2);
+        mclp.setMargins(0, dp(6), 0, 0);
+        panel.addView(mcard, mclp);
+
+        Button manage = new Button(this);
+        manage.setText("Manage models & providers");
+        manage.setAllCaps(false);
+        manage.setTextSize(15);
+        manage.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        manage.setTextColor(FG);
+        manage.setBackground(ripple(SURFACE, LINE, 14));
+        manage.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { showModels(); }
+        });
+        LinearLayout.LayoutParams mglp = new LinearLayout.LayoutParams(-1, dp(50));
+        mglp.setMargins(0, dp(10), 0, 0);
+        panel.addView(manage, mglp);
 
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
         hlp.setMargins(0, dp(22), 0, 0);
@@ -356,6 +406,35 @@ public class MainActivity extends Activity {
         final EditText temp = compactField(row3, "Temp 0-100", String.valueOf(store.temperature()), true);
         row3.setPadding(0, dp(10), 0, dp(4));
         panel.addView(row3);
+
+        LinearLayout.LayoutParams thlp = new LinearLayout.LayoutParams(-1, -2);
+        thlp.setMargins(0, dp(16), 0, dp(6));
+        panel.addView(sectionLabel("THINKING \u00b7 AUTO PICKS PER TASK"), thlp);
+        final int[] thinking = { store.thinking() };
+        final String[] tnames = { "Auto", "Off", "Low", "High" };
+        final Button[] tbtns = new Button[4];
+        LinearLayout trow = new LinearLayout(this);
+        trow.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < 4; i++) {
+            final int fi = i;
+            Button tb = new Button(this);
+            tb.setText(tnames[i]);
+            tb.setAllCaps(false);
+            tb.setTextSize(13);
+            tb.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            tb.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View x) {
+                    thinking[0] = fi;
+                    for (int k = 0; k < 4; k++) styleThinking(tbtns[k], k == fi);
+                }
+            });
+            tbtns[i] = tb;
+            styleThinking(tb, i == thinking[0]);
+            LinearLayout.LayoutParams tlp2 = new LinearLayout.LayoutParams(0, dp(44), 1);
+            tlp2.setMargins(0, 0, i < 3 ? dp(8) : 0, 0);
+            trow.addView(tb, tlp2);
+        }
+        panel.addView(trow);
 
         final Switch auto = new Switch(this);
         auto.setText("Run commands automatically");
@@ -376,12 +455,11 @@ public class MainActivity extends Activity {
         save.setBackground(ripple(ACCENT, ACCENT, 14));
         save.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                store.save(base.getText().toString(), key.getText().toString(),
-                        model.getText().toString(), num(steps.getText().toString(), 12),
+                store.save(num(steps.getText().toString(), 12),
                         num(temp.getText().toString(), 30), num(timeout.getText().toString(), 180),
-                        auto.isChecked());
+                        auto.isChecked(), thinking[0]);
                 refreshStatus();
-                toast("Saved \u00b7 " + store.model() + " @ " + hostOf(store.baseUrl()));
+                toast("Saved \u00b7 " + activeLabel());
             }
         });
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(52));
@@ -465,7 +543,26 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.BOTTOM);
+        row.setClipToPadding(false);
         row.setPadding(dp(GUTTER), dp(6), dp(GUTTER), navigationBarHeight() + dp(12));
+
+        TextView attach = new TextView(this);
+        attach.setText("\u002B");
+        attach.setTextSize(22);
+        attach.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        attach.setTextColor(FG);
+        attach.setGravity(Gravity.CENTER);
+        attach.setIncludeFontPadding(false);
+        attach.setPadding(0, 0, 0, 0);
+        attach.setBackground(ripple(SURFACE, LINE, 24));
+        attach.setContentDescription("Add attachment");
+        attach.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { openAttachPicker(); }
+        });
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        alp.gravity = Gravity.BOTTOM;
+        alp.setMargins(0, 0, dp(8), 0);
+        row.addView(attach, alp);
 
         input = new EditText(this);
         input.setHint("Ask anything\u2026 or $ for root");
@@ -478,26 +575,42 @@ public class MainActivity extends Activity {
         input.setMinHeight(dp(48));
         input.setPadding(dp(16), dp(12), dp(16), dp(12));
         input.setBackground(round(SURFACE, LINE, 24));
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (count == 1 && before == 0 && start < s.length() && s.charAt(start) == '@') {
+                    final int at = start;
+                    input.postDelayed(new Runnable() { @Override public void run() { openAppPicker(at); } }, 120);
+                }
+            }
+            @Override public void afterTextChanged(android.text.Editable e) { }
+        });
         row.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
 
-        sendBtn = new Button(this);
-        sendBtn.setAllCaps(false);
+        sendBtn = new TextView(this);
         sendBtn.setText("\u2191");
-        sendBtn.setTextSize(20);
+        sendBtn.setTextSize(22);
         sendBtn.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         sendBtn.setTextColor(ON_ACCENT);
-        sendBtn.setMinWidth(0);
-        sendBtn.setMinHeight(0);
+        sendBtn.setGravity(Gravity.CENTER);
+        sendBtn.setIncludeFontPadding(false);
         sendBtn.setPadding(0, 0, 0, 0);
-        sendBtn.setBackground(ripple(ACCENT, ACCENT, 24));
+        sendBtn.setBackground(circle(ACCENT));
         sendBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (busy) doStop(); else onSend();
             }
         });
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(50), dp(50));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(52), dp(52));
+        blp.gravity = Gravity.BOTTOM;
         blp.setMargins(dp(10), 0, 0, 0);
         row.addView(sendBtn, blp);
+
+        attachBar = new LinearLayout(this);
+        attachBar.setOrientation(LinearLayout.VERTICAL);
+        attachBar.setVisibility(View.GONE);
+        attachBar.setPadding(dp(GUTTER), 0, dp(GUTTER), dp(8));
+        chatScreen.addView(attachBar);
 
         inputRow = row;
         chatScreen.addView(row);
@@ -509,12 +622,14 @@ public class MainActivity extends Activity {
         pm.getMenu().add(0, 2, 1, "Chats");
         pm.getMenu().add(0, 3, 2, "Settings");
         pm.getMenu().add(0, 4, 3, "Clear this chat");
+        pm.getMenu().add(0, 5, 4, "Models & providers");
         pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
             @Override public boolean onMenuItemClick(android.view.MenuItem item) {
                 if (item.getItemId() == 1) newChat();
                 else if (item.getItemId() == 2) showHistory();
                 else if (item.getItemId() == 3) showSettings();
                 else if (item.getItemId() == 4) confirmClear();
+                else if (item.getItemId() == 5) showModels();
                 return true;
             }
         });
@@ -712,14 +827,113 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    // ==================== providers & models (data) ====================
+
+    private JSONArray providers() {
+        try {
+            String r = store.providersJson();
+            return (r == null || r.isEmpty()) ? new JSONArray() : new JSONArray(r);
+        } catch (Throwable t) { return new JSONArray(); }
+    }
+
+    private JSONArray models() {
+        try {
+            String r = store.modelsJson();
+            return (r == null || r.isEmpty()) ? new JSONArray() : new JSONArray(r);
+        } catch (Throwable t) { return new JSONArray(); }
+    }
+
+    private void saveProviders(JSONArray a) { store.saveProviders(a.toString()); }
+    private void saveModels(JSONArray a) { store.saveModels(a.toString()); }
+
+    private JSONObject findById(JSONArray arr, String id) {
+        if (id == null) return null;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o != null && id.equals(o.optString("id"))) return o;
+        }
+        return null;
+    }
+
+    private JSONObject activeModelObj() { return findById(models(), store.activeModelId()); }
+
+    private JSONObject providerOf(JSONObject model) {
+        return model == null ? null : findById(providers(), model.optString("providerId"));
+    }
+
+    private boolean hasActiveModel() {
+        JSONObject m = activeModelObj();
+        return m != null && m.optBoolean("enabled", true) && providerOf(m) != null;
+    }
+
+    private String shortLabel(JSONObject m) {
+        if (m == null) return "model";
+        String lb = m.optString("label", "");
+        return lb.isEmpty() ? m.optString("name", "model") : lb;
+    }
+
+    private String activeLabel() { return shortLabel(activeModelObj()); }
+    private String activeModelName() { JSONObject m = activeModelObj(); return m == null ? "" : m.optString("name", ""); }
+    private String activeBaseUrl() { JSONObject p = providerOf(activeModelObj()); return p == null ? "" : p.optString("baseUrl", ""); }
+    private String activeApiKey() { JSONObject p = providerOf(activeModelObj()); return p == null ? "" : p.optString("apiKey", ""); }
+
+    private JSONObject firstEnabledModel(String excludeId) {
+        JSONArray ms = models();
+        for (int i = 0; i < ms.length(); i++) {
+            JSONObject o = ms.optJSONObject(i);
+            if (o == null) continue;
+            if (excludeId != null && excludeId.equals(o.optString("id"))) continue;
+            if (o.optBoolean("enabled", true) && providerOf(o) != null) return o;
+        }
+        return null;
+    }
+
+    private void ensureActiveStillValid() {
+        JSONObject a = activeModelObj();
+        if (a != null && a.optBoolean("enabled", true) && providerOf(a) != null) { updateSubtitle(); return; }
+        JSONObject next = firstEnabledModel(null);
+        store.setActiveModelId(next == null ? "" : next.optString("id"));
+        updateSubtitle();
+    }
+
+    /** one-time migration from the old single-endpoint config */
+    private void migrateEndpoints() {
+        try {
+            if (providers().length() > 0 || store.legacyBaseUrl().isEmpty()) return;
+            String pid = "p" + System.currentTimeMillis();
+            String mid = "m" + (System.currentTimeMillis() + 1);
+            JSONArray ps = new JSONArray();
+            JSONObject p = new JSONObject();
+            p.put("id", pid);
+            p.put("name", "Default");
+            p.put("baseUrl", store.legacyBaseUrl());
+            p.put("apiKey", store.legacyApiKey());
+            ps.put(p);
+            JSONArray ms = new JSONArray();
+            JSONObject m = new JSONObject();
+            m.put("id", mid);
+            m.put("providerId", pid);
+            m.put("name", store.legacyModel());
+            m.put("label", store.legacyModel());
+            m.put("enabled", true);
+            ms.put(m);
+            saveProviders(ps);
+            saveModels(ms);
+            store.setActiveModelId(mid);
+            store.clearLegacyEndpoint();
+        } catch (Throwable ignored) { }
+    }
+
     // ==================== status ====================
 
     private void updateSubtitle() {
         if (subtitle == null) return;
-        if (!store.configured()) {
-            subtitle.setText("No endpoint yet \u00b7 \u22EE \u2192 Settings");
+        JSONObject m = activeModelObj();
+        if (m == null) {
+            subtitle.setText("No model configured \u00b7 \u22EE \u2192 Settings");
         } else {
-            subtitle.setText(store.model() + " \u00b7 " + hostOf(store.baseUrl())
+            subtitle.setText(activeLabel() + " \u00b7 " + hostOf(activeBaseUrl())
+                    + (m.optBoolean("enabled", true) ? "" : " \u00b7 disabled")
                     + (lastUsage.isEmpty() ? "" : " \u00b7 " + lastUsage));
         }
     }
@@ -1067,10 +1281,10 @@ public class MainActivity extends Activity {
                 if (sendBtn == null) return;
                 if (b) {
                     sendBtn.setText("\u25A0");
-                    sendBtn.setBackground(ripple(DANGER, DANGER, 24));
+                    sendBtn.setBackground(circle(DANGER));
                 } else {
                     sendBtn.setText("\u2191");
-                    sendBtn.setBackground(ripple(ACCENT, ACCENT, 24));
+                    sendBtn.setBackground(circle(ACCENT));
                 }
             }
         });
@@ -1140,13 +1354,21 @@ public class MainActivity extends Activity {
             }).start();
             return;
         }
-        if (!store.configured()) {
+        if (!hasActiveModel()) {
             addBubble("user", text);
-            addBubble("note", "No endpoint yet. Open \u22EE \u2192 Settings, fill Base URL + Model, then Save. "
-                    + "Meanwhile you can still run anything with `$ <command>`.");
+            addBubble("note", "No model selected. Open \u22EE \u2192 Models & providers, add a provider + model, "
+                    + "then tap the model to make it active. Meanwhile you can still run anything with `$ <command>`.");
             return;
         }
+        String attach = pendingPath;
+        if (attach != null) {
+            text = "[attached file on device: " + attach + "]\n\n" + text;
+            pendingPath = null;
+            pendingName = null;
+            if (attachBar != null) attachBar.setVisibility(View.GONE);
+        }
         addBubble("user", text);
+        lastPrompt = text;
         try {
             JSONObject um = new JSONObject();
             um.put("role", "user");
@@ -1176,13 +1398,18 @@ public class MainActivity extends Activity {
             sys.put("role", "system");
             sys.put("content", systemPrompt());
             boolean brokeEarly = false;
+            final int thinkBase = store.thinking();
+            boolean escalate = false;
             for (int step = 1; step <= steps && !stop; step++) {
                 stepNow = step;
                 stepTotal = steps;
+                final int thinkNow = thinkBase == 3 ? (escalate ? 2 : autoThinking(lastPrompt)) : thinkBase;
                 ui.post(new Runnable() {
                     @Override public void run() {
-                        subtitle.setText("Working \u00b7 step " + stepNow + "/" + stepTotal);
-                        AgentService.status(MainActivity.this, "Working \u00b7 step " + stepNow + "/" + stepTotal);
+                        subtitle.setText("Working \u00b7 step " + stepNow + "/" + stepTotal
+                                + (thinkBase == 3 ? " \u00b7 think:" + thinkNow : ""));
+                        AgentService.status(MainActivity.this, "Working \u00b7 step " + stepNow + "/" + stepTotal
+                                + (thinkBase == 3 ? " \u00b7 think:" + thinkNow : ""));
                         renderTranscript();
                     }
                 });
@@ -1191,8 +1418,8 @@ public class MainActivity extends Activity {
                 synchronized (messages) {
                     for (JSONObject m : messages) msgs.put(m);
                 }
-                AiClient.Reply reply = AiClient.complete(store.baseUrl(), store.apiKey(), store.model(),
-                        msgs, tools(), store.temperature() / 100.0, 300, new AiClient.StreamCb() {
+                AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
+                        msgs, tools(), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
                             @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
                         });
                 streamReset();
@@ -1214,6 +1441,7 @@ public class MainActivity extends Activity {
                     JSONObject am = new JSONObject();
                     am.put("role", "assistant");
                     am.put("content", reply.text == null ? "" : reply.text);
+                    if (reply.reasoning != null && !reply.reasoning.isEmpty()) am.put("reasoning_content", reply.reasoning);
                     if (hasToolCalls) am.put("tool_calls", reply.toolCalls);
                     synchronized (messages) { messages.add(am); }
                 } catch (Throwable ignored) { }
@@ -1235,6 +1463,7 @@ public class MainActivity extends Activity {
                         }
                         if (cmd.trim().isEmpty()) continue;
                         String result = runCommand(cmd.trim());
+                        if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
                         JSONObject tm = new JSONObject();
                         tm.put("role", "tool");
                         tm.put("tool_call_id", call.optString("id", "call_0"));
@@ -1248,6 +1477,7 @@ public class MainActivity extends Activity {
                 for (String cmd : cmds) {
                     if (stop) break;
                     String result = runCommand(cmd);
+                    if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
                     try {
                         JSONObject tm = new JSONObject();
                         tm.put("role", "user");
@@ -1415,7 +1645,12 @@ public class MainActivity extends Activity {
           .append("drive its UI: launch the app, find elements with `uiautomator dump`, tap with `input tap`, type ")
           .append("with `input text`, then verify. Do NOT open the app's databases or private files for those ")
           .append("requests; data digging is only for questions about what the app stores. Never send messages, ")
-          .append("post, or buy anything unless the user asked for exactly that.\n\n")
+          .append("post, or buy anything unless the user asked for exactly that.\n")
+          .append("8. Be FAST and dense. Batch related shell work into ONE command (`a; b; c`) instead of one ")
+          .append("command per step; keep sleeps at 1-2s and confirm state with `dumpsys window | grep mCurrentFocus` ")
+          .append("instead of waiting long. Reuse element ids/bounds you already found - never re-dump the same ")
+          .append("screen twice. A typical UI task should be 2-3 tool calls total (locate+act combined, then ")
+          .append("verify), not one call per action.\n\n")
           .append("DEVICE\n");
         try {
             String facts = RootShell.run("getprop ro.product.model; getprop ro.build.version.release; "
@@ -1436,6 +1671,8 @@ public class MainActivity extends Activity {
           .append("  find: `uiautomator dump /sdcard/ui.xml >/dev/null; cat /sdcard/ui.xml` - each node has bounds=\"[x1,y1][x2,y2]\" in SCREEN PIXELS; tap the centre of the target node\n")
           .append("  act: `input tap X Y`; `input text 'cari%snama'` (space = %s, ASCII only); keyevents 66=ENTER, 4=BACK, 3=HOME, 61=TAB, 19/20=DPAD up/down\n")
           .append("  verify: dump again and read the changed screen, or `screencap -p /sdcard/s.png`; if a tap looks dropped, re-dump and re-tap slightly offset - never assume a tap landed\n")
+          .append("  batch example: `uiautomator dump /sdcard/u.xml >/dev/null; grep -o '<node[^>]*text=\"Pencarian[^\"]*\"[^>]*>' /sdcard/u.xml; input tap CX CY; sleep 1; input text 'cari%snama'; sleep 1; uiautomator dump /sdcard/u2.xml >/dev/null; grep -o 'text=\"[^\"]*\"' /sdcard/u2.xml | head -5`\n")
+          .append("- mentions: `@<package>` in the user's message refers to that installed app (pm list packages, pm path <pkg>, dumpsys package <pkg>).\n")
           .append("- logs: logcat -d -b crash, logcat -d | tail -200, dmesg | tail\n")
           .append("- binaries: busybox/toybox, apktool, apksigner, zipalign if installed; otherwise fetch or ")
           .append("use the platform tools already present.\n");
@@ -1478,6 +1715,35 @@ public class MainActivity extends Activity {
         if (d < 3600000L) return (d / 60000L) + "m ago";
         if (d < 86400000L) return (d / 3600000L) + "h ago";
         return new SimpleDateFormat("dd MMM", Locale.ENGLISH).format(new Date(t));
+    }
+
+    /** auto mode: fast for UI/operational tasks, deeper thinking for debugging and analysis */
+    private static int autoThinking(String prompt) {
+        if (prompt == null) return 1;
+        String p = prompt.toLowerCase(Locale.ENGLISH);
+        String[] deep = {"kenapa", "mengapa", "why", "analisa", "analisis", "analyze", "debug", "trace",
+                "audit", "investigasi", "investigate", "root cause", "penyebab", "perbaiki", "fix",
+                "jelaskan", "explain", "bandingkan", "compare", "riset", "research", "review", "bug",
+                "error", "crash", "stacktrace", "vulnerab", "optimalkan", "optimize", "rancang", "desain"};
+        String[] fast = {"buka", "open", "launch", "tap", "ketuk", "klik", "click", "ketik", "type",
+                "cari", "search", "scroll", "swipe", "screenshot", "screencap", "kirim", "send",
+                "install", "uninstall", "restart", "reboot", "matikan", "nyalakan", "toggle",
+                "jalankan", "pindah", "ganti", "ubah", "set"};
+        int score = 0;
+        for (String w : deep) if (p.contains(w)) score += 3;
+        for (String w : fast) if (p.contains(w)) score -= 1;
+        if (score >= 2) return 2;
+        if (score <= -1) return 0;
+        return 1;
+    }
+
+    /** did a shell step fail? then auto mode escalates the next call to deep thinking */
+    private static boolean looksLikeFailure(String out) {
+        if (out == null) return false;
+        String l = out.toLowerCase(Locale.ENGLISH);
+        return l.contains("[exit ") || l.contains("error") || l.contains("exception")
+                || l.contains("permission denied") || l.contains("not found") || l.contains("failed")
+                || l.contains("no such") || l.contains("cannot");
     }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
@@ -1579,6 +1845,583 @@ public class MainActivity extends Activity {
         return e;
     }
 
+    private void styleThinking(Button b, boolean on) {
+        b.setTextColor(on ? ON_ACCENT : FG);
+        b.setBackground(ripple(on ? ACCENT : SURFACE, on ? ACCENT : LINE, 12));
+    }
+
+    // ==================== models & providers screen ====================
+
+    private void showModels() {
+        screen = 3;
+        LinearLayout v = shell();
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(GUTTER), statusBarHeight() + dp(6), dp(12), dp(6));
+        bar.addView(iconBtn("\u2190", new View.OnClickListener() {
+            @Override public void onClick(View x) { showSettings(); }
+        }));
+        TextView t = tv(18, FG, Typeface.BOLD);
+        t.setText("Models & providers");
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
+        tlp.setMargins(dp(8), 0, 0, 0);
+        bar.addView(t, tlp);
+        bar.addView(iconBtn("\u002B", new View.OnClickListener() {
+            @Override public void onClick(View x) { addDialog(); }
+        }));
+        v.addView(bar);
+
+        ScrollView sc = new ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(GUTTER), dp(4), dp(GUTTER), dp(24));
+        sc.addView(list, new ScrollView.LayoutParams(-1, -2));
+        v.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        JSONArray ps = providers();
+        JSONArray ms = models();
+
+        LinearLayout.LayoutParams h1 = new LinearLayout.LayoutParams(-1, -2);
+        h1.setMargins(0, dp(10), 0, dp(8));
+        list.addView(sectionLabel("PROVIDERS \u00b7 " + ps.length()), h1);
+        if (ps.length() == 0) {
+            TextView e = tv(12, MUTED, Typeface.NORMAL);
+            e.setText("No providers yet \u2014 tap + to add one (DeepSeek, OpenAI, OpenRouter, a local server\u2026).");
+            list.addView(e);
+        }
+        for (int i = 0; i < ps.length(); i++) {
+            JSONObject p = ps.optJSONObject(i);
+            if (p != null) list.addView(providerCard(p));
+        }
+
+        LinearLayout.LayoutParams h2 = new LinearLayout.LayoutParams(-1, -2);
+        h2.setMargins(0, dp(24), 0, dp(8));
+        list.addView(sectionLabel("MODELS \u00b7 " + ms.length()), h2);
+        if (ms.length() == 0) {
+            TextView e = tv(12, MUTED, Typeface.NORMAL);
+            e.setText("No models yet \u2014 tap + and add one under a provider.");
+            list.addView(e);
+        }
+        for (int i = 0; i < ms.length(); i++) {
+            JSONObject m = ms.optJSONObject(i);
+            if (m != null) list.addView(modelCard(m));
+        }
+
+        TextView hint = tv(11, MUTED, Typeface.NORMAL);
+        hint.setText("Tap a model to use it \u00b7 switch to enable/disable \u00b7 long-press to edit \u00b7 \u2715 to delete");
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
+        hlp.setMargins(0, dp(6), 0, 0);
+        list.addView(hint, hlp);
+
+        Button addP = new Button(this);
+        addP.setText("Add provider");
+        addP.setAllCaps(false);
+        addP.setTextSize(15);
+        addP.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        addP.setTextColor(FG);
+        addP.setBackground(ripple(SURFACE, LINE, 14));
+        addP.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { providerDialog(null); }
+        });
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, dp(50));
+        plp.setMargins(0, dp(22), 0, dp(10));
+        list.addView(addP, plp);
+
+        Button addM = new Button(this);
+        addM.setText("Add model");
+        addM.setAllCaps(false);
+        addM.setTextSize(15);
+        addM.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        addM.setTextColor(ON_ACCENT);
+        addM.setBackground(ripple(ACCENT, ACCENT, 14));
+        addM.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { modelDialog(null); }
+        });
+        list.addView(addM, new LinearLayout.LayoutParams(-1, dp(50)));
+
+        root.removeAllViews();
+        root.addView(v);
+    }
+
+    private void addDialog() {
+        final String[] opts = { "Provider (base URL + API key)", "Model (under a provider)" };
+        new AlertDialog.Builder(this)
+                .setTitle("Add\u2026")
+                .setItems(opts, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        if (w == 0) providerDialog(null); else modelDialog(null);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private View providerCard(final JSONObject p) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setBackground(ripple(SURFACE, LINE, 16));
+        card.setPadding(dp(14), dp(10), dp(6), dp(10));
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        TextView t1 = tv(15, FG, Typeface.BOLD);
+        t1.setText(p.optString("name", "provider"));
+        t1.setSingleLine(true);
+        TextView t2 = tv(12, MUTED, Typeface.NORMAL);
+        t2.setText(p.optString("baseUrl", "") + (p.optString("apiKey", "").isEmpty() ? "" : "  \u00b7  key set"));
+        t2.setSingleLine(true);
+        t2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        info.addView(t1);
+        info.addView(t2);
+        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        card.addView(iconBtn("\u2715", new View.OnClickListener() {
+            @Override public void onClick(View x) { confirmDeleteProvider(p); }
+        }));
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override public boolean onLongClick(View x) { providerDialog(p); return true; }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, dp(8));
+        card.setLayoutParams(lp);
+        return card;
+    }
+
+    private View modelCard(final JSONObject m) {
+        final boolean enabled = m.optBoolean("enabled", true);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setBackground(ripple(SURFACE, LINE, 16));
+        card.setPadding(dp(6), dp(6), dp(6), dp(6));
+
+        Switch on = new Switch(this);
+        on.setText("");
+        on.setChecked(enabled);
+        on.setMinHeight(dp(44));
+        on.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                try { m.put("enabled", checked); } catch (Throwable ignored) { }
+                saveModels(models());
+                if (!checked && m.optString("id").equals(store.activeModelId())) {
+                    JSONObject next = firstEnabledModel(m.optString("id"));
+                    store.setActiveModelId(next == null ? "" : next.optString("id"));
+                } else if (checked && store.activeModelId().isEmpty()) {
+                    store.setActiveModelId(m.optString("id"));
+                }
+                updateSubtitle();
+                toast((checked ? "Enabled \u00b7 " : "Disabled \u00b7 ") + shortLabel(m));
+                showModels();
+            }
+        });
+        card.addView(on);
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        boolean isActive = m.optString("id").equals(store.activeModelId());
+        TextView t1 = tv(15, enabled ? FG : MUTED, Typeface.BOLD);
+        t1.setText((isActive ? "\u25CF " : "") + shortLabel(m));
+        t1.setSingleLine(true);
+        TextView t2 = tv(12, MUTED, Typeface.NORMAL);
+        JSONObject p = providerOf(m);
+        t2.setText(m.optString("name", "") + "  \u00b7  " + (p == null ? "missing provider" : p.optString("name", ""))
+                + (enabled ? "" : "  \u00b7  disabled"));
+        t2.setSingleLine(true);
+        t2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        info.addView(t1);
+        info.addView(t2);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(0, -2, 1);
+        ilp.setMargins(dp(6), 0, dp(6), 0);
+        card.addView(info, ilp);
+
+        card.addView(iconBtn("\u2715", new View.OnClickListener() {
+            @Override public void onClick(View x) { confirmDeleteModel(m); }
+        }));
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { activateModel(m); }
+        });
+        card.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override public boolean onLongClick(View x) { modelDialog(m); return true; }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, dp(8));
+        card.setLayoutParams(lp);
+        return card;
+    }
+
+    private void activateModel(JSONObject m) {
+        if (!m.optBoolean("enabled", true)) { toast("Model is disabled \u2014 flip its switch on first"); return; }
+        if (providerOf(m) == null) { toast("This model's provider is missing"); return; }
+        store.setActiveModelId(m.optString("id"));
+        updateSubtitle();
+        toast("Active model \u00b7 " + shortLabel(m));
+        showModels();
+    }
+
+    private void providerDialog(final JSONObject existing) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        final EditText name = field(box, "Name", existing == null ? "" : existing.optString("name", ""), "DeepSeek / OpenAI / Local", false);
+        final EditText url = field(box, "Base URL", existing == null ? "" : existing.optString("baseUrl", ""), "https://api.deepseek.com", false);
+        final EditText key = field(box, "API key", existing == null ? "" : existing.optString("apiKey", ""), "sk-\u2026 (empty for local)", true);
+        new AlertDialog.Builder(this)
+                .setTitle(existing == null ? "Add provider" : "Edit provider")
+                .setView(box)
+                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        String nm = name.getText().toString().trim();
+                        String u = url.getText().toString().trim();
+                        if (u.isEmpty()) { toast("Base URL is required"); return; }
+                        try {
+                            JSONArray ps = providers();
+                            JSONObject p = existing;
+                            if (p == null) {
+                                p = new JSONObject();
+                                p.put("id", "p" + System.currentTimeMillis());
+                                ps.put(p);
+                            }
+                            p.put("name", nm.isEmpty() ? "Provider" : nm);
+                            p.put("baseUrl", u);
+                            p.put("apiKey", key.getText().toString().trim());
+                            saveProviders(ps);
+                            toast("Provider saved");
+                        } catch (Throwable t) { toast("Save failed: " + t); }
+                        showModels();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void modelDialog(final JSONObject existing) {
+        JSONArray ps = providers();
+        if (ps.length() == 0) { toast("Add a provider first"); providerDialog(null); return; }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(4));
+        final EditText name = field(box, "Model ID", existing == null ? "" : existing.optString("name", ""), "deepseek-flash / gpt-4o-mini", false);
+        final EditText label = field(box, "Label", existing == null ? "" : existing.optString("label", ""), "shown in the app (optional)", false);
+        box.addView(sectionLabel("PROVIDER"));
+        final android.widget.Spinner sp = new android.widget.Spinner(this);
+        final ArrayList<String> pnames = new ArrayList<>();
+        final ArrayList<String> pids = new ArrayList<>();
+        for (int i = 0; i < ps.length(); i++) {
+            JSONObject p = ps.optJSONObject(i);
+            if (p == null) continue;
+            pnames.add(p.optString("name", "provider"));
+            pids.add(p.optString("id"));
+        }
+        sp.setAdapter(new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, pnames));
+        if (existing != null) {
+            int idx = pids.indexOf(existing.optString("providerId"));
+            if (idx >= 0) sp.setSelection(idx);
+        }
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(48));
+        slp.setMargins(0, dp(6), 0, dp(4));
+        box.addView(sp, slp);
+        new AlertDialog.Builder(this)
+                .setTitle(existing == null ? "Add model" : "Edit model")
+                .setView(box)
+                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        String n = name.getText().toString().trim();
+                        if (n.isEmpty()) { toast("Model ID is required"); return; }
+                        int sel = sp.getSelectedItemPosition();
+                        if (sel < 0 || sel >= pids.size()) { toast("Pick a provider"); return; }
+                        try {
+                            JSONArray ms = models();
+                            JSONObject m = existing;
+                            if (m == null) {
+                                m = new JSONObject();
+                                m.put("id", "m" + System.currentTimeMillis());
+                                m.put("enabled", true);
+                                ms.put(m);
+                            }
+                            m.put("name", n);
+                            m.put("label", label.getText().toString().trim());
+                            m.put("providerId", pids.get(sel));
+                            saveModels(ms);
+                            if (store.activeModelId().isEmpty()) store.setActiveModelId(m.optString("id"));
+                            toast("Model saved");
+                        } catch (Throwable t) { toast("Save failed: " + t); }
+                        showModels();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void confirmDeleteProvider(final JSONObject p) {
+        int n = 0;
+        JSONArray ms = models();
+        for (int i = 0; i < ms.length(); i++) {
+            JSONObject m = ms.optJSONObject(i);
+            if (m != null && p.optString("id").equals(m.optString("providerId"))) n++;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Delete provider?")
+                .setMessage(p.optString("name", "") + (n > 0 ? " \u00b7 also deletes " + n + " model(s)" : ""))
+                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        JSONArray ps = providers();
+                        JSONArray outP = new JSONArray();
+                        for (int i = 0; i < ps.length(); i++) {
+                            JSONObject o = ps.optJSONObject(i);
+                            if (o != null && !p.optString("id").equals(o.optString("id"))) outP.put(o);
+                        }
+                        JSONArray ms2 = models();
+                        JSONArray outM = new JSONArray();
+                        for (int i = 0; i < ms2.length(); i++) {
+                            JSONObject o = ms2.optJSONObject(i);
+                            if (o != null && !p.optString("id").equals(o.optString("providerId"))) outM.put(o);
+                        }
+                        saveProviders(outP);
+                        saveModels(outM);
+                        ensureActiveStillValid();
+                        showModels();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void confirmDeleteModel(final JSONObject m) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete model?")
+                .setMessage(shortLabel(m) + "  \u00b7  " + m.optString("name", ""))
+                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        JSONArray ms = models();
+                        JSONArray out = new JSONArray();
+                        for (int i = 0; i < ms.length(); i++) {
+                            JSONObject o = ms.optJSONObject(i);
+                            if (o != null && !m.optString("id").equals(o.optString("id"))) out.put(o);
+                        }
+                        saveModels(out);
+                        ensureActiveStillValid();
+                        showModels();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    // ==================== attachments ====================
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req == REQ_ATTACH && res == RESULT_OK && data != null && data.getData() != null) {
+            saveAttachment(data.getData());
+        }
+    }
+
+    private void openAttachPicker() {
+        final String[] opts = { "Image / photo", "Any file" };
+        new AlertDialog.Builder(this)
+                .setTitle("Add attachment")
+                .setItems(opts, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                        i.addCategory(Intent.CATEGORY_OPENABLE);
+                        i.setType(w == 0 ? "image/*" : "*/*");
+                        try {
+                            startActivityForResult(i, REQ_ATTACH);
+                        } catch (Throwable t) {
+                            toast("No file picker: " + t);
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** copy the picked file into the app's external files dir so the root shell can read it */
+    private void saveAttachment(final android.net.Uri uri) {
+        toast("Copying attachment\u2026");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    android.content.ContentResolver cr = getContentResolver();
+                    String name = "attachment.bin";
+                    long size = -1;
+                    android.database.Cursor c = cr.query(uri, null, null, null, null);
+                    if (c != null) {
+                        try {
+                            if (c.moveToFirst()) {
+                                int ni = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                                int si = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                                if (ni >= 0 && c.getString(ni) != null) name = c.getString(ni);
+                                if (si >= 0) size = c.getLong(si);
+                            }
+                        } finally { c.close(); }
+                    }
+                    name = name.replaceAll("[^A-Za-z0-9._-]", "_");
+                    java.io.File base = getExternalFilesDir(null);
+                    if (base == null) base = getFilesDir();
+                    java.io.File dir = new java.io.File(base, "attachments");
+                    dir.mkdirs();
+                    java.io.File out = new java.io.File(dir, System.currentTimeMillis() + "_" + name);
+                    java.io.InputStream in = cr.openInputStream(uri);
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+                    fos.close();
+                    in.close();
+                    final String path = out.getAbsolutePath();
+                    final String fname = name;
+                    final String label = fname + (size > 0 ? "  \u00b7  " + (size / 1024) + " KB" : "");
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            pendingPath = path;
+                            pendingName = fname;
+                            showAttachChip(label);
+                            toast("Attached \u00b7 " + fname);
+                        }
+                    });
+                } catch (final Throwable t) {
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast("Attach failed: " + t); }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private void showAttachChip(String label) {
+        if (attachBar == null) return;
+        attachBar.removeAllViews();
+        LinearLayout chip = new LinearLayout(this);
+        chip.setOrientation(LinearLayout.HORIZONTAL);
+        chip.setGravity(Gravity.CENTER_VERTICAL);
+        chip.setBackground(round(SURFACE, LINE, 12));
+        chip.setPadding(dp(12), dp(4), dp(4), dp(4));
+        TextView t = tv(12, FG, Typeface.NORMAL);
+        t.setText("\uD83D\uDCCE  " + label);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        chip.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        chip.addView(iconBtn("\u2715", new View.OnClickListener() {
+            @Override public void onClick(View x) {
+                pendingPath = null;
+                pendingName = null;
+                attachBar.setVisibility(View.GONE);
+            }
+        }));
+        attachBar.addView(chip, new LinearLayout.LayoutParams(-1, -2));
+        attachBar.setVisibility(View.VISIBLE);
+    }
+
+    // ==================== @mention installed apps ====================
+
+    private void ensureAppsLoaded() {
+        if (installedApps != null) return;
+        installedApps = new ArrayList<>();
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    android.content.pm.PackageManager pm = getPackageManager();
+                    ArrayList<String[]> out = new ArrayList<>();
+                    for (android.content.pm.ApplicationInfo ai : pm.getInstalledApplications(0)) {
+                        if (!ai.enabled) continue;
+                        out.add(new String[]{ String.valueOf(pm.getApplicationLabel(ai)), ai.packageName });
+                    }
+                    Collections.sort(out, new Comparator<String[]>() {
+                        @Override public int compare(String[] a, String[] b) {
+                            return a[0].compareToIgnoreCase(b[0]);
+                        }
+                    });
+                    installedApps = out;
+                } catch (Throwable t) {
+                    installedApps = new ArrayList<>();
+                }
+            }
+        }).start();
+    }
+
+    private void openAppPicker(final int atIndex) {
+        if (pickerOpen || input == null) return;
+        pickerOpen = true;
+        ensureAppsLoaded();
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(4));
+
+        final EditText search = new EditText(this);
+        search.setHint("Search installed apps\u2026");
+        search.setHintTextColor(MUTED);
+        search.setTextColor(FG);
+        search.setSingleLine(true);
+        search.setTextSize(14);
+        search.setMinHeight(dp(48));
+        search.setPadding(dp(14), 0, dp(14), 0);
+        search.setBackground(round(BG, LINE, 12));
+        box.addView(search);
+
+        final android.widget.ListView lv = new android.widget.ListView(this);
+        lv.setDivider(null);
+        lv.setDividerHeight(0);
+        final ArrayList<String> rows = new ArrayList<>();
+        final ArrayList<String> pkgs = new ArrayList<>();
+        final android.widget.ArrayAdapter<String> adapter =
+                new android.widget.ArrayAdapter<>(this, android.R.layout.simple_list_item_1, rows);
+        lv.setAdapter(adapter);
+        final Runnable refill = new Runnable() {
+            @Override public void run() {
+                String q = search.getText().toString().trim().toLowerCase(Locale.ENGLISH);
+                rows.clear();
+                pkgs.clear();
+                int n = 0;
+                for (String[] a : installedApps) {
+                    if (q.isEmpty()
+                            || a[0].toLowerCase(Locale.ENGLISH).contains(q)
+                            || a[1].toLowerCase(Locale.ENGLISH).contains(q)) {
+                        rows.add(a[0] + "   \u2014   " + a[1]);
+                        pkgs.add(a[1]);
+                        if (++n >= 60) break;
+                    }
+                }
+                adapter.notifyDataSetChanged();
+            }
+        };
+        refill.run();
+        search.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable e) { refill.run(); }
+        });
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, dp(320));
+        llp.setMargins(0, dp(8), 0, 0);
+        box.addView(lv, llp);
+        ui.postDelayed(new Runnable() { @Override public void run() { refill.run(); } }, 600);
+
+        final AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("Mention an app")
+                .setView(box)
+                .setNegativeButton("Cancel", null)
+                .create();
+        lv.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
+            @Override public void onItemClick(android.widget.AdapterView<?> p, View v, int pos, long id) {
+                String pkg = pkgs.get(pos);
+                android.text.Editable e = input.getText();
+                if (atIndex >= 0 && atIndex < e.length() && e.charAt(atIndex) == '@') {
+                    e.replace(atIndex, atIndex + 1, "@" + pkg + " ");
+                } else {
+                    e.insert(Math.min(Math.max(atIndex, 0), e.length()), "@" + pkg + " ");
+                }
+                dlg.dismiss();
+            }
+        });
+        dlg.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(DialogInterface x) { pickerOpen = false; }
+        });
+        dlg.show();
+    }
+
     private GradientDrawable round(int fill, int stroke, int radius) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(fill);
@@ -1589,5 +2432,13 @@ public class MainActivity extends Activity {
 
     private RippleDrawable ripple(int fill, int stroke, int radius) {
         return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), round(fill, stroke, radius), null);
+    }
+
+    /** a true circle that always fills the view bounds exactly (no corner-radius clamping quirks) */
+    private RippleDrawable circle(int fill) {
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(fill);
+        return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), g, null);
     }
 }
