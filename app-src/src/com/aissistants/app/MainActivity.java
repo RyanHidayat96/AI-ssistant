@@ -93,6 +93,10 @@ public class MainActivity extends Activity {
     private TextView barTitle, subtitle, pill;
     private EditText input;
     private TextView sendBtn;
+    private TextView micBtn;
+    private android.speech.SpeechRecognizer speech;
+    private boolean listening;
+    private String voiceBase = "";
     private LinearLayout inputRow;
     private LinearLayout attachBar;
     private int lastIme = -1;
@@ -260,7 +264,26 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        stopVoiceInput(false);      // never hold the mic open in the background
         persist();
+    }
+
+    @Override
+    protected void onDestroy() {
+        try { if (speech != null) { speech.destroy(); speech = null; } } catch (Throwable ignored) { }
+        super.onDestroy();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(req, perms, res);
+        if (req == 2) {
+            if (res.length > 0 && res[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                toggleVoiceInput();      // granted - start listening right away
+            } else {
+                toast("Izin microphone ditolak - aktifkan di Settings app");
+            }
+        }
     }
 
     @Override
@@ -769,6 +792,21 @@ public class MainActivity extends Activity {
             }
         });
         field.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
+
+        micBtn = new TextView(this);
+        micBtn.setText("\uD83C\uDFA4");
+        micBtn.setTextSize(18);
+        micBtn.setGravity(Gravity.CENTER);
+        micBtn.setIncludeFontPadding(false);
+        micBtn.setTextColor(MUTED);
+        micBtn.setBackground(ripple(Color.TRANSPARENT, 0, 24));
+        setButtonA11y(micBtn, "Dictate a prompt with your voice");
+        micBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) { toggleVoiceInput(); }
+        });
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        vlp.setMargins(0, 0, dp(2), 0);
+        field.addView(micBtn, vlp);
         row.addView(field, new LinearLayout.LayoutParams(0, -2, 1));
 
         autoBtn = new TextView(this);
@@ -3145,6 +3183,104 @@ public class MainActivity extends Activity {
         return l.contains("[exit ") || l.contains("error") || l.contains("exception")
                 || l.contains("permission denied") || l.contains("not found") || l.contains("failed")
                 || l.contains("no such") || l.contains("cannot");
+    }
+
+    // ---- voice input -------------------------------------------------------------------
+    // Mic in the input field: tap = listen, tap again = stop. Partial results land in the box
+    // while you speak and the final text stays there for review before sending.
+
+    private void toggleVoiceInput() {
+        if (listening) { stopVoiceInput(true); return; }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 2);
+            return;
+        }
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+            toast("Nggak ada speech service di HP ini - aktifkan Google speech recognition");
+            return;
+        }
+        try {
+            if (speech != null) { speech.destroy(); speech = null; }
+            speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+            speech.setRecognitionListener(new android.speech.RecognitionListener() {
+                @Override public void onReadyForSpeech(android.os.Bundle p) { }
+                @Override public void onBeginningOfSpeech() { }
+                @Override public void onRmsChanged(float v) { }
+                @Override public void onBufferReceived(byte[] b) { }
+                @Override public void onEndOfSpeech() { }
+                @Override public void onEvent(int t, android.os.Bundle p) { }
+                @Override public void onPartialResults(android.os.Bundle p) {
+                    String best = bestSpeech(p);
+                    if (!best.isEmpty()) setVoiceText(best);
+                }
+                @Override public void onResults(android.os.Bundle p) {
+                    String best = bestSpeech(p);
+                    if (!best.isEmpty()) setVoiceText(best);
+                    stopVoiceInput(false);
+                }
+                @Override public void onError(int code) {
+                    setVoiceUi(false);
+                    if (code == android.speech.SpeechRecognizer.ERROR_NO_MATCH
+                            || code == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        toast("Nggak kedengeran - tap mic lagi");
+                    } else if (code == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                        toast("Butuh izin microphone");
+                    } else if (code == android.speech.SpeechRecognizer.ERROR_NETWORK
+                            || code == android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
+                        toast("Speech service butuh internet (atau unduh model offline di Settings Google)");
+                    } else if (code == android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+                        toast("Speech service sibuk - coba lagi");
+                    } else {
+                        toast("Speech error " + code);
+                    }
+                }
+            });
+            voiceBase = input == null ? "" : input.getText().toString().trim();
+            Intent ri = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,
+                    java.util.Locale.getDefault().toLanguageTag());
+            speech.startListening(ri);
+            listening = true;
+            setVoiceUi(true);
+        } catch (Throwable t) {
+            listening = false;
+            setVoiceUi(false);
+            toast("Mic gagal: " + t);
+        }
+    }
+
+    private String bestSpeech(android.os.Bundle b) {
+        if (b == null) return "";
+        java.util.ArrayList<String> r =
+                b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+        if (r == null || r.isEmpty() || r.get(0) == null) return "";
+        return r.get(0).trim();
+    }
+
+    /** partial text replaces the dictated part; anything already typed stays in front of it */
+    private void setVoiceText(String text) {
+        if (input == null) return;
+        String full = voiceBase.isEmpty() ? text : voiceBase + " " + text;
+        input.setText(full);
+        if (input.getText() != null) input.setSelection(input.getText().length());
+    }
+
+    private void setVoiceUi(boolean on) {
+        listening = on;
+        if (micBtn == null) return;
+        micBtn.setTextColor(on ? ON_ACCENT : MUTED);
+        micBtn.setBackground(on ? circle(ACCENT) : ripple(Color.TRANSPARENT, 0, 24));
+        setButtonA11y(micBtn, on ? "Stop dictating" : "Dictate a prompt with your voice");
+    }
+
+    private void stopVoiceInput(boolean userTap) {
+        try { if (speech != null) speech.stopListening(); } catch (Throwable ignored) { }
+        setVoiceUi(false);
     }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }

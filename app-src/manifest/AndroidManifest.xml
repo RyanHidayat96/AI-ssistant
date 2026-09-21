@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.aissistants.app"
-    android:versionCode="57"
-    android:versionName="1.16.8">
+    android:versionCode="58"
+    android:versionName="1.16.9">
 
     <!-- the assistant talks to any OpenAI-compatible endpoint (cloud or LAN) -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -10,9 +10,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- voice prompts: SpeechRecognizer needs the microphone -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- a root assistant must be able to list/see every installed app (@mention, pm recipes);
          without this Android 11+ sandbox visibility hides all third-party apps -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <!-- Android 11+ package visibility: without this the speech service is invisible -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:label="AI-ssistants"
