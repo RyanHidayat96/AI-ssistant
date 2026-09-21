@@ -95,6 +95,12 @@ public class MainActivity extends Activity {
     private String pendingName = null;
     private boolean pickerOpen = false;
 
+    /** permission gate: 0 = once, 1 = this chat, 2 = always, 3 = denied */
+    private static final int PERM_ONCE = 0, PERM_CHAT = 1, PERM_ALWAYS = 2, PERM_DENY = 3;
+    private boolean allowInstallInChat = false;
+    private volatile java.util.concurrent.CountDownLatch permLatch;
+    private volatile java.util.concurrent.atomic.AtomicInteger permResult;
+
     /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
     private final java.util.Set<String> expandedGroups = new java.util.HashSet<>();
     private static ArrayList<AppEntry> installedApps = null;
@@ -873,6 +879,12 @@ public class MainActivity extends Activity {
                         "show disk usage per partition in human units and where the space went"},
                 {"Network", "listening sockets, connections, wifi/ip",
                         "list listening sockets, current connections and the wifi/ip configuration"},
+                {"Pull an APK", "copy it out + summary: activities, perms, libs, protection",
+                        "tarik APK <paket> ke /data/local/tmp dan ringkas isinya: aktivitas utama, izin, native libs, dan tanda proteksi"},
+                {"Reverse an app", "decompile dex + resources, explain the internals",
+                        "decompile APK <paket> lalu jelaskan internalnya: entry point, endpoint network, dan bagian yang menarik"},
+                {"Mod an APK", "patch, rebuild, sign, install -r",
+                        "mod APK <paket>: <perubahan yang diinginkan>, build ulang, sign, install -r, lalu verifikasi hasilnya"},
                 {"$ root command", "run it yourself as uid 0, no model involved", "$ "},
         };
         for (String[] tip : tips) v.addView(suggestion(tip[0], tip[1], tip[2]));
@@ -1222,6 +1234,7 @@ public class MainActivity extends Activity {
         }
         messages.clear();
         pending.clear();
+        allowInstallInChat = false;
         if (pendingBar != null) pendingBar.setVisibility(View.GONE);
         showChat();
         toast("New chat");
@@ -1235,6 +1248,7 @@ public class MainActivity extends Activity {
                 cur = o;
                 synchronized (lock) { store.setActiveId(id); }
                 messages.clear();
+                allowInstallInChat = false;
                 rebuildModelMessages();
                 showChat();
                 return;
@@ -1400,6 +1414,12 @@ public class MainActivity extends Activity {
         stop = true;
         AiClient.cancel();
         RootShell.cancel();
+        java.util.concurrent.CountDownLatch l = permLatch;
+        if (l != null) {
+            java.util.concurrent.atomic.AtomicInteger r = permResult;
+            if (r != null) r.set(PERM_DENY);
+            l.countDown();
+        }
         addBubble("note", "stopping\u2026");
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
@@ -1694,10 +1714,65 @@ public class MainActivity extends Activity {
             showPendingBar();
             return "[not executed: auto-run is disabled]";
         }
+        if (needsInstallPermission(cmd)) {
+            int verdict = askInstallPermission(cmd);
+            if (verdict == PERM_DENY) {
+                addBubble("note", "install ditolak \u00b7 " + firstLine(cmd));
+                return "[denied by the user - the install was NOT executed. Do not retry it; report and continue.]";
+            }
+        }
         addBubble("tool", "$ " + cmd);
         final String out = RootShell.run(cmd, store.timeoutSec());
         addBubble("tool", out);
         return out;
+    }
+
+    /** installs must be approved by the human before they run */
+    private boolean needsInstallPermission(String cmd) {
+        if (cmd == null) return false;
+        return java.util.regex.Pattern
+                .compile("(^|[;&|({]\\s*)(su\\s+-c\\s+['\"]?)?(pkg|apt|apt-get|dpkg|pip|pip3|npm|yarn|pnpm|gem|go|apk|pm|magisk|cargo)\\s+(install|add|i)\\b")
+                .matcher(cmd).find();
+    }
+
+    /** blocks the worker thread until the user taps a choice in the dialog */
+    private int askInstallPermission(final String cmd) {
+        if (store.allowInstallAlways()) return PERM_ALWAYS;
+        if (allowInstallInChat) return PERM_CHAT;
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicInteger res =
+                new java.util.concurrent.atomic.AtomicInteger(PERM_DENY);
+        permLatch = latch;
+        permResult = res;
+        ui.post(new Runnable() {
+            @Override public void run() {
+                final String[] opts = { "Izinkan sekali", "Izinkan di percakapan ini", "Izinkan selalu", "Tolak" };
+                String line = firstLine(cmd);
+                if (line.length() > 200) line = line.substring(0, 200) + "\u2026";
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Asisten mau meng-install sesuatu")
+                        .setMessage(line + "\n\nSetujui yang mana?")
+                        .setItems(opts, new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface d, int w) {
+                                res.set(w);
+                                if (w == PERM_CHAT) allowInstallInChat = true;
+                                if (w == PERM_ALWAYS) store.setAllowInstallAlways(true);
+                                latch.countDown();
+                            }
+                        })
+                        .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                            @Override public void onCancel(DialogInterface d) {
+                                res.set(PERM_DENY);
+                                latch.countDown();
+                            }
+                        })
+                        .show();
+            }
+        });
+        try { latch.await(); } catch (Throwable ignored) { }
+        permLatch = null;
+        permResult = null;
+        return res.get();
     }
 
     private void showPendingBar() {
@@ -1858,8 +1933,31 @@ public class MainActivity extends Activity {
           .append("  batch example: `uiautomator dump /sdcard/u.xml >/dev/null; grep -o '<node[^>]*text=\"Pencarian[^\"]*\"[^>]*>' /sdcard/u.xml; input tap CX CY; sleep 1; input text 'cari%snama'; sleep 1; uiautomator dump /sdcard/u2.xml >/dev/null; grep -o 'text=\"[^\"]*\"' /sdcard/u2.xml | head -5`\n")
           .append("- mentions: `@<package>` in the user's message refers to that installed app (pm list packages, pm path <pkg>, dumpsys package <pkg>).\n")
           .append("- logs: logcat -d -b crash, logcat -d | tail -200, dmesg | tail\n")
-          .append("- binaries: busybox/toybox, apktool, apksigner, zipalign if installed; otherwise fetch or ")
-          .append("use the platform tools already present.\n");
+          .append("- binaries: busybox/toybox, unzip, curl are present; there is NO java/python/aapt/apktool in ")
+          .append("/system/bin. On-device tooling lives in Termux (installed on this phone, its packages usually not) - ")
+          .append("call its binaries straight from this root shell with the Termux env, e.g. ")
+          .append("`T=/data/data/com.termux/files/usr; env HOME=/data/data/com.termux/files/home PATH=$T/bin:$PATH ")
+          .append("LD_LIBRARY_PATH=$T/lib $T/bin/python3 --version`, and install what is missing with ")
+          .append("`env HOME=/data/data/com.termux/files/home PATH=$T/bin:$PATH $T/bin/pkg install -y python openjdk-17 ")
+          .append("apktool jadx zip apksigner` (needs network, takes minutes).\n\n")
+          .append("REVERSE ENGINEERING / MOD APK (everything on this device)\n")
+          .append("- pull: `p=$(pm path <pkg> | sed 's/package://'); cp \"$p\" /data/local/tmp/base.apk; ls -l /data/local/tmp/base.apk`\n")
+          .append("- peek without tools: `unzip -l base.apk`, `unzip -p base.apk classes.dex | strings -n 6 | head -50`, ")
+          .append("`strings -n 8 base.apk | grep -E 'https?://' | head`; parsed manifest + permissions come from `dumpsys package <pkg>`\n")
+          .append("- decompile / rebuild: `apktool d -f base.apk -o out`, edit smali/res, `apktool b out -o patched.apk`; ")
+          .append("jadx for readable Java; patch smali only at the exact spot jadx pointed to\n")
+          .append("- sign: `apksigner sign --ks keys.jks --ks-pass pass:<pw> --out signed.apk patched.apk`, or ")
+          .append("`java -jar uber-apk-signer.jar -a patched.apk` (makes a debug key)\n")
+          .append("- install: `pm install -r -d /data/local/tmp/patched.apk`, verify with `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime'`\n")
+          .append("- this phone already runs KernelSU modules KPatch-Next, tricky_store, zygisk-detach and morphe patches: ")
+          .append("signature/attestation checks may already be bypassed at kernel level - try the patched APK as-is first. ")
+          .append("On INSTALL_FAILED_UPDATE_INCOMPATIBLE say so and stop; uninstall only if the user accepts losing app data.\n")
+          .append("- protection awareness: an APK containing libpairipcore.so (PairIP) or a known packer breaks after ")
+          .append("repackaging - say that up front instead of burning steps. Always keep the untouched base.apk as backup.\n")
+          .append("- stay in scope: only pull/patch/install what the user asked for, report what changed and how you verified it.\n")
+          .append("- installs are GATED in this app: `pkg/apt/pip/npm/pm ... install` pauses and the user gets a dialog ")
+          .append("(izinkan sekali / percakapan ini / selalu / tolak). If it is denied the command does NOT run - do not ")
+          .append("retry the same install, say what you need it for, and offer the alternative.\n");
         return sb.toString();
     }
 

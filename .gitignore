@@ -1,0 +1,30 @@
+# Android build outputs
+/build/
+/release/*.apk
+/release/*.aab
+/release/*.idsig
+*.class
+*.dex
+
+# Signing credentials
+*.keystore
+*.jks
+*.p12
+*.pfx
+key.properties
+
+# Local Android and build-tool configuration
+local.properties
+.gradle/
+
+# IDE workspace files
+.idea/
+*.iml
+.vscode/
+
+# Operating-system and temporary files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp

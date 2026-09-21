@@ -49,6 +49,11 @@ final class Store {
     String activeModelId() { return sp.getString("activeModelId", ""); }
     void setActiveModelId(String id) { sp.edit().putString("activeModelId", id == null ? "" : id).apply(); }
 
+    // ---- permission gate (installs etc.) -------------------------------------------------
+
+    boolean allowInstallAlways() { return sp.getBoolean("allowInstallAlways", false); }
+    void setAllowInstallAlways(boolean b) { sp.edit().putBoolean("allowInstallAlways", b).apply(); }
+
     // ---- legacy single endpoint (migration source only) ---------------------------------
 
     String legacyBaseUrl() { return sp.getString("baseUrl", ""); }
