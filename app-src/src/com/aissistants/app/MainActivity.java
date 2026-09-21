@@ -199,7 +199,7 @@ public class MainActivity extends Activity {
     private volatile boolean stop;
     private volatile String lastPrompt = "";
     private Thread worker;
-    private int stepNow, stepTotal;
+    private int stepNow;
     private String lastUsage = "";
     private int screen = 0;   // 0 chat, 1 chats, 2 settings
 
@@ -549,8 +549,6 @@ public class MainActivity extends Activity {
         LinearLayout agentFields = new LinearLayout(this);
         agentFields.setOrientation(LinearLayout.VERTICAL);
         agentFields.setPadding(0, dp(2), 0, dp(4));
-        final EditText steps = field(agentFields, "Max steps (1-5000)", String.valueOf(store.maxSteps()), "12", false);
-        steps.setInputType(InputType.TYPE_CLASS_NUMBER);
         final EditText timeout = field(agentFields, "Timeout seconds (20-1800)", String.valueOf(store.timeoutSec()), "180", false);
         timeout.setInputType(InputType.TYPE_CLASS_NUMBER);
         final EditText temp = field(agentFields, "Temperature (0-100)", String.valueOf(store.temperature()), "30", false);
@@ -615,11 +613,10 @@ public class MainActivity extends Activity {
         save.setBackground(ripple(ACCENT, ACCENT, 14));
         save.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                Integer stepValue = wholeNumber(steps, 1, 5000, "Max steps");
                 Integer tempValue = wholeNumber(temp, 0, 100, "Temperature");
                 Integer timeoutValue = wholeNumber(timeout, 20, 1800, "Timeout");
-                if (stepValue == null || tempValue == null || timeoutValue == null) return;
-                store.save(stepValue, tempValue, timeoutValue,
+                if (tempValue == null || timeoutValue == null) return;
+                store.save(tempValue, timeoutValue,
                         auto.isChecked(), thinking[0]);
                 refreshStatus();
                 toast("Saved \u00b7 " + activeLabel());
@@ -904,8 +901,7 @@ public class MainActivity extends Activity {
                     prev = "tool";
                     continue;
                 }
-                if ("note".equals(role) && (((String) m[1]).startsWith("step limit reached")
-                        || ((String) m[1]).startsWith("run dihentikan"))) {
+                if ("note".equals(role) && ((String) m[1]).startsWith("run dihentikan")) {
                     addContinueCard();
                     prev = role;
                     continue;
@@ -1064,13 +1060,13 @@ public class MainActivity extends Activity {
         out.setSpan(new BackgroundColorSpan(TOOL_BG), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
     }
 
-    /** the step-limit note becomes a button: tap = send "continue" */
+    /** a stopped run becomes a button: tap = send "continue" */
     private void addContinueCard() {
         TextView c = tv(13, ON_ACCENT, Typeface.BOLD);
-        c.setText("\u25B6 Lanjutkan (step limit) \u00b7 tap");
+        c.setText("\u25B6 Lanjutkan \u00b7 tap");
         c.setGravity(Gravity.CENTER);
         c.setBackground(ripple(ACCENT, ACCENT, 14));
-        setButtonA11y(c, "Continue this task after the step limit");
+        setButtonA11y(c, "Continue this task");
         c.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (busy) { toast("Masih jalan \u00b7 stop dulu"); return; }
@@ -1220,7 +1216,7 @@ public class MainActivity extends Activity {
         TextView b = tv(13, MUTED, Typeface.NORMAL);
         String txt;
         if (stop) txt = "Stopping\u2026";
-        else if (stepNow > 0 && stepTotal > 0) txt = "Working\u2026  step " + stepNow + "/" + stepTotal;
+        else if (stepNow > 0) txt = "Working\u2026  step " + stepNow;
         else txt = "Working\u2026";
         b.setText(txt);
         b.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -2107,7 +2103,6 @@ public class MainActivity extends Activity {
         lastAssistantSaid = "";
         midRunRestartUsed = false;
         stepNow = 0;
-        stepTotal = store.maxSteps();
         startAgentService();
         setBusyUi(true);
         ui.post(new Runnable() {
@@ -2121,7 +2116,6 @@ public class MainActivity extends Activity {
     }
 
     private void agentLoop() {
-        final int steps = store.maxSteps();
         boolean runErrored = false;
         try {
             JSONObject sys = new JSONObject();
@@ -2132,15 +2126,16 @@ public class MainActivity extends Activity {
             boolean escalate = false;
             // token diet: identical command + identical output is sent to the model only once
             final java.util.HashMap<String, String> ioSeen = new java.util.HashMap<>();
-            for (int step = 1; step <= steps && !stop; step++) {
+            // no step cap: the run ends when the task is done, the user stops it, a tool
+            // refuses, or the anti-repeat guard fires - never because a counter ran out
+            for (int step = 1; !stop; step++) {
                 stepNow = step;
-                stepTotal = steps;
                 final int thinkNow = thinkBase == 3 ? ((escalate || stuckRun) ? 2 : autoThinking(lastPrompt)) : thinkBase;
                 ui.post(new Runnable() {
                     @Override public void run() {
-                        subtitle.setText("Working \u00b7 step " + stepNow + "/" + stepTotal
+                        subtitle.setText("Working \u00b7 step " + stepNow
                                 + (thinkBase == 3 ? " \u00b7 think:" + thinkNow : ""));
-                        AgentService.status(MainActivity.this, "Working \u00b7 step " + stepNow + "/" + stepTotal
+                        AgentService.status(MainActivity.this, "Working \u00b7 step " + stepNow
                                 + (thinkBase == 3 ? " \u00b7 think:" + thinkNow : ""));
                         renderTranscript();
                     }
@@ -2273,9 +2268,8 @@ public class MainActivity extends Activity {
                 }
                 if (loopBroken) break;
             }
-            if (!brokeEarly && !stop) {
-                if (loopBroken) addBubble("note", "run dihentikan (perintah sama diulang) - kirim 'lanjut' buat pendekatan lain");
-                else addBubble("note", "step limit reached (" + steps + ") - raise Max steps in settings and send 'continue'");
+            if (!brokeEarly && !stop && loopBroken) {
+                addBubble("note", "run dihentikan (perintah sama diulang) - kirim 'lanjut' buat pendekatan lain");
             }
         } catch (Throwable t) {
             runErrored = true;
@@ -2735,7 +2729,6 @@ public class MainActivity extends Activity {
         loopBroken = false;
         stuckRun = false;
         stepNow = 0;
-        stepTotal = commands.size();
         lastAssistantSaid = "";
         startAgentService();
         setBusyUi(true);
@@ -2920,8 +2913,9 @@ public class MainActivity extends Activity {
           .append("5. DIAGNOSE THE MECHANISM FIRST: state how the thing works and where it breaks (how the cheat hooks the game, which file/library is ")
           .append("involved, what the update changed) BEFORE digging into files or strings. A hypothesis-driven command beats ten exploratory greps; ")
           .append("two batches that teach nothing new = stop and re-plan.\n")
-          .append("6. BUDGET: aim for <=20 steps on a normal task. Past ~30 steps with no concrete finding, stop, re-read your plan, change approach, ")
-          .append("or ask the user one sharp question. Never keep the same kind of command coming for page after page.\n")
+          .append("6. NO STEP LIMIT: the app never cuts your run short, so keep going until the goal really works or a blocker is real. ")
+          .append("Efficiency still matters: past ~30 steps with no concrete finding, do not repeat the same kind of command - re-read your plan, ")
+          .append("change approach, or (only if truly stuck) ask the user one sharp question.\n")
           .append("7. Verify every claim with real output (file changed? service state? log line? UI state?) before you rely on it.\n")
           .append("8. Self-check before your final answer: what did I assume without proof, which cheaper path did I skip, did I actually solve ")
           .append("the user's goal (not a nearby one)?\n")

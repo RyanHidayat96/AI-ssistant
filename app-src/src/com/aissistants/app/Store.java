@@ -22,7 +22,6 @@ final class Store {
 
     // ---- agent parameters ---------------------------------------------------------------
 
-    int maxSteps() { return sp.getInt("maxSteps", 12); }
     int temperature() { return sp.getInt("temperature", 30); }        // percent, 0..100
     int timeoutSec() { return sp.getInt("timeoutSec", 180); }
     boolean autoRun() { return sp.getBoolean("autoRun", false); }
@@ -33,9 +32,8 @@ final class Store {
     long toolProbeAt() { return sp.getLong("toolProbeAt", 0L); }
     void setToolProbe(String s) { sp.edit().putString("toolProbe", s).putLong("toolProbeAt", System.currentTimeMillis()).apply(); }
 
-    void save(int maxSteps, int temperature, int timeoutSec, boolean autoRun, int thinking) {
+    void save(int temperature, int timeoutSec, boolean autoRun, int thinking) {
         sp.edit()
-                .putInt("maxSteps", Math.max(1, Math.min(5000, maxSteps)))
                 .putInt("temperature", Math.max(0, Math.min(100, temperature)))
                 .putInt("timeoutSec", Math.max(20, Math.min(1800, timeoutSec)))
                 .putBoolean("autoRun", autoRun)
