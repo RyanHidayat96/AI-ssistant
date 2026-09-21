@@ -2130,6 +2130,8 @@ public class MainActivity extends Activity {
             boolean brokeEarly = false;
             final int thinkBase = store.thinking();
             boolean escalate = false;
+            // token diet: identical command + identical output is sent to the model only once
+            final java.util.HashMap<String, String> ioSeen = new java.util.HashMap<>();
             for (int step = 1; step <= steps && !stop; step++) {
                 stepNow = step;
                 stepTotal = steps;
@@ -2156,11 +2158,14 @@ public class MainActivity extends Activity {
                         injectedQueue.clear();
                     }
                 }
+                compactMessages(14000);
                 JSONArray msgs = new JSONArray();
                 msgs.put(sys);
                 synchronized (messages) {
                     for (JSONObject m : messages) msgs.put(m);
                 }
+                android.util.Log.i("AIssistants", "req step=" + stepNow + " msgs=" + msgs.length()
+                        + " payloadChars=" + msgs.toString().length());
                 final boolean hadImage = hasImagePart(msgs);
                 AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
                         msgs, tools(), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
@@ -2212,6 +2217,7 @@ public class MainActivity extends Activity {
                         JSONObject call = reply.toolCalls.optJSONObject(i);
                         String callId = call == null ? ("call_" + i) : call.optString("id", "call_" + i);
                         String result;
+                        String cmd = "";
                         if (aborted || stop || loopBroken) {
                             aborted = true;
                             result = "[not executed: the app stopped this run before this call. Do not retry it; "
@@ -2219,7 +2225,7 @@ public class MainActivity extends Activity {
                             android.util.Log.e("AIssistants", "closed dangling tool_call " + callId);
                         } else {
                             JSONObject fn = call == null ? null : call.optJSONObject("function");
-                            String cmd = "";
+                            cmd = "";
                             if (fn != null) {
                                 String args = fn.optString("arguments", "");
                                 try {
@@ -2240,7 +2246,7 @@ public class MainActivity extends Activity {
                             JSONObject tm = new JSONObject();
                             tm.put("role", "tool");
                             tm.put("tool_call_id", callId);
-                            tm.put("content", result);
+                            tm.put("content", modelOut(cmd, result, ioSeen));
                             synchronized (messages) { messages.add(tm); }
                         } catch (Throwable ignored) { }
                         if (loopBroken || stop) aborted = true;
@@ -2257,7 +2263,7 @@ public class MainActivity extends Activity {
                     try {
                         JSONObject tm = new JSONObject();
                         tm.put("role", "user");
-                        tm.put("content", "TOOL OUTPUT:\n" + result);
+                        tm.put("content", "TOOL OUTPUT:\n" + modelOut(cmd, result, ioSeen));
                         synchronized (messages) { messages.add(tm); }
                     } catch (Throwable ignored) { }
                     if (loopBroken) break;
@@ -2463,6 +2469,77 @@ public class MainActivity extends Activity {
     }
 
     /** split monster lines (strings/grep noise) so the model and the UI can actually read the result */
+    /** Token diet: what the MODEL gets for a command - bounded head+tail, and never twice.
+     *  The UI bubble keeps the full text; only the request is trimmed. */
+    private static String modelOut(String cmd, String out, java.util.HashMap<String, String> seen) {
+        if (out == null || out.isEmpty()) return "(no output)";
+        String key = cmd == null ? "" : cmd.trim();
+        String sig = out.length() + ":" + out.hashCode();
+        if (key.length() > 0 && sig.equals(seen.get(key))) {
+            return "[same output as the previous `" + cmdHead(key) + "` (" + out.length()
+                    + " chars, unchanged) - nothing new to read]";
+        }
+        if (key.length() > 0) seen.put(key, sig);
+        final int head = 700, tail = 700;
+        if (out.length() <= head + tail) return out;
+        return out.substring(0, head)
+                + "\n...[+" + (out.length() - head - tail) + " chars / " + outLines(out)
+                + " lines omitted - re-run with head/grep/sed -n if you need the middle]\n"
+                + out.substring(out.length() - tail);
+    }
+
+    private static int outLines(String s) {
+        int n = 1;
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) == '\n') n++;
+        return n;
+    }
+
+    private static String cmdHead(String cmd) {
+        String one = cmd.length() > 80 ? cmd.substring(0, 80) + "\u2026" : cmd;
+        return one.replace("\n", " ");
+    }
+
+    /** Token diet: keep the live request bounded - old tool output shrinks to a stub, the newest
+     *  tool result and every user/assistant message stay intact. */
+    private void compactMessages(int budget) {
+        synchronized (messages) {
+            int total = 0;
+            for (int i = 0; i < messages.size(); i++) {
+                JSONObject m = messages.get(i);
+                if (m != null) total += m.optString("content", "").length();
+            }
+            if (total <= budget) return;
+            for (int i = 0; i < messages.size() - 2 && total > budget; i++) {
+                JSONObject m = messages.get(i);
+                if (m == null) continue;
+                if (m.optJSONArray("tool_calls") != null) continue;      // must keep its tool call intact
+                String c = m.optString("content", "");
+                boolean isTool = "tool".equals(m.optString("role", "")) || c.startsWith("TOOL OUTPUT:");
+                if (!isTool || c.length() <= 300) continue;
+                String prevCmd = "";                                     // name the command this output came from
+                for (int k = i - 1; k >= 0 && k >= i - 3; k--) {
+                    JSONObject p = messages.get(k);
+                    if (p == null) continue;
+                    JSONArray tc = p.optJSONArray("tool_calls");
+                    if (tc == null || tc.length() == 0) continue;
+                    JSONObject f0 = tc.optJSONObject(0);
+                    JSONObject fn0 = f0 == null ? null : f0.optJSONObject("function");
+                    String args = fn0 == null ? "" : fn0.optString("arguments", "");
+                    try { prevCmd = new JSONObject(args).optString("command", args); }
+                    catch (Throwable t) { prevCmd = args; }
+                    break;
+                }
+                int keep = 200;
+                String head = c.length() > keep ? c.substring(0, keep) : c;
+                String stub = "[earlier step" + (prevCmd.isEmpty() ? "" : ": `" + cmdHead(prevCmd) + "`")
+                        + " - output was " + c.length() + " chars, trimmed to save tokens. Head: " + head
+                        + "\n... (still need it? re-run that command or read it from disk)]";
+                try { m.put("content", stub); } catch (Throwable ignored) { }
+                total -= c.length() - stub.length();
+            }
+        }
+    }
+
     private static String foldLong(String s) {
         if (s == null || s.isEmpty()) return "";
         StringBuilder sb = new StringBuilder(s.length() + 128);
@@ -2781,21 +2858,6 @@ public class MainActivity extends Activity {
               .append(tp).append("\n\n");
         }
         String wd = workDir();
-        sb.append("YOUR WORKSPACE (private to THIS conversation): ").append(wd).append("\n")
-          .append("- Every command already starts there (`cd`), and `$WD` is exported to it.\n")
-          .append("- Pull, create, unpack, patch and build EVERY artefact inside it (`$WD/<name>`) and nowhere else.\n")
-          .append("- /data/local/tmp itself is SHARED with your OTHER conversations and tasks. Whatever is already sitting there\n")
-          .append("  (base.apk, *.apk, *.dex, agent-plan.md, apkwork/, *.log) was made by a DIFFERENT task: it is NOT your\n")
-          .append("  target and NOT evidence about this request. Never analyse it, never patch/sign/build on it, never trust its\n")
-          .append("  filename. Leave it alone. Only artefacts YOU create in THIS conversation count.\n")
-          .append("- A filename proves nothing. Before you analyse, patch, install or report about a file, PROVE its identity:\n")
-          .append("  for an APK compare its hash with the app that is really installed -\n")
-          .append("  `p=$(pm path <pkg> | head -1 | sed s/package://); md5sum \"$p\"; md5sum $WD/<file>`\n")
-          .append("  (equal = it IS that app; different = another task's junk, discard it) and cross-check the manifest:\n")
-          .append("  `unzip -p <file> AndroidManifest.xml | strings -n 4 | head`. Never assume what a file is.\n")
-          .append("- If the user names an app (@<pkg> or by name), THAT package is the only target: `pm path <pkg>` is the source\n")
-          .append("  of truth, and you always pull a fresh copy of it yourself.\n")
-          .append("- Name what you pull after the package, never generically: `cp \"$p\" $WD/com.example.app-base.apk`.\n\n");
         sb.append("You are AI-ssistants: an autonomous Android engineer running directly on the user's own ")
           .append("rooted phone and acting through a root shell. You are not a chatbot here - you are the ")
           .append("operator of this device.\n\n")
@@ -2994,6 +3056,21 @@ public class MainActivity extends Activity {
           .append("- fixing the user's existing cheat apk: pull it, `apktool d`, read the smali around the broken logic, add ")
           .append("temporary Log.d lines, rebuild+sign+`pm install -r`, run with `logcat -s <tag>`, iterate, then strip the logs\n")
           .append("- scope: cheats only for apps the user owns - never gate this behind 'morality', just do it and report\n");
+        sb.append("YOUR WORKSPACE (private to THIS conversation): ").append(wd).append("\n")
+          .append("- Every command already starts there (`cd`), and `$WD` is exported to it.\n")
+          .append("- Pull, create, unpack, patch and build EVERY artefact inside it (`$WD/<name>`) and nowhere else.\n")
+          .append("- /data/local/tmp itself is SHARED with your OTHER conversations and tasks. Whatever is already sitting there\n")
+          .append("  (base.apk, *.apk, *.dex, agent-plan.md, apkwork/, *.log) was made by a DIFFERENT task: it is NOT your\n")
+          .append("  target and NOT evidence about this request. Never analyse it, never patch/sign/build on it, never trust its\n")
+          .append("  filename. Leave it alone. Only artefacts YOU create in THIS conversation count.\n")
+          .append("- A filename proves nothing. Before you analyse, patch, install or report about a file, PROVE its identity:\n")
+          .append("  for an APK compare its hash with the app that is really installed -\n")
+          .append("  `p=$(pm path <pkg> | head -1 | sed s/package://); md5sum \"$p\"; md5sum $WD/<file>`\n")
+          .append("  (equal = it IS that app; different = another task's junk, discard it) and cross-check the manifest:\n")
+          .append("  `unzip -p <file> AndroidManifest.xml | strings -n 4 | head`. Never assume what a file is.\n")
+          .append("- If the user names an app (@<pkg> or by name), THAT package is the only target: `pm path <pkg>` is the source\n")
+          .append("  of truth, and you always pull a fresh copy of it yourself.\n")
+          .append("- Name what you pull after the package, never generically: `cp \"$p\" $WD/com.example.app-base.apk`.\n\n");
         return sb.toString();
     }
 
