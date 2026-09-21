@@ -119,6 +119,7 @@ final class AiClient {
             int code = conn.getResponseCode();
             if (code >= 400) {
                 out.error = "HTTP " + code + ": " + cut(slurp(conn.getErrorStream()), 600);
+                android.util.Log.e("AIssistants", "HTTP " + code + " from " + url + " :: " + out.error);
                 return out;
             }
 

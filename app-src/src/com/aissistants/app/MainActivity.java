@@ -14,11 +14,17 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.text.SpannableString;
+import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.BackgroundColorSpan;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
+import android.text.style.TypefaceSpan;
 import android.view.Gravity;
 import android.view.WindowInsets;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
 import android.view.View;
@@ -126,7 +132,7 @@ public class MainActivity extends Activity {
                     "(install|add)"),
             safeRe("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0)",
                     "rm\\s+-[a-zA-Z]*[rf]"),
-            safeRe("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|>\\s*\\S*/data/adb/|(cp|mv|rm|ln|chmod|chown)\\s+[^;|]*/data/adb/|sed\\s+-i[^;|]*/data/adb/|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\(|curl[^|;]*(-o|--output)[^|;]*/data/local/tmp|wget[^|;]*/data/local/tmp",
+            safeRe("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|>\\s*\\S*/data/adb/|(cp|mv|rm|ln|chmod|chown)\\s+[^;|]*/data/adb/|sed\\s+-i[^;|]*/data/adb/|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\(|curl[^|;]*(-o|--output)[^|;]*/data/local/tmp|wget[^|;]*/data/local/tmp|\\breboot\\b|\\bctl\\.(restart|start|stop)\\b|\\bsvc\\s+power\\s+(reboot|shutdown)\\b|\\bkill(all)?\\s+(-[0-9]+\\s+)?(zygote|system_server|init)\\b|\\bsetprop\\s+(sys\\.(powerctl|boot)|init\\.[a-z_.]*)\\b|(^|[;&|]\\s*)(stop|start)\\s*($|[;&|])",
                     "mount\\s+[^|;]*(remount|,rw)|setenforce\\s+0|settings\\s+put|\\|\\s*(sh|bash)\\b"),
             safeRe("(curl[^|;]*(--data|-d\\s|-F\\s|-T\\s|--upload-file|-X\\s*(POST|PUT|PATCH))|wget[^|;]*--post-data|\\bscp\\b|\\brsync\\b|\\bnc\\s+-)",
                     "curl[^|;]*(--data|-d\\s|-F\\s)|\\bscp\\b|\\brsync\\b"),
@@ -174,7 +180,14 @@ public class MainActivity extends Activity {
     private static final int REQ_ATTACH = 7;
 
     private JSONArray sessions = new JSONArray();
+    /** durable per-session log: bubbles land on disk the moment they exist, so a kill/restart
+     *  (HyperOS memory kill, crash, or a full zygote/system_server restart) cannot swallow a run */
+    private SessionLog jrnl;
+    private int bubbleTick = 0;
+    private long lastBak = 0L;
     private JSONObject cur;
+    /** once the shared-dir warning was shown for this run */
+    private boolean foreignTmpWarned;
     private final List<JSONObject> messages = new ArrayList<>();
     private final List<String> pending = new ArrayList<>();
 
@@ -196,6 +209,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         store = new Store(this);
+        jrnl = new SessionLog(getFilesDir());
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -225,14 +239,6 @@ public class MainActivity extends Activity {
                 return wi;
             }
         });
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            try {
-                if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
-                }
-            } catch (Throwable ignored) { }
-        }
         buildChatScreen();
         migrateEndpoints();
         loadSessions();
@@ -252,34 +258,86 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        persist();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        persist();
+    }
+
+    @Override
     public void onBackPressed() {
         if (screen == 3) { showSettings(); return; }
         if (screen != 0) { showChat(); return; }
         super.onBackPressed();
     }
 
-    /** automation hooks: `--es run "<script>"` executes as root, `--es prompt "<text>"` chats */
+    /** automation hooks: `--es run "<script>"` asks for in-app approval before executing as root. */
     private void handleIntent(Intent intent) {
         if (intent == null) return;
         String run = intent.getStringExtra("run");
         if (run != null && !run.trim().isEmpty()) {
             showChat();
-            final String cmd = run;
-            addBubble("user", "$ " + cmd);
-            startAgentService();
-            new Thread(new Runnable() { @Override public void run() {
-                addBubble("tool", RootShell.run(cmd, store.timeoutSec()));
-                persist();
-                stopAgentService();
-            } }).start();
+            confirmAutomationRun(run.trim());
             return;
         }
         String prompt = intent.getStringExtra("prompt");
         if (prompt != null && !prompt.trim().isEmpty()) {
             showChat();
-            input.setText(prompt);
-            onSend();
+            confirmAutomationPrompt(prompt.trim());
         }
+    }
+
+    /** Launcher activity is exported, so external automation never gets root execution without a tap. */
+    private void confirmAutomationRun(final String cmd) {
+        if (cmd.length() > 2000) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Command needs review")
+                    .setMessage("External automation supplied a command longer than 2,000 characters. It will not run until you review it in the chat input.")
+                    .setPositiveButton("Open in input", new DialogInterface.OnClickListener() {
+                        @Override public void onClick(DialogInterface d, int w) {
+                            input.requestFocus();
+                            input.setText("$ " + cmd);
+                            input.setSelection(input.getText().length());
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Run root command?")
+                .setMessage("External automation requested this command. Review it before it runs with full device access. Risky actions may need one more approval.\n\n$ " + cmd)
+                .setPositiveButton("Review & run", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        if (busy) { toast("Still working — stop it first"); return; }
+                        addBubble("user", "$ " + cmd);
+                        beginReviewedRun(java.util.Collections.singletonList(cmd), false);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** An exported launcher must never silently turn another app's text into a privileged run. */
+    private void confirmAutomationPrompt(final String prompt) {
+        final String shown = prompt.length() > 2000 ? prompt.substring(0, 2000) + "\n\u2026 (truncated)" : prompt;
+        new AlertDialog.Builder(this)
+                .setTitle("Use external prompt?")
+                .setMessage("Another app supplied this text. Review it before sending it to your selected provider.\n\n" + shown)
+                .setPositiveButton("Open in input", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        input.requestFocus();
+                        input.setText(prompt);
+                        input.setSelection(input.getText().length());
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     // ==================== screens ====================
@@ -392,15 +450,20 @@ public class MainActivity extends Activity {
         info.addView(meta, mlp);
         card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
 
-        card.addView(iconBtn("\u2715", new View.OnClickListener() {
+        TextView edit = iconBtn("\u270E", new View.OnClickListener() {
+            @Override public void onClick(View x) { renameDialog(s); }
+        });
+        setButtonA11y(edit, "Rename chat " + titleOf(s));
+        card.addView(edit);
+        TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDelete(s); }
-        }));
+        });
+        setButtonA11y(remove, "Delete chat " + titleOf(s));
+        card.addView(remove);
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { openSession(s.optString("id", "")); }
         });
-        card.setOnLongClickListener(new View.OnLongClickListener() {
-            @Override public boolean onLongClick(View x) { renameDialog(s); return true; }
-        });
+        setButtonA11y(card, "Open chat " + titleOf(s));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(10));
         card.setLayoutParams(lp);
@@ -460,6 +523,7 @@ public class MainActivity extends Activity {
         mcard.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { showModels(); }
         });
+        setButtonA11y(mcard, "Manage models and providers. Active: " + activeLabel());
         LinearLayout.LayoutParams mclp = new LinearLayout.LayoutParams(-1, -2);
         mclp.setMargins(0, dp(6), 0, 0);
         panel.addView(mcard, mclp);
@@ -482,13 +546,21 @@ public class MainActivity extends Activity {
         hlp.setMargins(0, dp(22), 0, 0);
         panel.addView(sectionLabel("AGENT"), hlp);
 
-        LinearLayout row3 = new LinearLayout(this);
-        row3.setOrientation(LinearLayout.HORIZONTAL);
-        final EditText steps = compactField(row3, "Max steps", String.valueOf(store.maxSteps()), true);
-        final EditText timeout = compactField(row3, "Timeout (s)", String.valueOf(store.timeoutSec()), true);
-        final EditText temp = compactField(row3, "Temp 0-100", String.valueOf(store.temperature()), true);
-        row3.setPadding(0, dp(10), 0, dp(4));
-        panel.addView(row3);
+        LinearLayout agentFields = new LinearLayout(this);
+        agentFields.setOrientation(LinearLayout.VERTICAL);
+        agentFields.setPadding(0, dp(2), 0, dp(4));
+        final EditText steps = field(agentFields, "Max steps (1-5000)", String.valueOf(store.maxSteps()), "12", false);
+        steps.setInputType(InputType.TYPE_CLASS_NUMBER);
+        final EditText timeout = field(agentFields, "Timeout seconds (20-1800)", String.valueOf(store.timeoutSec()), "180", false);
+        timeout.setInputType(InputType.TYPE_CLASS_NUMBER);
+        final EditText temp = field(agentFields, "Temperature (0-100)", String.valueOf(store.temperature()), "30", false);
+        temp.setInputType(InputType.TYPE_CLASS_NUMBER);
+        panel.addView(agentFields);
+        TextView agentHelp = tv(12, MUTED, Typeface.NORMAL);
+        agentHelp.setText("Lower temperature is more predictable. Settings are validated before saving.");
+        LinearLayout.LayoutParams helpLp = new LinearLayout.LayoutParams(-1, -2);
+        helpLp.setMargins(0, dp(8), 0, 0);
+        panel.addView(agentHelp, helpLp);
 
         LinearLayout.LayoutParams thlp = new LinearLayout.LayoutParams(-1, -2);
         thlp.setMargins(0, dp(16), 0, dp(6));
@@ -513,14 +585,14 @@ public class MainActivity extends Activity {
             });
             tbtns[i] = tb;
             styleThinking(tb, i == thinking[0]);
-            LinearLayout.LayoutParams tlp2 = new LinearLayout.LayoutParams(0, dp(44), 1);
+            LinearLayout.LayoutParams tlp2 = new LinearLayout.LayoutParams(0, dp(48), 1);
             tlp2.setMargins(0, 0, i < 3 ? dp(8) : 0, 0);
             trow.addView(tb, tlp2);
         }
         panel.addView(trow);
 
         final Switch auto = new Switch(this);
-        auto.setText("Run commands automatically");
+        auto.setText("Run safe commands automatically");
         auto.setTextColor(FG);
         auto.setTextSize(14);
         auto.setChecked(store.autoRun());
@@ -528,6 +600,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(-1, -2);
         alp.setMargins(0, dp(12), 0, 0);
         panel.addView(auto, alp);
+        TextView autoHelp = tv(12, MUTED, Typeface.NORMAL);
+        autoHelp.setText("Off by default. Risky actions still need review unless you enable AUTO for this chat.");
+        LinearLayout.LayoutParams autoHelpLp = new LinearLayout.LayoutParams(-1, -2);
+        autoHelpLp.setMargins(0, dp(2), 0, 0);
+        panel.addView(autoHelp, autoHelpLp);
 
         Button save = new Button(this);
         save.setText("Save");
@@ -538,8 +615,11 @@ public class MainActivity extends Activity {
         save.setBackground(ripple(ACCENT, ACCENT, 14));
         save.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                store.save(num(steps.getText().toString(), 12),
-                        num(temp.getText().toString(), 30), num(timeout.getText().toString(), 180),
+                Integer stepValue = wholeNumber(steps, 1, 5000, "Max steps");
+                Integer tempValue = wholeNumber(temp, 0, 100, "Temperature");
+                Integer timeoutValue = wholeNumber(timeout, 20, 1800, "Timeout");
+                if (stepValue == null || tempValue == null || timeoutValue == null) return;
+                store.save(stepValue, tempValue, timeoutValue,
                         auto.isChecked(), thinking[0]);
                 refreshStatus();
                 toast("Saved \u00b7 " + activeLabel());
@@ -597,6 +677,8 @@ public class MainActivity extends Activity {
         pill.setGravity(Gravity.CENTER);
         pill.setPadding(dp(12), dp(6), dp(12), dp(6));
         pill.setMinHeight(dp(48));
+        pill.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        setButtonA11y(pill, "Root access status. Tap to request or retry root access.");
         pill.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { requestRoot(); }
         });
@@ -648,7 +730,7 @@ public class MainActivity extends Activity {
         attach.setIncludeFontPadding(false);
         attach.setPadding(0, 0, 0, 0);
         attach.setBackground(ripple(Color.TRANSPARENT, 0, 24));
-        attach.setContentDescription("Add attachment");
+        setButtonA11y(attach, "Add attachment");
         attach.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { openAttachPicker(); }
         });
@@ -664,6 +746,7 @@ public class MainActivity extends Activity {
         input.setGravity(Gravity.TOP | Gravity.START);
         input.setMinLines(1);
         input.setMaxLines(4);
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
         input.setMinHeight(dp(48));
         input.setPadding(dp(6), dp(12), dp(16), dp(12));
         input.setBackground(null);
@@ -678,25 +761,40 @@ public class MainActivity extends Activity {
             }
             @Override public void afterTextChanged(android.text.Editable e) { refreshSendBtn(); }
         });
+        input.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent event) {
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                    if (busy && input.getText().toString().trim().length() > 0) midRunSend();
+                    else if (!busy) onSend();
+                    return true;
+                }
+                return false;
+            }
+        });
         field.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
         row.addView(field, new LinearLayout.LayoutParams(0, -2, 1));
 
         autoBtn = new TextView(this);
-        autoBtn.setText("AUTO");
+        autoBtn.setText("REVIEW");
         autoBtn.setTextSize(12);
         autoBtn.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         autoBtn.setLetterSpacing(0.06f);
         autoBtn.setGravity(Gravity.CENTER);
+        setButtonA11y(autoBtn, "Review risky actions is on");
         autoBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                autoApprove = !autoApprove;
-                styleAutoBtn();
-                toast(autoApprove
-                        ? "Auto izin ON \u00b7 semua gate izin dilewati"
-                        : "Auto izin OFF \u00b7 gate izin aktif lagi");
+                if (!store.autoRun()) {
+                    toast("Automatic commands are off. Enable them in Settings first.");
+                } else if (autoApprove) {
+                    autoApprove = false;
+                    styleAutoBtn();
+                    toast("Risky actions need review again");
+                } else {
+                    confirmAutoApproval();
+                }
             }
         });
-        LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(58), dp(48));
+        LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(70), dp(48));
         autoLp.gravity = Gravity.BOTTOM;
         autoLp.setMargins(dp(8), 0, 0, 0);
         row.addView(autoBtn, autoLp);
@@ -711,6 +809,7 @@ public class MainActivity extends Activity {
         sendBtn.setIncludeFontPadding(false);
         sendBtn.setPadding(0, 0, 0, 0);
         sendBtn.setBackground(circle(ACCENT));
+        setButtonA11y(sendBtn, "Send message");
         sendBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (busy) {
@@ -863,7 +962,8 @@ public class MainActivity extends Activity {
             row.addView(card, new LinearLayout.LayoutParams(-2, -2));
         } else {
             TextView b = tv(14, user ? ON_ACCENT : FG, Typeface.NORMAL);
-            b.setText(text.length() > 6000 ? text.substring(0, 6000) + "\n\u2026 (truncated)" : text);
+            String shown = text.length() > 6000 ? text.substring(0, 6000) + "\n\u2026 (truncated)" : text;
+            b.setText(user ? shown : markdownText(shown));
             b.setTextIsSelectable(true);
             b.setLineSpacing(dp(2), 1f);
             b.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 18));
@@ -874,9 +974,8 @@ public class MainActivity extends Activity {
 
         String stamp = fmtStamp(t);
         if (!stamp.isEmpty() && !note) {
-            TextView s = tv(10, MUTED, Typeface.NORMAL);
+            TextView s = tv(11, MUTED, Typeface.NORMAL);
             s.setText(stamp);
-            s.setAlpha(0.7f);
             LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
             slp.setMargins(note ? 0 : dp(6), dp(3), dp(6), 0);
             if (!note && user) slp.gravity = Gravity.END;
@@ -885,12 +984,93 @@ public class MainActivity extends Activity {
         chatLog.addView(row);
     }
 
+    /** Small safe Markdown subset for model replies. User and shell text remain literal. */
+    private CharSequence markdownText(String raw) {
+        if (raw == null || raw.isEmpty()) return "";
+        SpannableStringBuilder out = new SpannableStringBuilder();
+        String[] lines = raw.split("\\n", -1);
+        boolean fenced = false;
+        int codeStart = -1;
+        for (int n = 0; n < lines.length; n++) {
+            String line = lines[n];
+            String trim = line.trim();
+            if (trim.startsWith("```")) {
+                if (fenced) {
+                    styleCode(out, codeStart, out.length());
+                    fenced = false;
+                    codeStart = -1;
+                } else {
+                    fenced = true;
+                    codeStart = out.length();
+                }
+                continue;
+            }
+            if (fenced) {
+                out.append(line);
+            } else {
+                int start = out.length();
+                int heading = 0;
+                while (heading < line.length() && line.charAt(heading) == '#') heading++;
+                if (heading > 0 && heading < line.length() && line.charAt(heading) == ' ') {
+                    appendInlineMarkdown(out, line.substring(heading + 1));
+                    if (out.length() > start) {
+                        out.setSpan(new StyleSpan(Typeface.BOLD), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                        out.setSpan(new RelativeSizeSpan(1.16f), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    }
+                } else if (line.startsWith("- ") || line.startsWith("* ")) {
+                    out.append("\u2022 ");
+                    appendInlineMarkdown(out, line.substring(2));
+                } else {
+                    appendInlineMarkdown(out, line);
+                }
+            }
+            if (n < lines.length - 1) out.append('\n');
+        }
+        if (fenced) styleCode(out, codeStart, out.length());
+        return out;
+    }
+
+    private void appendInlineMarkdown(SpannableStringBuilder out, String line) {
+        int i = 0;
+        while (i < line.length()) {
+            if (line.startsWith("**", i)) {
+                int end = line.indexOf("**", i + 2);
+                if (end > i + 2) {
+                    int start = out.length();
+                    appendInlineMarkdown(out, line.substring(i + 2, end));
+                    out.setSpan(new StyleSpan(Typeface.BOLD), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 2;
+                    continue;
+                }
+            }
+            if (line.charAt(i) == '`') {
+                int end = line.indexOf('`', i + 1);
+                if (end > i + 1) {
+                    int start = out.length();
+                    out.append(line, i + 1, end);
+                    styleCode(out, start, out.length());
+                    i = end + 1;
+                    continue;
+                }
+            }
+            out.append(line.charAt(i));
+            i++;
+        }
+    }
+
+    private void styleCode(SpannableStringBuilder out, int start, int end) {
+        if (start < 0 || end <= start) return;
+        out.setSpan(new TypefaceSpan("monospace"), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        out.setSpan(new BackgroundColorSpan(TOOL_BG), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+
     /** the step-limit note becomes a button: tap = send "continue" */
     private void addContinueCard() {
         TextView c = tv(13, ON_ACCENT, Typeface.BOLD);
         c.setText("\u25B6 Lanjutkan (step limit) \u00b7 tap");
         c.setGravity(Gravity.CENTER);
         c.setBackground(ripple(ACCENT, ACCENT, 14));
+        setButtonA11y(c, "Continue this task after the step limit");
         c.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (busy) { toast("Masih jalan \u00b7 stop dulu"); return; }
@@ -941,6 +1121,8 @@ public class MainActivity extends Activity {
                 renderTranscript();
             }
         });
+        setButtonA11y(card, (open ? "Hide " : "Show ") + cmds
+                + (cmds == 1 ? " command" : " commands"));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, dp(12), 0, 0);
         card.setLayoutParams(lp);
@@ -955,6 +1137,7 @@ public class MainActivity extends Activity {
         f.setGravity(Gravity.CENTER);
         f.setBackground(ripple(TOOL_BG, LINE, 12));
         f.setPadding(dp(12), dp(10), dp(12), dp(10));
+        setButtonA11y(f, "Hide " + count + (count == 1 ? " command" : " commands"));
         f.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 expandedGroups.remove(key);
@@ -973,6 +1156,7 @@ public class MainActivity extends Activity {
         groupChip = tv(12, ON_ACCENT, Typeface.BOLD);
         groupChip.setBackground(ripple(ACCENT, ACCENT, 20));
         groupChip.setPadding(dp(16), dp(12), dp(16), dp(12));
+        setButtonA11y(groupChip, "Hide expanded commands");
         groupChip.setVisibility(View.GONE);
         FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
         flp.setMargins(0, 0, dp(16), dp(150));
@@ -1021,6 +1205,7 @@ public class MainActivity extends Activity {
         // collapse-only chip: it appears while an expanded group sits under the viewport
         if (!expandedGroups.contains(hit)) { groupChip.setVisibility(View.GONE); return; }
         groupChip.setText("\u25B4 Tutup \u00b7 " + hitCount + " cmd");
+        setButtonA11y(groupChip, "Hide " + hitCount + (hitCount == 1 ? " command" : " commands"));
         groupChip.setTag(hit);
         groupChip.setVisibility(View.VISIBLE);
     }
@@ -1038,6 +1223,7 @@ public class MainActivity extends Activity {
         else if (stepNow > 0 && stepTotal > 0) txt = "Working\u2026  step " + stepNow + "/" + stepTotal;
         else txt = "Working\u2026";
         b.setText(txt);
+        b.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         b.setBackground(round(SURFACE, LINE, 18));
         b.setPadding(dp(14), dp(10), dp(14), dp(10));
         Animation pulse = new AlphaAnimation(0.5f, 1f);
@@ -1055,16 +1241,18 @@ public class MainActivity extends Activity {
         v.setPadding(0, dp(18), 0, dp(8));
 
         TextView t = tv(21, FG, Typeface.BOLD);
-        t.setText("What should we do?");
+        t.setText(hasActiveModel() ? "What would you like to check?" : "Set up AI-ssistants");
         TextView s = tv(13, MUTED, Typeface.NORMAL);
-        s.setText("I run everything myself through a root shell on this device \u2014 inspecting, patching, verifying.");
+        s.setText(hasActiveModel()
+                ? "Describe a goal. Risky root actions are reviewed by default."
+                : "Add a provider and model before chatting. API keys and image attachments are sent only to the provider you select.");
         s.setLineSpacing(dp(2), 1f);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
         slp.setMargins(0, dp(6), 0, dp(18));
         v.addView(t);
         v.addView(s, slp);
 
-        String[][] tips = {
+        String[][] tips = hasActiveModel() ? new String[][] {
                 {"System check", "build, kernel, SELinux, mounts, root manager",
                         "full system + kernel inventory: build, SELinux, kernel version, mounts, loaded modules, root manager"},
                 {"Installed apps", "every package with uid + data size, root tools flagged",
@@ -1074,20 +1262,11 @@ public class MainActivity extends Activity {
                 {"Logcat triage", "last 200 lines, crashes explained",
                         "tail the last 200 logcat lines and explain anything that looks like a crash"},
                 {"Storage", "per-partition usage, where space went",
-                        "show disk usage per partition in human units and where the space went"},
-                {"Network", "listening sockets, connections, wifi/ip",
-                        "list listening sockets, current connections and the wifi/ip configuration"},
-                {"Pull an APK", "copy it out + summary: activities, perms, libs, protection",
-                        "tarik APK <paket> ke /data/local/tmp dan ringkas isinya: aktivitas utama, izin, native libs, dan tanda proteksi"},
-                {"Reverse an app", "decompile dex + resources, explain the internals",
-                        "decompile APK <paket> lalu jelaskan internalnya: entry point, endpoint network, dan bagian yang menarik"},
-                {"Mod an APK", "patch, rebuild, sign, install -r",
-                        "mod APK <paket>: <perubahan yang diinginkan>, build ulang, sign, install -r, lalu verifikasi hasilnya"},
-                {"Buat cheat game", "cek engine, cari nilai/fungsi, hook Frida atau patch memori",
-                        "buat cheat buat game <paket>: cek engine-nya, temukan nilai atau fungsi target, hook atau patch, lalu verifikasi di layar dan logcat"},
-                {"Fix cheat APK", "decompile, benerin, rebuild, sign, tes pakai logcat",
-                        "fix cheat APK <paket cheat> buat game <paket game>: decompile, cari bug-nya, benerin, build ulang, sign, install, tes lewat logcat"},
-                {"$ root command", "run it yourself as uid 0, no model involved", "$ "},
+                        "show disk usage per partition in human units and where the space went"}
+        } : new String[][] {
+                {"Add provider", "choose where model requests and API keys are sent", "__MODELS__"},
+                {"Add model", "select a model under that provider", "__MODELS__"},
+                {"Test root access", "confirm KernelSU or Magisk access before a task", "__ROOT__"}
         };
         for (String[] tip : tips) v.addView(suggestion(tip[0], tip[1], tip[2]));
 
@@ -1113,7 +1292,11 @@ public class MainActivity extends Activity {
         card.addView(d, dlp);
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                if ("$ ".equals(prompt)) {
+                if ("__MODELS__".equals(prompt)) {
+                    showModels();
+                } else if ("__ROOT__".equals(prompt)) {
+                    requestRoot();
+                } else if ("$ ".equals(prompt)) {
                     input.requestFocus();
                     input.setText("$ ");
                     input.setSelection(input.getText().length());
@@ -1122,6 +1305,7 @@ public class MainActivity extends Activity {
                 }
             }
         });
+        setButtonA11y(card, title + ". " + desc);
         return card;
     }
 
@@ -1316,13 +1500,19 @@ public class MainActivity extends Activity {
         pill.setText(text);
         pill.setTextColor(color);
         pill.setBackground(round(Color.TRANSPARENT, color, 14));
+        String label;
+        if ("ROOT \u2713".equals(text)) label = "Root access is enabled. Tap to test again.";
+        else if (text.startsWith("CHECKING")) label = "Checking root access.";
+        else label = "Root access is unavailable. Tap to request root access.";
+        setButtonA11y(pill, label);
     }
 
     private void requestRoot() {
+        if (busy) { toast("Stop the current task before testing root"); return; }
         addBubble("note", "requesting root\u2026 approve the KernelSU/Magisk prompt if it appears");
         new Thread(new Runnable() {
             @Override public void run() {
-                final String out = RootShell.run("id", 60);
+                final String out = RootShell.requestRoot(60);
                 addBubble("tool", out);
                 final boolean ok = out.contains("uid=0");
                 ui.post(new Runnable() {
@@ -1338,7 +1528,12 @@ public class MainActivity extends Activity {
         try {
             String raw = store.sessionsJson();
             if (raw != null && !raw.isEmpty()) sessions = new JSONArray(raw);
-        } catch (Throwable ignored) { }
+        } catch (Throwable ignored) {
+            try {   // saved blob unreadable: restore the rolling backup instead of starting empty
+                String b = jrnl == null ? "" : jrnl.readBackup();
+                if (b != null && !b.isEmpty()) sessions = new JSONArray(b);
+            } catch (Throwable ignored2) { }
+        }
 
         if (sessions.length() == 0) {
             String legacy = store.legacyHistory();
@@ -1376,8 +1571,64 @@ public class MainActivity extends Activity {
             else { cur = newSessionObj(); sessions.put(cur); }
             store.setActiveId(cur.optString("id"));
         }
+        recoverSessions();
         synchronized (lock) { store.saveSessions(sessions.toString()); }
+        if (jrnl != null) jrnl.backup(sessions.toString());
         rebuildModelMessages();
+    }
+
+    /**
+     * Merge the durable per-session logs back into the session list. Work a run produced before the
+     * process was killed is replayed here, and a session that vanished from the saved list is
+     * rebuilt from its own log.
+     */
+    private void recoverSessions() {
+        if (jrnl == null) return;
+        try {
+            java.util.List<String> ids = jrnl.ids();
+            for (int i = 0; i < ids.size(); i++) {
+                String sid = ids.get(i);
+                JSONArray log = jrnl.read(sid);
+                if (log.length() == 0) continue;
+                JSONObject s = null;
+                for (int k = 0; k < sessions.length(); k++) {
+                    JSONObject o = sessions.optJSONObject(k);
+                    if (o != null && sid.equals(o.optString("id", ""))) { s = o; break; }
+                }
+                JSONArray bb;
+                if (s == null) {
+                    s = new JSONObject();
+                    s.put("id", sid);
+                    s.put("title", logTitle(log));
+                    s.put("updated", System.currentTimeMillis());
+                    bb = new JSONArray();
+                    s.put("bubbles", bb);
+                    sessions.put(s);
+                } else {
+                    bb = bubblesOf(s);
+                }
+                int have = bb.length();
+                if (log.length() > have) {
+                    for (int k = have; k < log.length(); k++) {
+                        JSONObject o = log.optJSONObject(k);
+                        if (o != null) bb.put(o);
+                    }
+                    if ("New chat".equals(titleOf(s))) s.put("title", autoTitle(s));
+                    s.put("updated", System.currentTimeMillis());
+                }
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private String logTitle(JSONArray log) {
+        for (int i = 0; i < log.length(); i++) {
+            JSONObject o = log.optJSONObject(i);
+            if (o == null || !"user".equals(o.optString("role", ""))) continue;
+            String t = o.optString("text", "").replace("\n", " ").trim();
+            if (t.isEmpty()) continue;
+            return t.length() > 40 ? t.substring(0, 40) + "\u2026" : t;
+        }
+        return "Recovered chat";
     }
 
     private JSONObject newSessionObj() {
@@ -1477,6 +1728,7 @@ public class MainActivity extends Activity {
             if (o == null || id.equals(o.optString("id"))) continue;
             out.put(o);
         }
+        if (jrnl != null) jrnl.delete(id);      // otherwise recovery would resurrect it
         synchronized (lock) {
             sessions = out;
             if (wasActive) {
@@ -1494,6 +1746,7 @@ public class MainActivity extends Activity {
     private void renameDialog(final JSONObject s) {
         final EditText e = new EditText(this);
         e.setText(titleOf(s));
+        e.setHint("Chat name");
         e.setTextColor(FG);
         e.setHintTextColor(MUTED);
         e.setSingleLine(true);
@@ -1550,6 +1803,11 @@ public class MainActivity extends Activity {
                 sessions = out;
                 store.saveSessions(sessions.toString());
                 store.setActiveId(id);
+                if (jrnl != null) {
+                    jrnl.sync(id, bubblesOf(cur), titleOf(cur));
+                    long now = System.currentTimeMillis();
+                    if (now - lastBak > 60000L) { lastBak = now; jrnl.backup(sessions.toString()); }
+                }
             } catch (Throwable ignored) { }
         }
     }
@@ -1572,19 +1830,36 @@ public class MainActivity extends Activity {
     private void rebuildModelMessages() {
         messages.clear();
         JSONArray b = bubblesOf(cur);
-        int from = Math.max(0, b.length() - 10);
+        // Keep more than the last few bubbles: the agent must remember which commands it already ran and
+        // what they returned, otherwise it re-runs them and the anti-repeat guard stops the run.
+        int from = Math.max(0, b.length() - 40);
         for (int i = from; i < b.length(); i++) {
             JSONObject o = b.optJSONObject(i);
             if (o == null) continue;
             String role = o.optString("role", "");
-            if (!"user".equals(role) && !"assistant".equals(role)) continue;
+            String text = o.optString("text", "");
+            if (text.trim().isEmpty()) continue;
             try {
                 JSONObject m = new JSONObject();
-                m.put("role", role);
-                m.put("content", o.optString("text", ""));
+                if ("user".equals(role) || "assistant".equals(role)) {
+                    m.put("role", role);
+                    m.put("content", clipForHistory(text));
+                } else if ("tool".equals(role)) {
+                    if (text.startsWith("$ ")) continue;          // command echo; the output bubble follows
+                    m.put("role", "user");
+                    m.put("content", "TOOL OUTPUT:\n" + clipForHistory(text));
+                } else {
+                    continue;                                      // app notes are not replayed to the model
+                }
                 messages.add(m);
             } catch (Throwable ignored) { }
         }
+    }
+
+    private static String clipForHistory(String s) {
+        final int cap = 900;
+        if (s == null) return "";
+        return s.length() <= cap ? s : s.substring(0, cap) + "\n...[+" + (s.length() - cap) + " chars, re-read it from disk if needed]";
     }
 
     private void addBubble(String role, String text) {
@@ -1595,8 +1870,13 @@ public class MainActivity extends Activity {
                 o.put("text", text == null ? "" : text);
                 o.put("t", System.currentTimeMillis());
                 bubblesOf(cur).put(o);
+                if (jrnl != null && cur != null) jrnl.append(cur.optString("id", ""), o);
             } catch (Throwable ignored) { }
         }
+        boolean autosave = false;
+        bubbleTick++;
+        if (bubbleTick >= 10) { bubbleTick = 0; autosave = true; }
+        if (autosave) persist();          // keep the saved session minutes behind, not a whole run
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
         });
@@ -1630,10 +1910,30 @@ public class MainActivity extends Activity {
 
     /** foreground service: keeps the loop alive and on the network while other apps are in front */
     private void startAgentService() {
+        requestNotificationPermissionIfNeeded();
         try {
             Intent si = new Intent(this, AgentService.class);
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(si);
             else startService(si);
+        } catch (Throwable ignored) { }
+    }
+
+    /** Ask only when a user starts work that can continue in the foreground service. */
+    private void requestNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return;
+        try {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+                        }
+                    } catch (Throwable ignored) { }
+                }
+            });
         } catch (Throwable ignored) { }
     }
 
@@ -1659,6 +1959,7 @@ public class MainActivity extends Activity {
         boolean showStop = busy && !hasText;
         sendBtn.setText(showStop ? "\u25A0" : "\u2191");
         sendBtn.setBackground(circle(showStop ? DANGER : ACCENT));
+        setButtonA11y(sendBtn, showStop ? "Stop current run" : "Send message");
     }
 
     /** text typed while a run is in flight: feed it to the agent instead of stopping the run */
@@ -1685,6 +1986,7 @@ public class MainActivity extends Activity {
         guardHits.clear();
         loopBroken = false;
         stuckRun = false;
+        ensureWorkDir();
         lastAssistantSaid = "";
         startAgentService();
         setBusyUi(true);
@@ -1752,14 +2054,7 @@ public class MainActivity extends Activity {
             final String cmd = text.substring(1).trim();
             if (cmd.isEmpty()) { toast("Type a command after $"); return; }
             addBubble("user", "$ " + cmd);
-            startAgentService();
-            new Thread(new Runnable() {
-                @Override public void run() {
-                    addBubble("tool", RootShell.run(cmd, store.timeoutSec()));
-                    persist();
-                    stopAgentService();
-                }
-            }).start();
+            beginReviewedRun(java.util.Collections.singletonList(cmd), false);
             return;
         }
         if (!hasActiveModel()) {
@@ -1808,6 +2103,7 @@ public class MainActivity extends Activity {
         loopBroken = false;
         stuckRun = false;
         refreshToolProbe(false);
+        ensureWorkDir();
         lastAssistantSaid = "";
         midRunRestartUsed = false;
         stepNow = 0;
@@ -1899,37 +2195,57 @@ public class MainActivity extends Activity {
                     JSONObject am = new JSONObject();
                     am.put("role", "assistant");
                     am.put("content", reply.text == null ? "" : reply.text);
-                    if (reply.reasoning != null && !reply.reasoning.isEmpty()) am.put("reasoning_content", reply.reasoning);
+                    // DeepSeek thinking mode rejects an assistant message whose reasoning_content field is MISSING
+                    // ("must be passed back to the API"), so echo it whenever we asked the model to think.
+                    String rs = reply.reasoning == null ? "" : reply.reasoning;
+                    if (!rs.isEmpty() || thinkNow > 0) am.put("reasoning_content", rs);
                     if (hasToolCalls) am.put("tool_calls", reply.toolCalls);
                     synchronized (messages) { messages.add(am); }
                 } catch (Throwable ignored) { }
 
                 if (hasToolCalls) {
-                    for (int i = 0; i < reply.toolCalls.length() && !stop; i++) {
+                    // Every tool_call in an assistant message MUST get exactly one tool reply - also when the
+                    // run is stopped here. A dangling tool_call makes the NEXT request fail with HTTP 400:
+                    // "An assistant message with 'tool_calls' must be followed by tool messages".
+                    boolean aborted = false;
+                    for (int i = 0; i < reply.toolCalls.length(); i++) {
                         JSONObject call = reply.toolCalls.optJSONObject(i);
-                        if (call == null) continue;
-                        JSONObject fn = call.optJSONObject("function");
-                        String cmd = "";
-                        if (fn != null) {
-                            String args = fn.optString("arguments", "");
-                            try {
-                                JSONObject a = new JSONObject(args);
-                                cmd = a.optString("command", a.optString("cmd", args));
-                            } catch (Throwable t) {
-                                cmd = args;
+                        String callId = call == null ? ("call_" + i) : call.optString("id", "call_" + i);
+                        String result;
+                        if (aborted || stop || loopBroken) {
+                            aborted = true;
+                            result = "[not executed: the app stopped this run before this call. Do not retry it; "
+                                    + "report what you already have or take a different approach.]";
+                            android.util.Log.e("AIssistants", "closed dangling tool_call " + callId);
+                        } else {
+                            JSONObject fn = call == null ? null : call.optJSONObject("function");
+                            String cmd = "";
+                            if (fn != null) {
+                                String args = fn.optString("arguments", "");
+                                try {
+                                    JSONObject a = new JSONObject(args);
+                                    cmd = a.optString("command", a.optString("cmd", args));
+                                } catch (Throwable t) {
+                                    cmd = args;
+                                }
+                            }
+                            if (cmd.trim().isEmpty()) {
+                                result = "[skipped: the model sent an empty command]";
+                            } else {
+                                result = runCommand(cmd.trim());
+                                if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
                             }
                         }
-                        if (cmd.trim().isEmpty()) continue;
-                        String result = runCommand(cmd.trim());
-                        if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
-                        if (loopBroken) break;
-                        JSONObject tm = new JSONObject();
-                        tm.put("role", "tool");
-                        tm.put("tool_call_id", call.optString("id", "call_0"));
-                        tm.put("content", result);
-                        synchronized (messages) { messages.add(tm); }
+                        try {
+                            JSONObject tm = new JSONObject();
+                            tm.put("role", "tool");
+                            tm.put("tool_call_id", callId);
+                            tm.put("content", result);
+                            synchronized (messages) { messages.add(tm); }
+                        } catch (Throwable ignored) { }
+                        if (loopBroken || stop) aborted = true;
                     }
-                    if (loopBroken) break;
+                    if (loopBroken || stop) break;
                     continue;
                 }
 
@@ -1992,6 +2308,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** this conversation's PRIVATE workspace - sessions must never hand each other artefacts */
+    private String workDir() {
+        String id = cur == null ? "" : cur.optString("id", "");
+        if (id.isEmpty()) id = "default";
+        return "/data/local/tmp/ai-ssistants/" + id.replaceAll("[^A-Za-z0-9_.-]", "_");
+    }
+
+    /** create the workspace before a run, so nothing a session makes lands in the shared dir */
+    private void ensureWorkDir() {
+        foreignTmpWarned = false;
+        try {
+            RootShell.run("mkdir -p " + workDir() + " && chmod 700 " + workDir(), 15);
+        } catch (Throwable ignored) { }
+    }
+
+    /** does this command point at /data/local/tmp OUTSIDE this session's workspace? */
+    private boolean touchesForeignTmp(String cmd) {
+        if (cmd == null) return false;
+        return cmd.replace(workDir(), "").contains("/data/local/tmp");
+    }
+
     /** run one command as root, echo it in the chat, return the output for the model */
     private String runCommand(String cmd) {
         if (!store.autoRun()) {
@@ -2000,6 +2337,16 @@ public class MainActivity extends Activity {
             showPendingBar();
             return "[not executed: auto-run is disabled]";
         }
+        return executeCommand(cmd);
+    }
+
+    /** Executes an explicitly reviewed command without sending it back through the queue. */
+    private String executeCommand(String cmd) {
+        return executeCommand(cmd, true);
+    }
+
+    /** `echoCommand` is false when the user-visible bubble already contains the exact command. */
+    private String executeCommand(String cmd, boolean echoCommand) {
         String cat = permissionCategory(cmd);
         boolean gated = cat != null;
         if (gated && autoApprove) {
@@ -2022,14 +2369,19 @@ public class MainActivity extends Activity {
             Integer gh = guardHits.get(cmd);
             int hits = gh == null ? 0 : gh;
             guardHits.put(cmd, hits + 1);
-            if (hits == 0) { addBubble("note", "guard: perintah sama \u00b7 pakai output lama"); stuckRun = true; }
+            stuckRun = true;
+            android.util.Log.e("AIssistants", "guard trip " + (hits + 1) + " for: " + firstLine(cmd));
+            if (hits == 0) {
+                audit("guard", "REPEAT", cmd);
+                addBubble("note", "guard: perintah ini sudah jalan 2x \u00b7 pakai output lama \u00b7 " + firstLine(cmd));
+            }
             if (hits + 1 >= 5) {
                 loopBroken = true;
-                addBubble("note", "guard: perintah sama 5x \u00b7 run dihentikan");
+                addBubble("note", "guard: perintah sama " + (hits + 1) + "x \u00b7 run dihentikan \u00b7 " + firstLine(cmd));
                 return "[the app STOPPED this run: you kept re-running a command that already ran twice. "
                         + "Report what you already have instead of repeating it.]";
             }
-            if (hits + 1 == 3) addBubble("note", "guard: ulangan ke-3 \u00b7 ganti pendekatan");
+            if (hits + 1 == 3) addBubble("note", "guard: ulangan ke-3 \u00b7 ganti pendekatan \u00b7 " + firstLine(cmd));
             String prev = runOutputs.get(cmd);
             return "[this exact command already ran twice (repetition " + (hits + 1) + "/5 - the app stops the run at 5). Here it is again:\n"
                     + (prev == null ? "(no output)" : clip(prev))
@@ -2038,8 +2390,20 @@ public class MainActivity extends Activity {
                     + "or re-read your plan notes and take another route.]";
         }
         runCounts.put(cmd, n + 1);
-        addBubble("tool", "$ " + cmd);
-        final String out = withRecovery(foldLong(RootShell.run(cmd, store.timeoutSec())), cmd);
+        final String wd = workDir();
+        if (echoCommand) addBubble("tool", "$ " + cmd);
+        // every command starts inside THIS session's workspace; $WD is exported for the model
+        String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; " + cmd;
+        String out = withRecovery(foldLong(RootShell.run(exec, store.timeoutSec())), cmd);
+        if (touchesForeignTmp(cmd)) {
+            out = out + "\n[workspace] part of that command pointed at /data/local/tmp OUTSIDE this session's workspace ("
+                    + wd + "). Those files were made by a DIFFERENT task: not your target, not evidence, not yours to "
+                    + "patch. Pull your own copy into $WD (name it after the package), verify with `md5sum`, work on that.";
+            if (!foreignTmpWarned) {
+                foreignTmpWarned = true;
+                addBubble("note", "workspace: ada path luar folder sesi \u00b7 dialihkan ke $WD");
+            }
+        }
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
@@ -2051,15 +2415,18 @@ public class MainActivity extends Activity {
         String lo = out.toLowerCase(Locale.ENGLISH);
         StringBuilder h = new StringBuilder();
         String base = lastToken(cmd);
+        String wd = workDir();
 
         if (lo.contains("i/o error") || lo.contains("couldn't open") || lo.contains("cannot open")) {
             h.append("- that path could not be read. Verify it first: `ls -l ").append(base).append("` ");
-            h.append("(size 0 or missing = wrong name / failed copy). List what really exists: `cd /data/local/tmp; ls -l *.apk`\n");
+            h.append("(size 0 or missing = wrong name / failed copy). List what really exists: `cd " + wd + "; ls -l`\n");
         }
         if (lo.contains("no such file or directory")) {
             h.append("- something on that path does not exist. Do NOT guess names - look at the real listing first");
             if (lo.contains("/data/local/tmp") || cmd.contains("/data/local/tmp")) {
-                h.append(":\n").append(clip(RootShell.run("ls -l /data/local/tmp | head -20", 15)));
+                h.append(" - YOUR workspace is ").append(wd).append("; anything else under /data/local/tmp belongs to "
+                        + "another task and is NOT yours to use. In your workspace:\n")
+                 .append(clip(RootShell.run("ls -l " + wd + " | head -20", 15)));
             }
             h.append("\n");
         }
@@ -2074,7 +2441,7 @@ public class MainActivity extends Activity {
         }
         if (lo.contains(": empty") || lo.contains("0 bytes")) {
             h.append("- the file is empty: the copy failed. Re-pull it and confirm the size, e.g. ");
-            h.append("`p=$(pm path <pkg> | head -1 | sed s/package://); nsenter -t 1 -m -- cp \"$p\" /data/local/tmp/x.apk; ls -l /data/local/tmp/x.apk`\n");
+            h.append("`p=$(pm path <pkg> | head -1 | sed s/package://); cp \"$p\" " + wd + "/<pkg>-base.apk; ls -l " + wd + "; md5sum \"$p\" " + wd + "/<pkg>-base.apk`\n");
         }
         if (lo.contains("timeout after")) {
             h.append("- that command was too slow and got killed at the timeout. Make it cheaper: `dd bs=1M` (NEVER bs=1 for ");
@@ -2143,11 +2510,30 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) { }
     }
 
-    /** AUTO chip: accent while every gate is being auto-approved */
+    /** Review is default. AUTO is a deliberate, per-session override after confirmation. */
     private void styleAutoBtn() {
         if (autoBtn == null) return;
+        autoBtn.setText(autoApprove ? "AUTO" : "REVIEW");
         autoBtn.setTextColor(autoApprove ? ON_ACCENT : MUTED);
         autoBtn.setBackground(round(autoApprove ? ACCENT : SURFACE, autoApprove ? ACCENT : LINE, 12));
+        setButtonA11y(autoBtn, autoApprove
+                ? "Auto-approve risky actions is on. Tap to require review."
+                : "Review risky actions is on. Tap to enable auto-approve.");
+    }
+
+    private void confirmAutoApproval() {
+        new AlertDialog.Builder(this)
+                .setTitle("Auto-approve risky actions?")
+                .setMessage("Risky install, system, data, network, and messaging commands can run without another prompt for this chat session.")
+                .setPositiveButton("Enable auto-approve", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        autoApprove = true;
+                        styleAutoBtn();
+                        toast("Auto-approve enabled for this session");
+                    }
+                })
+                .setNegativeButton("Keep review", null)
+                .show();
     }
 
     /** blocks the worker thread until the user taps a choice in the dialog */
@@ -2199,6 +2585,7 @@ public class MainActivity extends Activity {
                             if (holder[0] != null) holder[0].dismiss();
                         }
                     });
+                    setButtonA11y(b, labels[i]);
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(48));
                     lp.setMargins(0, dp(8), 0, 0);
                     box.addView(b, lp);
@@ -2230,7 +2617,7 @@ public class MainActivity extends Activity {
                 pendingBar.removeAllViews();
                 if (pending.isEmpty()) { pendingBar.setVisibility(View.GONE); return; }
                 Button run = new Button(MainActivity.this);
-                run.setText("Run " + pending.size() + " queued command" + (pending.size() == 1 ? "" : "s"));
+                run.setText("Review & run " + pending.size() + " queued command" + (pending.size() == 1 ? "" : "s"));
                 run.setAllCaps(false);
                 run.setTextSize(14);
                 run.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -2246,20 +2633,66 @@ public class MainActivity extends Activity {
     }
 
     private void runPending() {
+        if (busy) { toast("Still working — stop it first"); return; }
         final List<String> queue = new ArrayList<>(pending);
+        if (queue.isEmpty()) return;
+        if (!beginReviewedRun(queue, true)) return;
         pending.clear();
         showPendingBar();
+    }
+
+    /** Starts a manual, external, or queued command run with the same stop/gate state as the agent loop. */
+    private boolean beginReviewedRun(final List<String> commands, final boolean echoCommands) {
+        if (commands == null || commands.isEmpty()) return false;
+        if (busy) { toast("Still working — stop it first"); return false; }
+        AiClient.resetCancel();
+        RootShell.resetCancel();
+        busy = true;
+        stop = false;
+        runCounts.clear();
+        runOutputs.clear();
+        guardHits.clear();
+        loopBroken = false;
+        stuckRun = false;
+        stepNow = 0;
+        stepTotal = commands.size();
+        lastAssistantSaid = "";
         startAgentService();
-        new Thread(new Runnable() {
+        setBusyUi(true);
+        ui.post(new Runnable() {
+            @Override public void run() { renderTranscript(); }
+        });
+        worker = new Thread(new Runnable() {
             @Override public void run() {
-                for (String cmd : queue) {
-                    addBubble("tool", "$ " + cmd);
-                    addBubble("tool", RootShell.run(cmd, store.timeoutSec()));
+                try {
+                    ensureWorkDir();
+                    for (String cmd : commands) {
+                        if (stop) break;
+                        stepNow++;
+                        executeCommand(cmd, echoCommands);
+                    }
+                } catch (Throwable t) {
+                    addBubble("note", "\u26a0 " + t);
+                } finally {
+                    if (stop) addBubble("note", "stopped.");
+                    busy = false;
+                    stop = false;
+                    stepNow = 0;
+                    persist();
+                    stopAgentService();
+                    ui.post(new Runnable() {
+                        @Override public void run() {
+                            setBusyUi(false);
+                            updateSubtitle();
+                            renderTranscript();
+                        }
+                    });
                 }
-                persist();
-                stopAgentService();
             }
-        }).start();
+        });
+        worker.setDaemon(true);
+        worker.start();
+        return true;
     }
 
     // ==================== parsing / prompt ====================
@@ -2347,6 +2780,22 @@ public class MainActivity extends Activity {
             sb.append("TOOLS ACTUALLY PRESENT ON THIS PHONE (auto-probed - trust this list over assumptions): ")
               .append(tp).append("\n\n");
         }
+        String wd = workDir();
+        sb.append("YOUR WORKSPACE (private to THIS conversation): ").append(wd).append("\n")
+          .append("- Every command already starts there (`cd`), and `$WD` is exported to it.\n")
+          .append("- Pull, create, unpack, patch and build EVERY artefact inside it (`$WD/<name>`) and nowhere else.\n")
+          .append("- /data/local/tmp itself is SHARED with your OTHER conversations and tasks. Whatever is already sitting there\n")
+          .append("  (base.apk, *.apk, *.dex, agent-plan.md, apkwork/, *.log) was made by a DIFFERENT task: it is NOT your\n")
+          .append("  target and NOT evidence about this request. Never analyse it, never patch/sign/build on it, never trust its\n")
+          .append("  filename. Leave it alone. Only artefacts YOU create in THIS conversation count.\n")
+          .append("- A filename proves nothing. Before you analyse, patch, install or report about a file, PROVE its identity:\n")
+          .append("  for an APK compare its hash with the app that is really installed -\n")
+          .append("  `p=$(pm path <pkg> | head -1 | sed s/package://); md5sum \"$p\"; md5sum $WD/<file>`\n")
+          .append("  (equal = it IS that app; different = another task's junk, discard it) and cross-check the manifest:\n")
+          .append("  `unzip -p <file> AndroidManifest.xml | strings -n 4 | head`. Never assume what a file is.\n")
+          .append("- If the user names an app (@<pkg> or by name), THAT package is the only target: `pm path <pkg>` is the source\n")
+          .append("  of truth, and you always pull a fresh copy of it yourself.\n")
+          .append("- Name what you pull after the package, never generically: `cp \"$p\" $WD/com.example.app-base.apk`.\n\n");
         sb.append("You are AI-ssistants: an autonomous Android engineer running directly on the user's own ")
           .append("rooted phone and acting through a root shell. You are not a chatbot here - you are the ")
           .append("operator of this device.\n\n")
@@ -2363,7 +2812,7 @@ public class MainActivity extends Activity {
           .append("the background only if the user asked for it. Never repeat a command whose output you ")
           .append("already have - use it and answer. The app enforces this: re-running an identical command ")
           .append("returns its cached output, and a third repeat aborts the run.\n")
-          .append("5. Before touching files, back them up (cp -a to /data/local/tmp or .bak). After a change, ")
+          .append("5. Before touching files, back them up (cp -a into $WD, or a .bak next to the original). After a change, ")
           .append("prove it worked (grep the file, re-check the property, re-launch the app, read the log).\n")
           .append("6. Report in the user's language (Indonesian if they write Indonesian), short and concrete: ")
           .append("what you ran, what it showed, what changed.\n")
@@ -2398,7 +2847,7 @@ public class MainActivity extends Activity {
           .append("databases, logs, caches, earlier sessions) (b) does a framework/service command return it directly? (discover with ")
           .append("`cmd -l`, `dumpsys -l`, `service list`, then `dumpsys <svc>`) (c) which present tool reads it in ONE command? ")
           .append("(d) only then derive, guess or build - never as a blind loop.\n")
-          .append("3. Long tasks: maintain /data/local/tmp/agent-plan.md (goal, facts learned, next steps) and update it as you go; re-read it ")
+          .append("3. Long tasks: maintain $WD/agent-plan.md (goal, facts learned, next steps) and update it as you go; re-read it ")
           .append("after detours. Device facts you discover belong there too - your context is limited, the file is not.\n")
           .append("4. THINK ONCE, ACT IN BATCHES (efficiency is part of being right): before each step decide the ONE question you are answering, then put ")
           .append("EVERY command that serves it into a single shell line (`a; b; c`) and read all outputs together. Split only when the next command ")
@@ -2439,7 +2888,7 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) { }
         sb.append("DEVICE SURFACE - example commands (patterns, not the only way)\n")
           .append("- packages: pm list packages -3, pm path <pkg>, dumpsys package <pkg>, cmd package compile\n")
-          .append("- apps/files: /data/data/<pkg>, /sdcard, /data/local/tmp (use `cat`, `cp`, `sed -i`)\n")
+          .append("- apps/files: /data/data/<pkg>, /sdcard, your workspace $WD (use `cat`, `cp`, `sed -i`); /data/local/tmp outside $WD is other tasks' - leave it alone\n")
           .append("- NOTE: /data/data in THIS shell is a tmpfs overlay that mostly shows only your own dir, so plain `ls/du /data/data/<pkg>` can fail or lie even as uid 0. Go through init's namespace right away: `nsenter -t 1 -m -- ls -la /data/data/<pkg>`, `nsenter -t 1 -m -- du -sh /data/data/<pkg>` (same for cat/cp/sed).\n")
           .append("- system: /system, /vendor, mount -o rw,remount /system, magisk --path, ksud\n")
           .append("- kernel: /proc, /sys, lsmod, insmod, dmesg, /dev/*\n")
@@ -2468,14 +2917,15 @@ public class MainActivity extends Activity {
           .append("e.g. `LD_LIBRARY_PATH=$HOME/work/jdkroot/data/data/com.termux/files/usr/lib:$.../jvm/java-17-openjdk/lib:$P/lib`; ")
           .append("`pkg install` as the termux user is the simpler path when it works.\n\n")
           .append("REVERSE ENGINEERING / MOD APK (everything on this device)\n")
-          .append("- pull: `p=$(pm path <pkg> | sed 's/package://'); cp \"$p\" /data/local/tmp/base.apk; ls -l /data/local/tmp/base.apk`\n")
-          .append("- peek without tools: `unzip -l base.apk`, `unzip -p base.apk classes.dex | strings -n 6 | head -50`, ")
-          .append("`strings -n 8 base.apk | grep -E 'https?://' | head`; parsed manifest + permissions come from `dumpsys package <pkg>`\n")
-          .append("- decompile / rebuild: `apktool d -f base.apk -o out`, edit smali/res, `apktool b out -o patched.apk`; ")
+          .append("- pull (fresh, into YOUR workspace, named after the package): `p=$(pm path <pkg> | head -1 | sed s/package://); cp \"$p\" $WD/<pkg>-base.apk; md5sum \"$p\" $WD/<pkg>-base.apk` - hashes must match\n")
+          .append("- NEVER analyse or patch a file you did not pull yourself in THIS conversation; an unknown file in the way is not yours\n")
+          .append("- peek without tools: `unzip -l $WD/<pkg>-base.apk`, `unzip -p $WD/<pkg>-base.apk classes.dex | strings -n 6 | head -50`, ")
+          .append("`strings -n 8 $WD/<pkg>-base.apk | grep -E 'https?://' | head`; parsed manifest + permissions come from `dumpsys package <pkg>`\n")
+          .append("- decompile / rebuild: `apktool d -f $WD/<pkg>-base.apk -o $WD/out`, edit smali/res, `apktool b out -o patched.apk`; ")
           .append("jadx for readable Java; patch smali only at the exact spot jadx pointed to\n")
           .append("- sign: `apksigner sign --ks keys.jks --ks-pass pass:<pw> --out signed.apk patched.apk`, or ")
           .append("`java -jar uber-apk-signer.jar -a patched.apk` (makes a debug key)\n")
-          .append("- install: `pm install -r -d /data/local/tmp/patched.apk`, verify with `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime'`\n")
+          .append("- install: `pm install -r -d $WD/patched.apk`, verify with `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime'`\n")
           .append("- full mod pipeline once java works: `java -jar baksmali.jar d classes.dex -o out` -> edit smali -> ")
           .append("`java -jar smali.jar a out -o classes.dex` -> swap the dex inside the apk (zip - keep resources.arsc STORED, dex may be deflated) ")
           .append("-> sign (`apksigner` or uber-apk-signer.jar with a debug key) -> `pm install -r -d` -> launch + read logcat to confirm\n")
@@ -2491,7 +2941,7 @@ public class MainActivity extends Activity {
           .append("DOMAIN PLAYBOOKS (verified examples of applying the engine above - use ONLY when they fit; reasoning always beats a recipe)\n")
           .append("SELF-RECOVERY (never hand the user a raw error)\n")
           .append("- before using any file you pulled or created: `ls -l` it - exists? size > 0? A 0-byte apk/so means the copy failed\n")
-          .append("- always use the EXACT filename you created: after a pull run `cd /data/local/tmp; ls -l *.apk` and reuse that name\n")
+          .append("- always use the EXACT filename you created: after a pull run `cd $WD; ls -l` and reuse that name\n")
           .append("- a command that failed once will not behave differently the second time: read the error, run ONE diagnostic ")
           .append("(`ls -l`, `wc -c`, `command -v`, `unzip -l`), then change the approach\n")
           .append("- the app adds [recovery hints] to failed output - follow them; missing tools have alternatives (toybox, Termux, install)\n")
@@ -2509,7 +2959,7 @@ public class MainActivity extends Activity {
           .append("(the user's own password style visible in the config store, venue/brand + SSID variants, Indonesian patterns, common defaults, ")
           .append("year/number suffixes) and run it as a background script: per candidate `cmd wifi connect-network \"<ssid>\" wpa2 \"$p\"` -> sleep 6 -> ")
           .append("`cmd wifi status` (connected? STOP, that is the password) else `cmd wifi forget-network <id>`; append every try to ")
-          .append("/data/local/tmp/wifi-attack.log, start with nohup, then poll the log. Report coverage honestly (N tried, what happened).\n")
+          .append("$WD/wifi-attack.log, start with nohup, then poll the log. Report coverage honestly (N tried, what happened).\n")
           .append("- capture (aircrack/handshake/pixiewps) is NOT possible on this phone: the driver refuses monitor mode ")
           .append("(`iw dev wlan0 set type monitor` -> -95, `iw phy phy0 interface add mon0 type monitor` -> -22) even though `iw phy` lists it - one test max. ")
           .append("If the goal truly needs a handshake, spell out the unlock path for the user: USB-OTG WiFi adapter with a monitor-capable chip ")
@@ -2527,14 +2977,14 @@ public class MainActivity extends Activity {
           .append("last sentence as the reason - so say WHY in one short line before such a command. If it is denied the ")
           .append("command does NOT run: do not retry it, explain the blocker, and offer an alternative.\n\n")
           .append("GAME CHEATS / FRIDA (for the user's own games and cheat APKs)\n")
-          .append("- engine first: `unzip -l base.apk | grep -E 'libil2cpp|global-metadata|libcocos|libflutter|libunity|classes.dex'` and `unzip -l base.apk | grep .so`\n")
-          .append("- Unity il2cpp: `unzip -p base.apk lib/arm64-v8a/libil2cpp.so > /data/local/tmp/libil2cpp.so` then ")
-          .append("`strings -n 6 /data/local/tmp/libil2cpp.so | grep -iE 'setHealth|get_Score|addCoin|gold|ammo|SetSpeed'` - ")
+          .append("- engine first: `unzip -l $WD/<pkg>-base.apk | grep -E 'libil2cpp|global-metadata|libcocos|libflutter|libunity|classes.dex'` and `unzip -l $WD/<pkg>-base.apk | grep .so`\n")
+          .append("- Unity il2cpp: `unzip -p $WD/<pkg>-base.apk lib/arm64-v8a/libil2cpp.so > $WD/libil2cpp.so` then ")
+          .append("`strings -n 6 $WD/libil2cpp.so | grep -iE 'setHealth|get_Score|addCoin|gold|ammo|SetSpeed'` - ")
           .append("unstripped builds give you every method name; the offset you need is the vaddr of that method (readelf -sW)\n")
           .append("- dex/java: `apktool d` and grep the smali for the value/method, patch smali, rebuild\n")
           .append("- frida (main dynamic path): install once - fetch the frida-server release for the device arch to ")
-          .append("/data/local/tmp, `chmod 755`, run it in the background as root; hook with ")
-          .append("`frida -U -f <pkg> -l /data/local/tmp/hook.js` (or `frida -U -n <name>` to attach). Write hook.js with a ")
+          .append("$WD, `chmod 755`, run it in the background as root; hook with ")
+          .append("`frida -U -f <pkg> -l $WD/hook.js` (or `frida -U -n <name>` to attach). Write hook.js with a ")
           .append("heredoc, keep it tiny, use console.log so you can read the output. Typical hooks: Interceptor.attach on a ")
           .append("libil2cpp.so base+offset, Java.use for dex methods, Memory.patchCode for a quick permanent patch\n")
           .append("- no frida yet? raw memory: python3 (Termux) reads `/proc/<pid>/maps`, searches the little-endian bytes of the ")
@@ -2549,8 +2999,17 @@ public class MainActivity extends Activity {
 
     // ==================== helpers ====================
 
-    private int num(String s, int def) {
-        try { return Integer.parseInt(s.trim()); } catch (Throwable t) { return def; }
+    private Integer wholeNumber(EditText field, int min, int max, String label) {
+        String raw = field.getText().toString().trim();
+        try {
+            int value = Integer.parseInt(raw);
+            if (value < min || value > max) throw new NumberFormatException();
+            return value;
+        } catch (Throwable ignored) {
+            field.setError(label + " must be " + min + " to " + max);
+            field.requestFocus();
+            return null;
+        }
     }
 
     private static String hostOf(String url) {
@@ -2658,9 +3117,35 @@ public class MainActivity extends Activity {
         b.setPadding(0, 0, 0, 0);
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
                 round(Color.TRANSPARENT, 0, 24), null));
+        setButtonA11y(b, iconLabel(glyph));
         if (l != null) b.setOnClickListener(l);
         b.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         return b;
+    }
+
+    private String iconLabel(String glyph) {
+        if ("\u2190".equals(glyph)) return "Back";
+        if ("\u2630".equals(glyph)) return "Open chats";
+        if ("\u22EE".equals(glyph)) return "More options";
+        if ("\u002B".equals(glyph)) return "Add";
+        if ("\u2715".equals(glyph)) return "Delete";
+        if ("\u270E".equals(glyph)) return "Edit";
+        return "Action";
+    }
+
+    /** TextView controls need Button semantics for TalkBack, keyboard navigation, and automation. */
+    private void setButtonA11y(final View v, String label) {
+        if (v == null) return;
+        v.setContentDescription(label);
+        v.setFocusable(true);
+        v.setTooltipText(label);
+        v.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                info.setClassName(Button.class.getName());
+                info.setClickable(host.isClickable());
+            }
+        });
     }
 
     private TextView sectionLabel(String text) {
@@ -2676,6 +3161,8 @@ public class MainActivity extends Activity {
         llp.setMargins(0, dp(12), 0, dp(6));
         panel.addView(l, llp);
         EditText e = new EditText(this);
+        e.setId(View.generateViewId());
+        l.setLabelFor(e.getId());
         e.setSingleLine(true);
         e.setHint(hint);
         e.setText(value == null ? "" : value);
@@ -2687,29 +3174,6 @@ public class MainActivity extends Activity {
         e.setBackground(round(BG, LINE, 12));
         if (secret) e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         panel.addView(e);
-        return e;
-    }
-
-    private EditText compactField(LinearLayout row, String label, String value, boolean numeric) {
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        TextView l = sectionLabel(label.toUpperCase());
-        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
-        llp.setMargins(0, 0, 0, dp(6));
-        col.addView(l, llp);
-        EditText e = new EditText(this);
-        e.setSingleLine(true);
-        e.setText(value == null ? "" : value);
-        e.setTextColor(FG);
-        e.setTextSize(14);
-        e.setMinHeight(dp(48));
-        e.setPadding(dp(12), 0, dp(12), 0);
-        e.setBackground(round(BG, LINE, 12));
-        if (numeric) e.setInputType(InputType.TYPE_CLASS_NUMBER);
-        col.addView(e);
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -2, 1);
-        clp.setMargins(0, 0, dp(8), 0);
-        row.addView(col, clp);
         return e;
     }
 
@@ -2778,7 +3242,7 @@ public class MainActivity extends Activity {
         }
 
         TextView hint = tv(11, MUTED, Typeface.NORMAL);
-        hint.setText("Tap a model to use it \u00b7 switch to enable/disable \u00b7 long-press to edit \u00b7 \u2715 to delete");
+        hint.setText("Tap a model to use it \u00b7 switch to enable/disable \u00b7 edit to configure \u00b7 delete to remove");
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
         hlp.setMargins(0, dp(6), 0, 0);
         list.addView(hint, hlp);
@@ -2844,12 +3308,16 @@ public class MainActivity extends Activity {
         info.addView(t1);
         info.addView(t2);
         card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-        card.addView(iconBtn("\u2715", new View.OnClickListener() {
-            @Override public void onClick(View x) { confirmDeleteProvider(p); }
-        }));
-        card.setOnLongClickListener(new View.OnLongClickListener() {
-            @Override public boolean onLongClick(View x) { providerDialog(p); return true; }
+        TextView edit = iconBtn("\u270E", new View.OnClickListener() {
+            @Override public void onClick(View x) { providerDialog(p); }
         });
+        setButtonA11y(edit, "Edit provider " + p.optString("name", "provider"));
+        card.addView(edit);
+        TextView remove = iconBtn("\u2715", new View.OnClickListener() {
+            @Override public void onClick(View x) { confirmDeleteProvider(p); }
+        });
+        setButtonA11y(remove, "Delete provider " + p.optString("name", "provider"));
+        card.addView(remove);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(8));
         card.setLayoutParams(lp);
@@ -2868,6 +3336,7 @@ public class MainActivity extends Activity {
         on.setText("");
         on.setChecked(enabled);
         on.setMinHeight(dp(48));
+        on.setContentDescription((enabled ? "Disable " : "Enable ") + shortLabel(m));
         on.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
                 JSONArray arr = models();
@@ -2906,15 +3375,22 @@ public class MainActivity extends Activity {
         ilp.setMargins(dp(6), 0, dp(6), 0);
         card.addView(info, ilp);
 
-        card.addView(iconBtn("\u2715", new View.OnClickListener() {
+        TextView edit = iconBtn("\u270E", new View.OnClickListener() {
+            @Override public void onClick(View x) { modelDialog(m); }
+        });
+        setButtonA11y(edit, "Edit model " + shortLabel(m));
+        card.addView(edit);
+        TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDeleteModel(m); }
-        }));
+        });
+        setButtonA11y(remove, "Delete model " + shortLabel(m));
+        card.addView(remove);
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { activateModel(m); }
         });
-        card.setOnLongClickListener(new View.OnLongClickListener() {
-            @Override public boolean onLongClick(View x) { modelDialog(m); return true; }
-        });
+        setButtonA11y(card, enabled
+                ? "Use model " + shortLabel(m)
+                : "Model " + shortLabel(m) + " is disabled");
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(8));
         card.setLayoutParams(lp);
@@ -2937,14 +3413,29 @@ public class MainActivity extends Activity {
         final EditText name = field(box, "Name", existing == null ? "" : existing.optString("name", ""), "DeepSeek / OpenAI / Local", false);
         final EditText url = field(box, "Base URL", existing == null ? "" : existing.optString("baseUrl", ""), "https://api.deepseek.com", false);
         final EditText key = field(box, "API key", existing == null ? "" : existing.optString("apiKey", ""), "sk-\u2026 (empty for local)", true);
-        new AlertDialog.Builder(this)
+        TextView privacy = tv(12, MUTED, Typeface.NORMAL);
+        privacy.setText("Your API key and attached images are sent to this provider. Use HTTPS except for a trusted local server.");
+        privacy.setLineSpacing(dp(2), 1f);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
+        plp.setMargins(0, dp(14), 0, 0);
+        box.addView(privacy, plp);
+        final AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(existing == null ? "Add provider" : "Edit provider")
                 .setView(box)
-                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int w) {
+                .setPositiveButton("Save", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface ignored) {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View x) {
                         String nm = name.getText().toString().trim();
                         String u = url.getText().toString().trim();
-                        if (u.isEmpty()) { toast("Base URL is required"); return; }
+                        if (!isProviderUrl(u)) {
+                            url.setError("Use a valid http(s) URL");
+                            url.requestFocus();
+                            return;
+                        }
                         try {
                             JSONArray ps = providers();
                             JSONObject p = findById(ps, existing == null ? "" : existing.optString("id"));
@@ -2958,12 +3449,27 @@ public class MainActivity extends Activity {
                             p.put("apiKey", key.getText().toString().trim());
                             saveProviders(ps);
                             toast("Provider saved");
-                        } catch (Throwable t) { toast("Save failed: " + t); }
+                        } catch (Throwable t) {
+                            toast("Save failed: " + t);
+                            return;
+                        }
+                        dialog.dismiss();
                         showModels();
                     }
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+                });
+            }
+        });
+        dialog.show();
+    }
+
+    private boolean isProviderUrl(String raw) {
+        try {
+            java.net.URI u = new java.net.URI(raw);
+            String scheme = u.getScheme();
+            return u.getHost() != null && ("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme));
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private void modelDialog(final JSONObject existing) {
@@ -2974,8 +3480,11 @@ public class MainActivity extends Activity {
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
         final EditText name = field(box, "Model ID", existing == null ? "" : existing.optString("name", ""), "deepseek-flash / gpt-4o-mini", false);
         final EditText label = field(box, "Label", existing == null ? "" : existing.optString("label", ""), "shown in the app (optional)", false);
-        box.addView(sectionLabel("PROVIDER"));
+        TextView providerLabel = sectionLabel("PROVIDER");
+        box.addView(providerLabel);
         final android.widget.Spinner sp = new android.widget.Spinner(this);
+        sp.setId(View.generateViewId());
+        providerLabel.setLabelFor(sp.getId());
         final ArrayList<String> pnames = new ArrayList<>();
         final ArrayList<String> pids = new ArrayList<>();
         for (int i = 0; i < ps.length(); i++) {
@@ -2998,16 +3507,34 @@ public class MainActivity extends Activity {
         sees.setTextSize(14);
         sees.setMinHeight(dp(48));
         sees.setChecked(existing == null || existing.optBoolean("vision", true));
+        sees.setContentDescription("Send attached images to this model");
         box.addView(sees, new LinearLayout.LayoutParams(-1, -2));
-        new AlertDialog.Builder(this)
+        TextView imageNote = tv(12, MUTED, Typeface.NORMAL);
+        imageNote.setText("When enabled, attached image contents are sent to the selected provider.");
+        LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, -2);
+        imageLp.setMargins(0, 0, 0, dp(8));
+        box.addView(imageNote, imageLp);
+        final AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(existing == null ? "Add model" : "Edit model")
                 .setView(box)
-                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int w) {
+                .setPositiveButton("Save", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface ignored) {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View x) {
                         String n = name.getText().toString().trim();
-                        if (n.isEmpty()) { toast("Model ID is required"); return; }
+                        if (n.isEmpty()) {
+                            name.setError("Model ID is required");
+                            name.requestFocus();
+                            return;
+                        }
                         int sel = sp.getSelectedItemPosition();
-                        if (sel < 0 || sel >= pids.size()) { toast("Pick a provider"); return; }
+                        if (sel < 0 || sel >= pids.size()) {
+                            toast("Pick a provider");
+                            return;
+                        }
                         try {
                             JSONArray ms = models();
                             JSONObject m = findById(ms, existing == null ? "" : existing.optString("id"));
@@ -3024,12 +3551,17 @@ public class MainActivity extends Activity {
                             saveModels(ms);
                             if (store.activeModelId().isEmpty()) store.setActiveModelId(m.optString("id"));
                             toast("Model saved");
-                        } catch (Throwable t) { toast("Save failed: " + t); }
+                        } catch (Throwable t) {
+                            toast("Save failed: " + t);
+                            return;
+                        }
+                        dialog.dismiss();
                         showModels();
                     }
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+                });
+            }
+        });
+        dialog.show();
     }
 
     private void confirmDeleteProvider(final JSONObject p) {
@@ -3174,22 +3706,41 @@ public class MainActivity extends Activity {
         if (attachBar == null) return;
         attachBar.removeAllViews();
         LinearLayout chip = new LinearLayout(this);
-        chip.setOrientation(LinearLayout.HORIZONTAL);
-        chip.setGravity(Gravity.CENTER_VERTICAL);
+        chip.setOrientation(LinearLayout.VERTICAL);
         chip.setBackground(round(SURFACE, LINE, 12));
         chip.setPadding(dp(12), dp(4), dp(4), dp(4));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         TextView t = tv(12, FG, Typeface.NORMAL);
         t.setText("\uD83D\uDCCE  " + label);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        chip.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
-        chip.addView(iconBtn("\u2715", new View.OnClickListener() {
+        row.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) {
                 pendingPath = null;
                 pendingName = null;
                 attachBar.setVisibility(View.GONE);
             }
-        }));
+        });
+        setButtonA11y(remove, "Remove attachment " + (pendingName == null ? "" : pendingName));
+        row.addView(remove);
+        chip.addView(row, new LinearLayout.LayoutParams(-1, -2));
+
+        String host = hostOf(activeBaseUrl());
+        TextView privacy = tv(11, MUTED, Typeface.NORMAL);
+        if (host.isEmpty()) {
+            privacy.setText("Stored on this device until you select a provider and send a message.");
+        } else if (isImageFile(pendingName) && activeModelVision()) {
+            privacy.setText("Image contents will be sent to " + host + " when you send.");
+        } else {
+            privacy.setText("Only this file path will be sent to " + host + " when you send.");
+        }
+        privacy.setLineSpacing(dp(1), 1f);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
+        plp.setMargins(0, 0, dp(8), 0);
+        chip.addView(privacy, plp);
         attachBar.addView(chip, new LinearLayout.LayoutParams(-1, -2));
         attachBar.setVisibility(View.VISIBLE);
     }

@@ -68,15 +68,30 @@ final class RootShell {
 
     /** probe `su` with a short budget so a denied request cannot block the UI thread */
     static boolean available() {
-        String out = run("id -u", 10);
+        // A user may approve root after an earlier denial. Status probes deliberately retry;
+        // normal commands still fail fast while the denial is cached.
+        String out = run("id -u", 10, true);
         boolean ok = out != null && out.trim().startsWith("0");
         granted = ok ? Boolean.TRUE : Boolean.FALSE;
         return ok;
     }
 
+    /** explicitly ask the root manager again after a cached denial */
+    static String requestRoot(int timeoutSec) {
+        resetCancel();
+        String out = run("id", timeoutSec, true);
+        granted = out != null && out.trim().startsWith("uid=0") ? Boolean.TRUE : Boolean.FALSE;
+        return out;
+    }
+
     /** run a script as root, merged stdout+stderr, bounded by timeoutSec */
     static String run(String script, int timeoutSec) {
-        if (Boolean.FALSE.equals(granted)) return NO_ROOT_HINT;
+        return run(script, timeoutSec, false);
+    }
+
+    /** `retryRoot` is reserved for status probes and an explicit user root request. */
+    private static String run(String script, int timeoutSec, boolean retryRoot) {
+        if (!retryRoot && Boolean.FALSE.equals(granted)) return NO_ROOT_HINT;
         Process p = null;
         try {
             ProcessBuilder pb = new ProcessBuilder("su", "-c",

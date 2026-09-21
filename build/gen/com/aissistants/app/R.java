@@ -21,5 +21,9 @@ public final class R {
   }
   public static final class style {
     public static final int AppTheme=0x7f030000;
+    /**
+     * Used by every platform AlertDialog.Builder in the app.
+     */
+    public static final int AppTheme_AlertDialog=0x7f030001;
   }
 }

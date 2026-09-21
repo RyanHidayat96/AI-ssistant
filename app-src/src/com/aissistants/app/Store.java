@@ -25,7 +25,7 @@ final class Store {
     int maxSteps() { return sp.getInt("maxSteps", 12); }
     int temperature() { return sp.getInt("temperature", 30); }        // percent, 0..100
     int timeoutSec() { return sp.getInt("timeoutSec", 180); }
-    boolean autoRun() { return sp.getBoolean("autoRun", true); }
+    boolean autoRun() { return sp.getBoolean("autoRun", false); }
     int thinking() { return sp.getInt("thinking", 3); }   // 0 off, 1 low, 2 high, 3 auto
 
     /** cached inventory of the device's tools, injected into the system prompt */
