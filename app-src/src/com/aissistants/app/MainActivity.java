@@ -2158,7 +2158,10 @@ public class MainActivity extends Activity {
                         injectedQueue.clear();
                     }
                 }
-                compactMessages(14000);
+                // Safety valve only: rewriting old turns breaks the provider's prefix cache
+                // (cache hits are ~4x cheaper than misses), so routine trimming is done by the
+                // per-output cap + dedupe in modelOut(), and this only fires on very long runs.
+                compactMessages(60000);
                 JSONArray msgs = new JSONArray();
                 msgs.put(sys);
                 synchronized (messages) {

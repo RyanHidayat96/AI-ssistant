@@ -34,6 +34,7 @@ final class AiClient {
         JSONArray toolCalls = new JSONArray();
         String error = "";
         int promptTokens;
+        int cacheHitTokens;
         int completionTokens;
     }
 
@@ -80,6 +81,9 @@ final class AiClient {
             body.put("temperature", temperature);
             body.put("max_tokens", 4096);
             body.put("stream", true);
+            // ask for the usage block even in streaming mode - it carries the cache-hit numbers
+            try { body.put("stream_options", new JSONObject().put("include_usage", true)); }
+            catch (Throwable ignored) { }
             // thinking is ON by default on DeepSeek v4 - off is the fastest path for UI work
             if (thinking == 0) {
                 JSONObject t = new JSONObject();
@@ -157,6 +161,9 @@ final class AiClient {
                 if (usage != null) {
                     out.promptTokens = usage.optInt("prompt_tokens", out.promptTokens);
                     out.completionTokens = usage.optInt("completion_tokens", out.completionTokens);
+                    out.cacheHitTokens = usage.optInt("prompt_cache_hit_tokens", out.cacheHitTokens);
+                    android.util.Log.i("AIssistants", "usage prompt=" + out.promptTokens
+                            + " cacheHit=" + out.cacheHitTokens + " completion=" + out.completionTokens);
                 }
                 JSONArray choices = chunk.optJSONArray("choices");
                 if (choices == null || choices.length() == 0) continue;
