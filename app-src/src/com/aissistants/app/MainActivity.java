@@ -22,9 +22,12 @@ import android.view.WindowInsets;
 import android.view.animation.AlphaAnimation;
 import android.view.animation.Animation;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ScrollView;
@@ -91,7 +94,25 @@ public class MainActivity extends Activity {
     private String pendingPath = null;
     private String pendingName = null;
     private boolean pickerOpen = false;
-    private static ArrayList<String[]> installedApps = null;
+
+    /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
+    private final java.util.Set<String> expandedGroups = new java.util.HashSet<>();
+    private static ArrayList<AppEntry> installedApps = null;
+
+    /** cached app icons for the @mention picker (loaded off the UI thread, shared between threads) */
+    private static final java.util.Map<String, android.graphics.drawable.Drawable> appIcons =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<String, android.graphics.drawable.Drawable>());
+
+    private static final class AppEntry {
+        final String label;
+        final String pkg;
+        final android.content.pm.ApplicationInfo info;
+        AppEntry(String label, String pkg, android.content.pm.ApplicationInfo info) {
+            this.label = label;
+            this.pkg = pkg;
+            this.info = info;
+        }
+    }
     private static final int REQ_ATTACH = 7;
 
     private JSONArray sessions = new JSONArray();
@@ -662,8 +683,26 @@ public class MainActivity extends Activity {
             });
         } else {
             String prev = null;
-            for (Object[] m : snap) {
+            for (int i = 0; i < snap.size(); i++) {
+                Object[] m = snap.get(i);
                 String role = (String) m[0];
+                if ("tool".equals(role)) {
+                    int j = i;
+                    while (j < snap.size() && "tool".equals((String) snap.get(j)[0])) j++;
+                    final int start = i;
+                    final int count = j - i;
+                    final String key = cur.optString("id", "") + ":" + start;
+                    boolean open = expandedGroups.contains(key);
+                    addToolGroup(start, count, open, key);
+                    if (open) {
+                        for (int k = i; k < j; k++) {
+                            addBubbleView("tool", (String) snap.get(k)[1], (Long) snap.get(k)[2], "tool");
+                        }
+                    }
+                    i = j - 1;
+                    prev = "tool";
+                    continue;
+                }
                 addBubbleView(role, (String) m[1], (Long) m[2], prev);
                 prev = role;
             }
@@ -735,6 +774,51 @@ public class MainActivity extends Activity {
             row.addView(s, slp);
         }
         chatLog.addView(row);
+    }
+
+    /** one collapsed row standing in for a whole run of tool bubbles; tap to show/hide the detail */
+    private void addToolGroup(final int start, final int count, final boolean open, final String key) {
+        int cmds = 0;
+        String last = "";
+        synchronized (lock) {
+            JSONArray b = bubblesOf(cur);
+            for (int k = start; k < start + count && k < b.length(); k++) {
+                JSONObject o = b.optJSONObject(k);
+                if (o == null) continue;
+                String tx = o.optString("text", "");
+                if (tx.startsWith("$ ")) {
+                    cmds++;
+                    last = tx.length() > 80 ? tx.substring(0, 80) + "\u2026" : tx;
+                }
+            }
+        }
+        if (cmds == 0) cmds = count;
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setBackground(ripple(TOOL_BG, LINE, 12));
+        card.setPadding(dp(12), dp(8), dp(12), dp(8));
+        TextView t = tv(12, MUTED, Typeface.NORMAL);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        t.setText("\u2699 " + cmds + (cmds == 1 ? " command" : " commands")
+                + (open ? " \u00b7 hide" : (last.isEmpty() ? " \u00b7 show" : " \u00b7 " + last)));
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
+        card.addView(t, tlp);
+        TextView chev = tv(12, MUTED, Typeface.NORMAL);
+        chev.setText(open ? "\u25BE" : "\u25B8");
+        card.addView(chev);
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View x) {
+                if (open) expandedGroups.remove(key); else expandedGroups.add(key);
+                renderTranscript();
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(12), 0, 0);
+        card.setLayoutParams(lp);
+        chatLog.addView(card);
     }
 
     private View busyRow() {
@@ -864,6 +948,69 @@ public class MainActivity extends Activity {
     private boolean hasActiveModel() {
         JSONObject m = activeModelObj();
         return m != null && m.optBoolean("enabled", true) && providerOf(m) != null;
+    }
+
+    // ---- vision (image attachments) ----
+
+    /** does the active model accept image content? default on; text-only models just error out */
+    private boolean activeModelVision() {
+        JSONObject m = activeModelObj();
+        return m == null || m.optBoolean("vision", true);
+    }
+
+    private boolean isImageFile(String path) {
+        String p = path == null ? "" : path.toLowerCase(Locale.ENGLISH);
+        return p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png") || p.endsWith(".webp")
+                || p.endsWith(".gif") || p.endsWith(".bmp") || p.endsWith(".heic") || p.endsWith(".heif");
+    }
+
+    /** downscale the attachment and hand it to the model as a data URL (OpenAI image_url part) */
+    private String imageDataUrl(String path) {
+        try {
+            android.graphics.BitmapFactory.Options probe = new android.graphics.BitmapFactory.Options();
+            probe.inJustDecodeBounds = true;
+            android.graphics.BitmapFactory.decodeFile(path, probe);
+            int max = 1024;
+            int sample = 1;
+            while (probe.outWidth / (sample * 2) >= max || probe.outHeight / (sample * 2) >= max) sample *= 2;
+            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+            o.inSampleSize = sample;
+            android.graphics.Bitmap bm = android.graphics.BitmapFactory.decodeFile(path, o);
+            if (bm == null) return null;
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos);
+            bm.recycle();
+            byte[] data = bos.toByteArray();
+            return "data:image/jpeg;base64," + android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static boolean hasImagePart(JSONArray msgs) {
+        for (int i = 0; i < msgs.length(); i++) {
+            JSONObject m = msgs.optJSONObject(i);
+            if (m == null) continue;
+            if (m.opt("content") instanceof JSONArray) return true;
+        }
+        return false;
+    }
+
+    /** turn multimodal messages back into plain text (used when a model rejects images) */
+    private static void stripImageParts(JSONArray msgs) {
+        for (int i = 0; i < msgs.length(); i++) {
+            JSONObject m = msgs.optJSONObject(i);
+            if (m == null) continue;
+            Object c = m.opt("content");
+            if (!(c instanceof JSONArray)) continue;
+            JSONArray parts = (JSONArray) c;
+            StringBuilder sb = new StringBuilder();
+            for (int k = 0; k < parts.length(); k++) {
+                JSONObject p = parts.optJSONObject(k);
+                if (p != null && "text".equals(p.optString("type"))) sb.append(p.optString("text", ""));
+            }
+            try { m.put("content", sb.toString()); } catch (Throwable ignored) { }
+        }
     }
 
     private String shortLabel(JSONObject m) {
@@ -1249,8 +1396,10 @@ public class MainActivity extends Activity {
     }
 
     private void doStop() {
+        if (stop) return;
         stop = true;
         AiClient.cancel();
+        RootShell.cancel();
         addBubble("note", "stopping\u2026");
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
@@ -1340,6 +1489,8 @@ public class MainActivity extends Activity {
 
     private void send(String text) {
         if (busy) { toast("Still working \u2014 stop it first"); return; }
+        AiClient.resetCancel();
+        RootShell.resetCancel();
         if (text.startsWith("$")) {
             final String cmd = text.substring(1).trim();
             if (cmd.isEmpty()) { toast("Type a command after $"); return; }
@@ -1361,7 +1512,9 @@ public class MainActivity extends Activity {
             return;
         }
         String attach = pendingPath;
+        String dataUrl = null;
         if (attach != null) {
+            if (isImageFile(attach) && activeModelVision()) dataUrl = imageDataUrl(attach);
             text = "[attached file on device: " + attach + "]\n\n" + text;
             pendingPath = null;
             pendingName = null;
@@ -1372,7 +1525,22 @@ public class MainActivity extends Activity {
         try {
             JSONObject um = new JSONObject();
             um.put("role", "user");
-            um.put("content", text);
+            if (dataUrl != null) {
+                JSONArray parts = new JSONArray();
+                JSONObject pt = new JSONObject();
+                pt.put("type", "text");
+                pt.put("text", text);
+                parts.put(pt);
+                JSONObject pi = new JSONObject();
+                JSONObject iu = new JSONObject();
+                iu.put("url", dataUrl);
+                pi.put("type", "image_url");
+                pi.put("image_url", iu);
+                parts.put(pi);
+                um.put("content", parts);
+            } else {
+                um.put("content", text);
+            }
             synchronized (messages) { messages.add(um); }
         } catch (Throwable ignored) { }
         busy = true;
@@ -1418,17 +1586,27 @@ public class MainActivity extends Activity {
                 synchronized (messages) {
                     for (JSONObject m : messages) msgs.put(m);
                 }
+                final boolean hadImage = hasImagePart(msgs);
                 AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
                         msgs, tools(), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
                             @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
                         });
+                if (!reply.ok && hadImage && reply.error != null && reply.error.indexOf("400") >= 0) {
+                    // this model cannot take image parts - fall back to the file path and retry once
+                    stripImageParts(msgs);
+                    addBubble("note", "model refused the image \u2014 retried with the file path only");
+                    reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
+                            msgs, tools(), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
+                                @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
+                            });
+                }
                 streamReset();
+                if (stop) break;
                 if (reply.promptTokens + reply.completionTokens > 0) {
                     lastUsage = tok(reply.promptTokens) + "\u2192" + tok(reply.completionTokens) + " tok";
                 }
                 if (!reply.ok) {
-                    if (stop) addBubble("note", "stopped.");
-                    else addBubble("note", "\u26a0 " + reply.error);
+                    addBubble("note", "\u26a0 " + reply.error);
                     brokeEarly = true;
                     break;
                 }
@@ -1447,7 +1625,7 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) { }
 
                 if (hasToolCalls) {
-                    for (int i = 0; i < reply.toolCalls.length(); i++) {
+                    for (int i = 0; i < reply.toolCalls.length() && !stop; i++) {
                         JSONObject call = reply.toolCalls.optJSONObject(i);
                         if (call == null) continue;
                         JSONObject fn = call.optJSONObject("function");
@@ -1492,6 +1670,7 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             addBubble("note", "\u26a0 " + t);
         } finally {
+            if (stop) addBubble("note", "stopped.");
             busy = false;
             stop = false;
             stepNow = 0;
@@ -1650,7 +1829,12 @@ public class MainActivity extends Activity {
           .append("command per step; keep sleeps at 1-2s and confirm state with `dumpsys window | grep mCurrentFocus` ")
           .append("instead of waiting long. Reuse element ids/bounds you already found - never re-dump the same ")
           .append("screen twice. A typical UI task should be 2-3 tool calls total (locate+act combined, then ")
-          .append("verify), not one call per action.\n\n")
+          .append("verify), not one call per action.\n")
+          .append("9. Answer, do not narrate. Reply to the actual question in a few sentences and stop: no ")
+          .append("'here is what I did' recap, no bullet list of the commands you ran (the user can expand them ")
+          .append("in the UI), no preamble or closing smalltalk. When the user attaches an image you receive it ")
+          .append("AS AN IMAGE - actually look at it and answer directly from what you see. If something is ")
+          .append("genuinely impossible for you, say that in ONE short line and stop. Short beats complete.\n\n")
           .append("DEVICE\n");
         try {
             String facts = RootShell.run("getprop ro.product.model; getprop ro.build.version.release; "
@@ -2028,6 +2212,7 @@ public class MainActivity extends Activity {
         TextView t2 = tv(12, MUTED, Typeface.NORMAL);
         JSONObject p = providerOf(m);
         t2.setText(m.optString("name", "") + "  \u00b7  " + (p == null ? "missing provider" : p.optString("name", ""))
+                + (m.optBoolean("vision", true) ? "  \u00b7  vision" : "")
                 + (enabled ? "" : "  \u00b7  disabled"));
         t2.setSingleLine(true);
         t2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
@@ -2123,6 +2308,13 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(48));
         slp.setMargins(0, dp(6), 0, dp(4));
         box.addView(sp, slp);
+        final Switch sees = new Switch(this);
+        sees.setText("Sees images");
+        sees.setTextColor(FG);
+        sees.setTextSize(14);
+        sees.setMinHeight(dp(48));
+        sees.setChecked(existing == null || existing.optBoolean("vision", true));
+        box.addView(sees, new LinearLayout.LayoutParams(-1, -2));
         new AlertDialog.Builder(this)
                 .setTitle(existing == null ? "Add model" : "Edit model")
                 .setView(box)
@@ -2144,6 +2336,7 @@ public class MainActivity extends Activity {
                             m.put("name", n);
                             m.put("label", label.getText().toString().trim());
                             m.put("providerId", pids.get(sel));
+                            m.put("vision", sees.isChecked());
                             saveModels(ms);
                             if (store.activeModelId().isEmpty()) store.setActiveModelId(m.optString("id"));
                             toast("Model saved");
@@ -2326,14 +2519,14 @@ public class MainActivity extends Activity {
             @Override public void run() {
                 try {
                     android.content.pm.PackageManager pm = getPackageManager();
-                    ArrayList<String[]> out = new ArrayList<>();
+                    ArrayList<AppEntry> out = new ArrayList<>();
                     for (android.content.pm.ApplicationInfo ai : pm.getInstalledApplications(0)) {
                         if (!ai.enabled) continue;
-                        out.add(new String[]{ String.valueOf(pm.getApplicationLabel(ai)), ai.packageName });
+                        out.add(new AppEntry(String.valueOf(pm.getApplicationLabel(ai)), ai.packageName, ai));
                     }
-                    Collections.sort(out, new Comparator<String[]>() {
-                        @Override public int compare(String[] a, String[] b) {
-                            return a[0].compareToIgnoreCase(b[0]);
+                    Collections.sort(out, new Comparator<AppEntry>() {
+                        @Override public int compare(AppEntry a, AppEntry b) {
+                            return a.label.compareToIgnoreCase(b.label);
                         }
                     });
                     installedApps = out;
@@ -2342,6 +2535,22 @@ public class MainActivity extends Activity {
                 }
             }
         }).start();
+    }
+
+    /** icon for a picker row: cached; safe to call from any thread */
+    private android.graphics.drawable.Drawable iconFor(AppEntry e) {
+        android.graphics.drawable.Drawable d = appIcons.get(e.pkg);
+        if (d != null) return d;
+        try {
+            d = getPackageManager().getApplicationIcon(e.info);
+        } catch (Throwable t) {
+            d = null;
+        }
+        if (d == null) {
+            try { d = getPackageManager().getDefaultActivityIcon(); } catch (Throwable ignored) { }
+        }
+        if (d != null) appIcons.put(e.pkg, d);
+        return d;
     }
 
     private void openAppPicker(final int atIndex) {
@@ -2367,27 +2576,77 @@ public class MainActivity extends Activity {
         final android.widget.ListView lv = new android.widget.ListView(this);
         lv.setDivider(null);
         lv.setDividerHeight(0);
-        final ArrayList<String> rows = new ArrayList<>();
-        final ArrayList<String> pkgs = new ArrayList<>();
-        final android.widget.ArrayAdapter<String> adapter =
-                new android.widget.ArrayAdapter<>(this, android.R.layout.simple_list_item_1, rows);
+        lv.setSelector(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        lv.setPadding(0, dp(2), 0, dp(2));
+        lv.setClipToPadding(false);
+        final ArrayList<AppEntry> hits = new ArrayList<>();
+        final BaseAdapter adapter = new BaseAdapter() {
+            @Override public int getCount() { return hits.size(); }
+            @Override public Object getItem(int i) { return hits.get(i); }
+            @Override public long getItemId(int i) { return i; }
+            @Override public View getView(int pos, View convert, ViewGroup parent) {
+                LinearLayout row;
+                if (convert instanceof LinearLayout) {
+                    row = (LinearLayout) convert;
+                } else {
+                    // ListView rows cannot carry margins (AbsListView.LayoutParams) - pad the outer
+                    // row and put the card inside it so the rounded card gets its own gap
+                    row = new LinearLayout(MainActivity.this);
+                    row.setOrientation(LinearLayout.VERTICAL);
+                    row.setPadding(0, 0, 0, dp(6));
+                    row.setLayoutParams(new android.widget.AbsListView.LayoutParams(-1, -2));
+                    LinearLayout card = new LinearLayout(MainActivity.this);
+                    card.setOrientation(LinearLayout.HORIZONTAL);
+                    card.setGravity(Gravity.CENTER_VERTICAL);
+                    card.setMinimumHeight(dp(56));
+                    card.setPadding(dp(10), dp(8), dp(12), dp(8));
+                    card.setBackground(ripple(SURFACE, LINE, 14));
+                    ImageView iv = new ImageView(MainActivity.this);
+                    iv.setId(1001);
+                    card.addView(iv, new LinearLayout.LayoutParams(dp(40), dp(40)));
+                    LinearLayout col = new LinearLayout(MainActivity.this);
+                    col.setOrientation(LinearLayout.VERTICAL);
+                    TextView t1 = tv(15, FG, Typeface.BOLD);
+                    t1.setId(1002);
+                    t1.setSingleLine(true);
+                    t1.setEllipsize(TextUtils.TruncateAt.END);
+                    col.addView(t1);
+                    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -2, 1);
+                    clp.setMargins(dp(12), 0, 0, 0);
+                    card.addView(col, clp);
+                    row.addView(card);
+                }
+                AppEntry e = hits.get(pos);
+                ((ImageView) row.findViewById(1001)).setImageDrawable(iconFor(e));
+                ((TextView) row.findViewById(1002)).setText(e.label);
+                return row;
+            }
+        };
         lv.setAdapter(adapter);
         final Runnable refill = new Runnable() {
             @Override public void run() {
                 String q = search.getText().toString().trim().toLowerCase(Locale.ENGLISH);
-                rows.clear();
-                pkgs.clear();
+                hits.clear();
                 int n = 0;
-                for (String[] a : installedApps) {
+                for (AppEntry a : installedApps) {
                     if (q.isEmpty()
-                            || a[0].toLowerCase(Locale.ENGLISH).contains(q)
-                            || a[1].toLowerCase(Locale.ENGLISH).contains(q)) {
-                        rows.add(a[0] + "   \u2014   " + a[1]);
-                        pkgs.add(a[1]);
+                            || a.label.toLowerCase(Locale.ENGLISH).contains(q)
+                            || a.pkg.toLowerCase(Locale.ENGLISH).contains(q)) {
+                        hits.add(a);
                         if (++n >= 60) break;
                     }
                 }
                 adapter.notifyDataSetChanged();
+                // pre-warm the icons off the UI thread; rows pick them up on the next pass
+                final ArrayList<AppEntry> snapshot = new ArrayList<>(hits);
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        for (AppEntry e : snapshot) {
+                            if (!appIcons.containsKey(e.pkg)) iconFor(e);
+                        }
+                        ui.post(new Runnable() { @Override public void run() { adapter.notifyDataSetChanged(); } });
+                    }
+                }).start();
             }
         };
         refill.run();
@@ -2396,8 +2655,8 @@ public class MainActivity extends Activity {
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void afterTextChanged(android.text.Editable e) { refill.run(); }
         });
-        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, dp(320));
-        llp.setMargins(0, dp(8), 0, 0);
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, dp(330));
+        llp.setMargins(0, dp(10), 0, 0);
         box.addView(lv, llp);
         ui.postDelayed(new Runnable() { @Override public void run() { refill.run(); } }, 600);
 
@@ -2408,7 +2667,8 @@ public class MainActivity extends Activity {
                 .create();
         lv.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
             @Override public void onItemClick(android.widget.AdapterView<?> p, View v, int pos, long id) {
-                String pkg = pkgs.get(pos);
+                if (pos < 0 || pos >= hits.size()) return;
+                String pkg = hits.get(pos).pkg;
                 android.text.Editable e = input.getText();
                 if (atIndex >= 0 && atIndex < e.length() && e.charAt(atIndex) == '@') {
                     e.replace(atIndex, atIndex + 1, "@" + pkg + " ");

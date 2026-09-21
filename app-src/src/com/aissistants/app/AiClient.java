@@ -42,16 +42,26 @@ final class AiClient {
     /** the live connection, so the Stop button can abort a blocked read */
     private static volatile HttpURLConnection active;
 
+    /** set by Stop, cleared when a new run starts - so a cancel is never lost to a race */
+    private static volatile boolean cancelled;
+
     static void cancel() {
+        cancelled = true;
         HttpURLConnection c = active;
         if (c != null) { try { c.disconnect(); } catch (Throwable ignored) { } }
     }
+
+    static void resetCancel() { cancelled = false; }
 
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int thinking, int timeoutSec, StreamCb cb) {
         Reply out = new Reply();
         HttpURLConnection conn = null;
         try {
+            if (cancelled) {
+                out.error = "stopped";
+                return out;
+            }
             if (baseUrl == null || baseUrl.trim().isEmpty()) {
                 out.error = "no endpoint configured";
                 return out;
@@ -121,6 +131,10 @@ final class AiClient {
             boolean first = true;
             String line;
             while ((line = br.readLine()) != null) {
+                if (cancelled) {
+                    out.error = "stopped";
+                    return out;
+                }
                 if (first) {
                     first = false;
                     sse = line.startsWith("data:");

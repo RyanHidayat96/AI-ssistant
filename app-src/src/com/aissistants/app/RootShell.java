@@ -26,7 +26,43 @@ final class RootShell {
     /** null = unknown, TRUE = su works, FALSE = denied (then fail fast instead of hanging) */
     private static volatile Boolean granted = null;
 
+    /** the command running right now, so Stop can kill it instead of waiting the timeout out */
+    private static volatile Process live;
+    private static volatile boolean cancelled;
+
+    /** where the running script records its process-group id, so Stop can kill its whole tree */
+    private static final String PGFILE = "/data/local/tmp/.aissistants_pg";
+
     static Boolean state() { return granted; }
+
+    static void cancel() {
+        cancelled = true;
+        Process p = live;
+        if (p != null) { try { p.destroyForcibly(); } catch (Throwable ignored) { } }
+        // su dies alone: kill the process GROUP the script was started in, or long children keep running
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                Process q = null;
+                try {
+                    q = new ProcessBuilder("su", "-c",
+                            "kill -9 -$(cat " + PGFILE + " 2>/dev/null) 2>/dev/null; rm -f " + PGFILE).start();
+                    q.waitFor(4, TimeUnit.SECONDS);
+                } catch (Throwable ignored) {
+                } finally {
+                    if (q != null) q.destroy();
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    static void resetCancel() { cancelled = false; }
+
+    /** POSIX single-quote a string so it can be nested inside another shell command */
+    private static String q(String s) {
+        return "'" + (s == null ? "" : s.replace("'", "'\\''")) + "'";
+    }
 
     private RootShell() { }
 
@@ -43,9 +79,11 @@ final class RootShell {
         if (Boolean.FALSE.equals(granted)) return NO_ROOT_HINT;
         Process p = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder("su", "-c", script);
+            ProcessBuilder pb = new ProcessBuilder("su", "-c",
+                    "setsid sh -c " + q("echo $$ > " + PGFILE + "; " + script));
             pb.redirectErrorStream(true);
             p = pb.start();
+            live = p;
             try { p.getOutputStream().close(); } catch (Throwable ignored) { }
 
             final Process proc = p;
@@ -71,7 +109,17 @@ final class RootShell {
             reader.setDaemon(true);
             reader.start();
 
-            boolean finished = p.waitFor(Math.max(1, timeoutSec), TimeUnit.SECONDS);
+            boolean finished = false;
+            long deadline = System.currentTimeMillis() + Math.max(1, timeoutSec) * 1000L;
+            while (true) {
+                if (p.waitFor(200, TimeUnit.MILLISECONDS)) { finished = true; break; }
+                if (cancelled) {
+                    p.destroyForcibly();
+                    reader.join(1500);
+                    return trim(sb.toString()) + "\n[stopped by user]";
+                }
+                if (System.currentTimeMillis() > deadline) break;
+            }
             if (!finished) {
                 p.destroyForcibly();
                 reader.join(1500);
@@ -85,6 +133,7 @@ final class RootShell {
             return "root shell unavailable: " + t
                     + "\n(grant root to AI-ssistants in KernelSU/Magisk, then retry)";
         } finally {
+            if (live == p) live = null;
             if (p != null) p.destroy();
         }
     }
