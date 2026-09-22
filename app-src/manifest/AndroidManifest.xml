@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.aissistants.app"
-    android:versionCode="58"
-    android:versionName="1.16.9">
+    android:versionCode="88"
+    android:versionName="1.27.1">
 
     <!-- the assistant talks to any OpenAI-compatible endpoint (cloud or LAN) -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- voice prompts: SpeechRecognizer needs the microphone -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- floating panel over the app the agent is driving -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- hybrid fast path: resolve a contact name to a number, and place a confirmed call -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
     <!-- a root assistant must be able to list/see every installed app (@mention, pm recipes);
          without this Android 11+ sandbox visibility hides all third-party apps -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />

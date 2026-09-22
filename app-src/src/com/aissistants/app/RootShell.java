@@ -89,9 +89,144 @@ final class RootShell {
         return run(script, timeoutSec, false);
     }
 
+    // ---- persistent root shell -----------------------------------------------------------------
+    // Spawning `su -c ...` for every step costs a process per poll (the executor polls UI
+    // conditions). One long-lived root shell serves them all; the spawn path stays as fallback.
+
+    private static Process shell;
+    private static java.io.Writer shellIn;
+    private static java.io.BufferedReader shellOut;
+    private static final Object shellLock = new Object();
+    private static final String MARK = "__AISS_RC_";
+    private static boolean shellBroken = false;
+
+    static void closeShell() {
+        synchronized (shellLock) {
+            Process p = shell;
+            shell = null;
+            shellIn = null;
+            shellOut = null;
+            if (p != null) { try { p.destroyForcibly(); } catch (Throwable ignored) { } }
+        }
+    }
+
+    /** start `su` once and confirm we really are uid 0; false = caller must spawn instead */
+    private static boolean openShellLocked() {
+        if (shell != null) return true;
+        if (shellBroken) return false;
+        Process p = null;
+        try {
+            ProcessBuilder pb = new ProcessBuilder("su");
+            pb.redirectErrorStream(true);
+            p = pb.start();
+            final java.io.Writer w = new java.io.OutputStreamWriter(p.getOutputStream(), "UTF-8");
+            final java.io.BufferedReader r =
+                    new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream(), "UTF-8"));
+            final String id = String.valueOf(System.nanoTime());
+            w.write("id -u < /dev/null; echo " + MARK + id + "_$?\n");
+            w.flush();
+            final String[] lines = new String[4];
+            final int[] n = new int[1];
+            Thread t = new Thread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        String line;
+                        while ((line = r.readLine()) != null && n[0] < lines.length) {
+                            lines[n[0]++] = line;
+                            if (line.startsWith(MARK + id + "_")) return;
+                        }
+                    } catch (Throwable ignored) { }
+                }
+            });
+            t.setDaemon(true);
+            t.start();
+            t.join(5000);
+            boolean uid0 = false, done = false;
+            for (int i = 0; i < n[0]; i++) {
+                String line = lines[i];
+                if (line == null) continue;
+                if (line.startsWith(MARK + id + "_")) done = true;
+                else if (line.trim().equals("0")) uid0 = true;
+            }
+            if (uid0 && done) {
+                shell = p;
+                shellIn = w;
+                shellOut = r;
+                android.util.Log.i("AIssistants", "root shell: persistent session up");
+                return true;
+            }
+            android.util.Log.e("AIssistants", "root shell: handshake failed (uid0=" + uid0 + ")");
+        } catch (Throwable t) {
+            android.util.Log.e("AIssistants", "root shell: " + t);
+        }
+        if (p != null) { try { p.destroyForcibly(); } catch (Throwable ignored) { } }
+        shellBroken = true;
+        return false;
+    }
+
+    /** null = the persistent shell could not serve this call (caller falls back to spawning) */
+    private static String runInShell(String script, int timeoutSec) {
+        synchronized (shellLock) {
+            if (!openShellLocked()) return null;
+            final String id = String.valueOf(System.nanoTime());
+            try {
+                shellIn.write("(" + script + ") < /dev/null 2>&1; echo " + MARK + id + "_$?\n");
+                shellIn.flush();
+            } catch (Throwable t) {
+                closeShell();
+                shellBroken = true;
+                return null;
+            }
+            final StringBuilder sb = new StringBuilder();
+            final int[] rc = new int[]{-1};
+            final boolean[] sawMark = new boolean[]{false};
+            final java.io.BufferedReader r = shellOut;
+            Thread reader = new Thread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        String line;
+                        while ((line = r.readLine()) != null) {
+                            if (line.startsWith(MARK + id + "_")) {
+                                try { rc[0] = Integer.parseInt(line.substring((MARK + id + "_").length()).trim()); }
+                                catch (Throwable ignored) { }
+                                sawMark[0] = true;
+                                return;
+                            }
+                            if (sb.length() < MAX_OUT) sb.append(line).append('\n');
+                        }
+                    } catch (Throwable ignored) { }
+                }
+            });
+            reader.setDaemon(true);
+            reader.start();
+            long deadline = System.currentTimeMillis() + Math.max(1, timeoutSec) * 1000L;
+            while (!sawMark[0]) {
+                if (cancelled) {
+                    closeShell();                      // killing the session kills the running command
+                    return "[stopped by user]";
+                }
+                if (System.currentTimeMillis() > deadline) {
+                    closeShell();
+                    return trim(sb.toString()) + "\n[timeout after " + timeoutSec + "s]";
+                }
+                try { reader.join(120); } catch (Throwable ignored) { }
+            }
+            String out = trim(sb.toString());
+            return out + (rc[0] == 0 || rc[0] < 0 ? "" : "\n[exit " + rc[0] + "]");
+        }
+    }
+
     /** `retryRoot` is reserved for status probes and an explicit user root request. */
     private static String run(String script, int timeoutSec, boolean retryRoot) {
         if (!retryRoot && Boolean.FALSE.equals(granted)) return NO_ROOT_HINT;
+        // long/batch commands keep their own process so the shared shell stays free for UI polling
+        String fast = timeoutSec >= 60 ? null : runInShell(script, timeoutSec);
+        if (fast != null) return fast;
+        return runSpawn(script, timeoutSec);
+    }
+
+    /** fallback: one `su -c` process per call (used when the persistent shell is unavailable) */
+    private static String runSpawn(String script, int timeoutSec) {
         Process p = null;
         try {
             ProcessBuilder pb = new ProcessBuilder("su", "-c",

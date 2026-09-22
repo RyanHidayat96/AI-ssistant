@@ -40,8 +40,35 @@ final class AiClient {
 
     private AiClient() { }
 
+    /** the same conversation without provider-specific extras (e.g. assistant.reasoning_content) */
+    private static JSONArray plainMessages(JSONArray in) {
+        JSONArray out = new JSONArray();
+        try {
+            for (int i = 0; i < in.length(); i++) {
+                JSONObject m = in.optJSONObject(i);
+                if (m == null) continue;
+                JSONObject copy = new JSONObject();
+                java.util.Iterator<String> keys = m.keys();
+                while (keys.hasNext()) {
+                    String k = keys.next();
+                    if ("reasoning_content".equals(k) || "reasoning".equals(k)) continue;
+                    copy.put(k, m.get(k));
+                }
+                out.put(copy);
+            }
+            return out;
+        } catch (Throwable t) {
+            return in;          // never break a request just because the cleanup failed
+        }
+    }
+
     /** the live connection, so the Stop button can abort a blocked read */
     private static volatile HttpURLConnection active;
+
+    /** endpoints that already answered 400 to our optional extras: learned at runtime, keyed by base URL,
+     *  so no provider is special-cased in code - the app just stops repeating the rejected field */
+    private static final java.util.Set<String> plainOnly =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
 
     /** set by Stop, cleared when a new run starts - so a cancel is never lost to a race */
     private static volatile boolean cancelled;
@@ -56,6 +83,24 @@ final class AiClient {
 
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int thinking, int timeoutSec, StreamCb cb) {
+        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, 4096, cb);
+    }
+
+    /** same call with an explicit output cap - the local planner asks for ~512 */
+    static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
+                          JSONArray tools, double temperature, int thinking, int timeoutSec,
+                          int maxTokens, StreamCb cb) {
+        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, maxTokens, cb, false);
+    }
+
+    /**
+     * providers differ: some accept the extra fields the DeepSeek-compatible ones take (thinking,
+     * reasoning_effort) and reject anything they do not know with HTTP 400. {@code minimal} drops every
+     * provider-specific extra so a plain OpenAI-compatible body can be retried. No provider is named here.
+     */
+    static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
+                          JSONArray tools, double temperature, int thinking, int timeoutSec,
+                          int maxTokens, StreamCb cb, boolean minimal) {
         Reply out = new Reply();
         HttpURLConnection conn = null;
         try {
@@ -74,24 +119,25 @@ final class AiClient {
             String base = baseUrl.trim();
             while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
             String url = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
+            if (!minimal && plainOnly.contains(base)) minimal = true;   // this endpoint already said no
 
             JSONObject body = new JSONObject();
             body.put("model", model.trim());
-            body.put("messages", messages);
+            body.put("messages", minimal ? plainMessages(messages) : messages);
             body.put("temperature", temperature);
-            body.put("max_tokens", 4096);
+            body.put("max_tokens", maxTokens > 0 ? maxTokens : 4096);
             body.put("stream", true);
             // ask for the usage block even in streaming mode - it carries the cache-hit numbers
             try { body.put("stream_options", new JSONObject().put("include_usage", true)); }
             catch (Throwable ignored) { }
             // thinking is ON by default on DeepSeek v4 - off is the fastest path for UI work
-            if (thinking == 0) {
+            if (!minimal && thinking == 0) {
                 JSONObject t = new JSONObject();
                 t.put("type", "disabled");
                 body.put("thinking", t);
-            } else if (thinking == 1) {
+            } else if (!minimal && thinking == 1) {
                 body.put("reasoning_effort", "low");
-            } else if (thinking == 2) {
+            } else if (!minimal && thinking == 2) {
                 body.put("reasoning_effort", "high");
             }
             if (tools != null && tools.length() > 0) {
@@ -124,6 +170,20 @@ final class AiClient {
             if (code >= 400) {
                 out.error = "HTTP " + code + ": " + cut(slurp(conn.getErrorStream()), 600);
                 android.util.Log.e("AIssistants", "HTTP " + code + " from " + url + " :: " + out.error);
+                // a provider that rejects our optional extras answers 400; retry the plain OpenAI body once
+                if (code == 400 && !minimal) {
+                    plainOnly.add(base);      // remember: this endpoint does not take our extras
+                    android.util.Log.i("AIssistants", "HTTP 400 - ulang tanpa field khusus provider (diingat untuk " + base + ")");
+                    Reply plain = complete(baseUrl, apiKey, model, messages, tools, temperature, thinking,
+                            timeoutSec, maxTokens, cb, true);
+                    boolean plainOk = plain != null && plain.ok
+                            && (plain.error == null || plain.error.isEmpty());
+                    if (plainOk) return plain;
+                    if (plain != null && plain.error != null && !plain.error.isEmpty()) {
+                        out.error = plain.error;
+                        android.util.Log.e("AIssistants", "HTTP 400 also on the plain body :: " + out.error);
+                    }
+                }
                 return out;
             }
 
@@ -150,7 +210,8 @@ final class AiClient {
                 }
                 if (!line.startsWith("data:")) continue;
                 String chunkText = line.substring(5).trim();
-                if (chunkText.isEmpty() || "[DONE]".equals(chunkText)) continue;
+                if (chunkText.isEmpty()) continue;
+                if ("[DONE]".equals(chunkText)) break;   // stream finished: stop reading at once
                 JSONObject chunk;
                 try {
                     chunk = new JSONObject(chunkText);

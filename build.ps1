@@ -96,9 +96,22 @@ foreach ($d in "classes", "dex", "gen", "apk", "res") {
   New-Item -ItemType Directory -Force -Path (Join-Path $Build $d) | Out-Null
 }
 
+Say "[0/6] aapt2 resources -> R.java (javac needs it, so it must run before the compile)"
+& $aapt2 compile --dir (Join-Path $Src "res") -o (Join-Path $Build "res.zip")
+if ($LASTEXITCODE -ne 0) { Die "aapt2 compile failed" }
+& $aapt2 link -o (Join-Path $Build "apk\base.apk") -I $AJar `
+  --manifest (Join-Path $Src "manifest\AndroidManifest.xml") `
+  --java (Join-Path $Build "gen") `
+  --min-sdk-version 26 --target-sdk-version 35 --no-version-vectors (Join-Path $Build "res.zip")
+if ($LASTEXITCODE -ne 0) { Die "aapt2 link failed" }
+$genR = Get-ChildItem (Join-Path $Build "gen") -Recurse -Filter R.java -ErrorAction SilentlyContinue
+if (-not $genR) { Die "aapt2 did not generate R.java under $Build\gen" }
+
 Say "[1/6] compiling java"
 $javaSrc = (Get-ChildItem (Join-Path $Src "src") -Recurse -Filter *.java).FullName
 if (-not $javaSrc) { Die "no sources under $Src\src" }
+# R.java lives in build\gen (outside src), so add the generated sources to the compile set
+$javaSrc += (Get-ChildItem (Join-Path $Build "gen") -Recurse -Filter *.java -ErrorAction SilentlyContinue).FullName
 & $Javac -nowarn --release 11 -cp $AJar -d (Join-Path $Build "classes") @javaSrc
 if ($LASTEXITCODE -ne 0) { Die "javac failed" }
 
