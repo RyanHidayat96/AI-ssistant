@@ -982,7 +982,6 @@ public class MainActivity extends Activity {
         pm.getMenu().add(0, 3, 2, "Settings");
         pm.getMenu().add(0, 4, 3, "Clear this chat");
         pm.getMenu().add(0, 5, 4, "Models & providers");
-        pm.getMenu().add(0, 6, 5, "Device hygiene");
         pm.getMenu().add(0, 7, 6, "Overlay mengambang");
         pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
             @Override public boolean onMenuItemClick(android.view.MenuItem item) {
@@ -991,7 +990,6 @@ public class MainActivity extends Activity {
                 else if (item.getItemId() == 3) showSettings();
                 else if (item.getItemId() == 4) confirmClear();
                 else if (item.getItemId() == 5) showModels();
-                else if (item.getItemId() == 6) showHygiene();
                 else if (item.getItemId() == 7) toggleOverlay();
                 return true;
             }
@@ -1391,9 +1389,30 @@ public class MainActivity extends Activity {
         groupChip.setPadding(dp(16), dp(12), dp(16), dp(12));
         setButtonA11y(groupChip, "Hide expanded commands");
         groupChip.setVisibility(View.GONE);
-        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
-        flp.setMargins(0, 0, dp(16), dp(150));
+        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL | Gravity.END);
+        flp.setMargins(0, 0, dp(10), 0);
         root.addView(groupChip, flp);
+        // keyboard-proof placement: reposition instead of hiding (hiding fought the scroll refresh and flickered)
+        final View rootRef = root;
+        try {
+            root.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                private boolean wasIme = false;
+                @Override public void onGlobalLayout() {
+                    try {
+                        android.graphics.Rect r = new android.graphics.Rect();
+                        rootRef.getWindowVisibleDisplayFrame(r);
+                        int imeH = getResources().getDisplayMetrics().heightPixels - r.bottom;
+                        boolean ime = imeH > dp(140);
+                        if (ime == wasIme) return;            // only act on a real change - no layout churn
+                        wasIme = ime;
+                        FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) groupChip.getLayoutParams();
+                        p.gravity = ime ? (Gravity.BOTTOM | Gravity.END) : (Gravity.CENTER_VERTICAL | Gravity.END);
+                        p.setMargins(0, 0, dp(10), ime ? (imeH + dp(96)) : 0);
+                        groupChip.setLayoutParams(p);
+                    } catch (Throwable ignored) { }
+                }
+            });
+        } catch (Throwable ignored) { }
         groupChip.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 Object tag = groupChip.getTag();
@@ -3391,6 +3410,8 @@ public class MainActivity extends Activity {
 
     /** run one command as root, echo it in the chat, return the output for the model */
     private String runCommand(String cmd) {
+        // blue edge: proves on screen which app the agent is driving right now
+        try { AgentBorder.ping(this, cmd); } catch (Throwable ignored) { }
         if (!store.autoRun()) {
             pending.add(cmd);
             addBubble("note", "queued (auto-run is off): " + firstLine(cmd));

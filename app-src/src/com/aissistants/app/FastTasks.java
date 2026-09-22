@@ -193,15 +193,11 @@ final class FastTasks {
         r("airplane-on", "(mode pesawat|airplane mode|mode terbang)", "",
           "cmd connectivity airplane-mode enable 2>/dev/null || settings put global airplane_mode_on 1; echo on",
           "system", "Mode pesawat aktif.", false),
+        // app force-stop / pm clear intentionally NOT local: guessing the target package from a
+        // sentence once killed an unrelated app. Route those through the gated agent path.
         r("airplane-off", "(matikan mode pesawat|airplane mode off)", "",
           "cmd connectivity airplane-mode disable 2>/dev/null || settings put global airplane_mode_on 0; echo off",
           "system", "Mode pesawat dimatikan.", false),
-        r("app-force-stop", "((matiin|matikan|tutup|kill|force ?stop|stop)(kan)? (app |aplikasi )?)", "pkg",
-          "am force-stop {pkg} && echo stopped {pkg}",
-          "system", "Aplikasi dihentikan: {pkg}", false),
-        r("app-clear", "((hapus|bersihkan|clear)(kan)? (data|cache) (app |aplikasi )?)", "pkg",
-          "pm clear {pkg}",
-          "destructive", "Data aplikasi dibersihkan: {out}", true),
         r("apk-install", "((install|pasang)(kan)? (apk|aplikasi))", "arg",
           "pm install -r -d {arg} 2>&1 | tail -3",
           "install", "Hasil install: {out}", true),
