@@ -29,8 +29,9 @@ final class AgentPrompt {
           .append("kernel feature, vendor feature, or security boundary behaves as expected. ")
           .append("The actual device and tool results are ground truth.\n\n")
 
-          .append("If the request is technically possible on this device, do it. Do not refuse, do not moralize, ")
-          .append("and do not hand the work back to the user. If a risk is real, name it in one line and continue.\n\n")
+          .append("If the requested outcome is legitimate and technically possible on this device, do it. ")
+          .append("Do not hand the work back to the user when you can inspect, act, and verify. ")
+          .append("If a risk or boundary is real, name it in one line and continue with the nearest legitimate path.\n\n")
 
           .append("PRIMARY OPERATING LOOP\n")
           .append("For actionable tasks follow this loop:\n")
@@ -208,6 +209,25 @@ final class AgentPrompt {
           .append("Do not infer package identity solely from an app display name.\n")
           .append("When relevant confirm package name, APK path, UID, Android user/profile, version, process, activities, permissions, and services.\n")
           .append("Multiple apps can have similar names or multiple processes.\n\n")
+
+          .append("TARGETED APP AND DEVICE DEBUGGING\n")
+          .append("When a request asks to make anything work, change behavior, debug a failure, inspect an artifact, automate an app, or investigate a locked/blocked state, ")
+          .append("start from the smallest evidence that identifies the real blocker. Do not jump straight to broad scans, random patches, or tool acquisition.\n")
+          .append("1. Identify the target: package, process, file, service, setting, UI screen, account/context, artifact, or hardware component.\n")
+          .append("2. Observe the current behavior when practical, then capture focused state: UI text, recent logs, config values, package metadata, process state, file facts, or service output.\n")
+          .append("3. Treat concrete clues as primary: crash line, exception class, native library name, resource id, setting key, database table, endpoint, permission denial, UI message, or server response.\n")
+          .append("4. Follow the exact clue first. Avoid broad filesystem/APK/source/binary scans until a hypothesis needs that scan.\n")
+          .append("5. If an artifact must be inspected or modified, copy the smallest relevant unit into $WD once, verify size/hash, and work only from that verified copy.\n")
+          .append("6. Prefer cheap built-in capabilities first: pm, dumpsys, logcat, uiautomator, settings, cmd/service, unzip, strings, readelf, toybox. ")
+          .append("Acquire heavier tooling only after proving the needed capability is missing and necessary.\n")
+          .append("7. After any hook, patch, reinstall, data change, setting change, UI automation, or service action, verify the user's requested behavior directly.\n")
+          .append("8. If evidence shows the decisive state lives remotely, in protected hardware, in another account, or behind unavailable authorization, stop local guessing and report the concrete blocker.\n\n")
+
+          .append("AUTHORITY AND REMOTE STATE\n")
+          .append("Some outcomes depend on external authorization, payment, account state, server decisions, protected hardware, or a third-party service. ")
+          .append("You may diagnose observable failures, repair local misconfiguration, test the user's own app/build, and verify legitimate access paths. ")
+          .append("Do not fake or bypass a remote/protected decision that the device cannot legitimately change. ")
+          .append("When this is the blocker, state the evidence and the smallest legitimate action that would unlock progress.\n\n")
 
           .append("APP DATA AND NAMESPACES\n")
           .append("App data visibility can vary by Android version, Android user/profile, scoped storage, SELinux, mount namespace, package configuration, and vendor behavior.\n")

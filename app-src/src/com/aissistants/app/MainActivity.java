@@ -2686,6 +2686,15 @@ public class MainActivity extends Activity {
             if (r.handled) {
                 final String summary = r.summary;
                 final long ms = r.ms;
+                if ("app-diagnose".equals(r.planTitle) && shouldContinueAfterLocalDiagnosis(txt)) {
+                    appendPreflightEvidence(summary);
+                    ui.post(new Runnable() { @Override public void run() {
+                        addBubble("tool", summary);
+                        addBubble("note", "diagnosa lokal \u00b7 " + ms
+                                + " ms \u00b7 bukti awal siap \u00b7 lanjut agent");
+                    } });
+                    return false;
+                }
                 ui.post(new Runnable() { @Override public void run() {
                     addBubble("assistant", summary);
                     addBubble("note", "jalur lokal \u00b7 " + ms + " ms \u00b7 tanpa putaran agent");
@@ -2705,6 +2714,31 @@ public class MainActivity extends Activity {
             android.util.Log.e("AIssistants", "hybrid failed: " + t);
             return false;
         }
+    }
+
+    /** app diagnostics are only a preflight when the user asked for a change/fix, not only a report */
+    private static boolean shouldContinueAfterLocalDiagnosis(String txt) {
+        if (txt == null) return false;
+        String low = txt.toLowerCase(java.util.Locale.US);
+        String[] action = {"buat", "bikin", "perbaiki", "fix", "repair", "ubah", "ganti",
+                "aktifkan", "enable", "disable", "nonaktifkan", "hapus", "pasang", "install",
+                "patch", "modif", "modifikasi", "restore", "pulihkan", "selesaikan", "solve",
+                "agar", "supaya", "berfungsi", "bisa dipakai", "bisa digunakan", "jalan"};
+        for (String w : action) if (low.contains(w)) return true;
+        return false;
+    }
+
+    /** hand local preflight facts to the generic agent as observed evidence for the same user task */
+    private void appendPreflightEvidence(String evidence) {
+        try {
+            JSONObject m = new JSONObject();
+            m.put("role", "user");
+            m.put("content", "[LOCAL PREFLIGHT EVIDENCE for the current request. "
+                    + "Use it as observed device evidence. Do not repeat the same broad diagnostic; "
+                    + "continue with the narrowest next action and verify the user's requested outcome.]\n"
+                    + (evidence == null ? "" : evidence));
+            synchronized (messages) { messages.add(m); }
+        } catch (Throwable ignored) { }
     }
 
     /** close the run exactly like agentLoop's finally would, without touching the messages */
@@ -2928,12 +2962,12 @@ public class MainActivity extends Activity {
             Integer seen = analysisHits.get(key);
             int n = (seen == null ? 0 : seen) + 1;
             analysisHits.put(key, n);
-            if (n == 6 && analysisWarned.add(key)) {
+            if (n == 3 && analysisWarned.add(key)) {
                 return "\n[APP NOTE: " + n + " read-only commands on " + key + " without a conclusion. Preserve the "
-                     + "evidence, state what it proves and what fact is missing, then make one narrower check likely to "
-                     + "change the decision or move to the next task. Do not repeat a broad scan of unchanged input.]";
+                     + "evidence, state what it proves and what fact is missing, then make one narrower check or action "
+                     + "likely to change the decision. Prefer the current crash/UI/log clue over another broad scan.]";
             }
-            if (n == 14 && analysisWarned.add(key + "#stop")) {
+            if (n == 8 && analysisWarned.add(key + "#stop")) {
                 return "\n[APP NOTE: read-only loop budget reached on " + key + " after " + n + " steps. Report strongest "
                      + "evidence and remaining uncertainty, then use a different source or action. Do not inspect this "
                      + "unchanged target again in this run.]";

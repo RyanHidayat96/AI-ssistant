@@ -39,7 +39,10 @@ final class FastTasks {
             "tidak", "gak", "tdk", "bisa", "digunakan", "dipakai", "jalan", "error", "gagal", "nolak",
             "crash", "force", "close", "keluar", "suspicious", "activity", "detected", "tamper", "root",
             "yang", "dan", "atau", "saya", "aku", "gua", "the", "this", "that", "with", "from", "os",
-            "handphone", "hp", "device", "cek", "lihat", "tolong", "bantu", "adalah", "itu", "ini"));
+            "handphone", "hp", "device", "cek", "lihat", "tolong", "bantu", "adalah", "itu", "ini",
+            "agar", "supaya", "semua", "fitur", "fiturnya", "fungsi", "berfungsi", "perlu", "tanpa",
+            "vip", "premium", "pro", "subscribe", "subscription", "berlangganan", "langganan", "bayar",
+            "paid", "license", "lisensi", "purchase", "billing", "entitlement", "unlock", "terkunci"));
 
     private static final Rule[] RULES = {
         // ---- read-only device facts -------------------------------------------------------
@@ -105,9 +108,9 @@ final class FastTasks {
           "dumpsys notification 2>/dev/null | grep -c 'NotificationRecord'",
           "none", "Jumlah notifikasi aktif: {out}", true),
 
-        r("app-diagnose", "(?=.*(nolak|tidak bisa|gak bisa|tdk bisa|gagal|error|crash|force close|keluar sendiri|suspicious|tamper|kenapa|kok|why))(?=.*(app|aplikasi|@[a-z0-9_.]+))", "pkg",
+        r("app-diagnose", "(?=.*(nolak|tidak bisa|gak bisa|tdk bisa|gagal|error|crash|force close|keluar sendiri|suspicious|tamper|kenapa|kok|why|fitur|fungsi|berfungsi|vip|premium|pro|subscribe|subscription|berlangganan|langganan|bayar|paid|license|lisensi|purchase|billing|entitlement|unlock|terkunci))(?=.*(app|aplikasi|@[a-z0-9_.]+))", "pkg",
           "p={pkg}; echo '== IDENTITAS:'; dumpsys package $p 2>/dev/null | grep -E 'versionName|lastUpdateTime|installerPackageName|firstInstallTime' | head -4;"
-        + " echo '== ERROR TERAKHIR (logcat):'; (logcat -d -t 800 2>/dev/null | grep -iE \"$p|unknownhost|exception|integrity|tamper|licensecheck|pairip|zimperium|root\" | tail -16 || true);"
+        + " echo '== ERROR TERAKHIR (logcat):'; (logcat -d -t 800 2>/dev/null | grep -iE \"$p|unknownhost|exception|fatal|crash|integrity|tamper|license|licensecheck|billing|purchase|subscription|subscribe|premium|vip|entitlement|paywall|pairip|zimperium|root\" | tail -24 || true);"
         + " echo '== JEJAK OS YANG DIBACA APP:'; f=$(ps -A 2>/dev/null | grep -icE 'frida|objection'); h=$(ss -ltn 2>/dev/null | grep -cE '27042|27043'); echo \"proses-hook=$f port-hook=$h selinux=$(getenforce) dev_opts=$(settings get global development_settings_enabled) mock=$(settings get secure mock_location)\";"
         + " echo '== RESIDU BINER:'; (ls -d /data/local/tmp/*frida* /data/local/tmp/re.frida.server /data/local/tmp/ai-ssistants/*/frida-server 2>/dev/null || echo '  tidak ada');"
         + " echo '== DI DEPAN:'; (dumpsys window 2>/dev/null | grep -m4 mCurrentFocus | grep -v com.aissistants.app | head -2 || true);"
