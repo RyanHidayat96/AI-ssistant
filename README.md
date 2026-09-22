@@ -6,7 +6,8 @@ back to the model, so it can continue, verify and recover on its own.
 
 ## Requirements
 
-- Android 11+ device with root (KernelSU or Magisk). Built and tested against Android 16 / API 35.
+- Android 8.0+ device (minSdk 26) with root (KernelSU or Magisk); developed and tested on Android 16
+  (targetSdk 35).
 - JDK 17 or newer.
 - Android SDK: build-tools 35.0.0 and platform android-35.
 - No Gradle. `build.ps1` drives aapt2, javac, d8, zipalign and apksigner directly.
