@@ -23,7 +23,7 @@ import android.view.WindowManager;
  */
 public final class AgentBorder {
 
-    private static final long HOLD_MS = 25000L;   // keep it visible this long after the last driving command
+    private static final long HOLD_MS = 4000L;   // keep it visible this long after the last driving command
     private static final Handler H = new Handler(Looper.getMainLooper());
 
     private static View view;
@@ -37,11 +37,7 @@ public final class AgentBorder {
     public static void ping(Context ctx, String cmd) {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
-            boolean drives = c.matches("(?s).*\\b(monkey|am)\\s+start.*")
-                    || c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
-                    || c.matches("(?s).*\\bcmd\\s+activity\\b.*")
-                    || c.matches("(?s).*\\bscreencap\\b.*")
-                    || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
+            boolean drives = drivesTargetApp(c);
             if (!drives) return;
             android.util.Log.i("AIssistants", "border ping hit: " + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
@@ -52,6 +48,43 @@ public final class AgentBorder {
         } catch (Throwable ignored) { }
     }
 
+    /** Enter a UI-critical phase before the command can read or touch another app. */
+    public static void prepareTargetScreen(Context ctx, String cmd) {
+        try {
+            String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
+            if (!drivesTargetApp(c)) return;
+            OverlayView.standDownForAgent();
+        } catch (Throwable ignored) { }
+    }
+
+    private static boolean drivesTargetApp(String c) {
+        return c.matches("(?s).*\\bmonkey\\b.*")
+                || c.matches("(?s).*\\bam\\s+start\\b.*")
+                || c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
+                || c.matches("(?s).*\\bcmd\\s+activity\\b.*")
+                || c.matches("(?s).*\\bscreencap\\b.*")
+                || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
+    }
+
+
+    private static long lastFocusCheck;
+
+    /** If our own overlay is the one holding focus while the agent drives another app, get out of the way
+     *  immediately: release the borrowed focus and drop our windows. The agent should never lose taps or
+     *  UI reads to its own panel. */
+    public static void standDownIfOurs(Context ctx) {
+        try {
+            long now = System.currentTimeMillis();
+            if (now - lastFocusCheck < 2500L) return;      // cheap: at most one probe per 2.5s
+            lastFocusCheck = now;
+            String out = RootShell.run("dumpsys window | grep -m1 mCurrentFocus", 6);
+            if (out == null || !out.contains("com.aissistants.app")) return;
+            android.util.Log.i("AIssistants", "overlay held focus - standing down (release + hide)");
+            try { OverlayView.standDownForAgent(); } catch (Throwable ignored) { }
+            hide();
+        } catch (Throwable ignored) { }
+    }
+
     public static void hide() {
         H.post(new Runnable() { @Override public void run() { drop(); } });
     }
@@ -59,7 +92,7 @@ public final class AgentBorder {
     private static void drop() {
         try {
             if (pulse != null) { pulse.stop(); pulse = null; }
-            if (view != null && wm != null) wm.removeViewImmediate(view);
+            if (view != null && wm != null) { wm.removeViewImmediate(view); android.util.Log.i("AIssistants", "border gone"); }
         } catch (Throwable ignored) { }
         view = null;
     }
@@ -119,6 +152,8 @@ public final class AgentBorder {
             c.drawRoundRect(r, radius, radius, p);
             p.setStrokeWidth(p.getStrokeWidth() / 2.5f);
         }
+
+        void setGlow(float g) { glow = g; }
     }
 
     /** slow breathe in/out so a glance tells whether the agent is still working */
@@ -138,9 +173,7 @@ public final class AgentBorder {
             try {
                 double ph = (System.currentTimeMillis() - t0) / 900.0;
                 float g = (float) (0.65 + 0.35 * Math.sin(ph));
-                java.lang.reflect.Field f = Edge.class.getDeclaredField("glow");
-                f.setAccessible(true);
-                f.setFloat(v, g);
+                ((Edge) v).setGlow(g);
                 v.invalidate();
             } catch (Throwable ignored) { }
             H.postDelayed(this, 40);

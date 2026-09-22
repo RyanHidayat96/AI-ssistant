@@ -17,6 +17,8 @@ final class OverlayHub {
     private static volatile boolean stopRequested = false;
     private static volatile boolean visible = false;
     private static volatile boolean busy = false;
+    /** The agent closed its panel before driving another app; do not recreate it mid-run. */
+    private static volatile boolean suppressedForDriving = false;
     private static volatile int version = 0;
 
     private OverlayHub() { }
@@ -97,4 +99,8 @@ final class OverlayHub {
 
     static void setVisible(boolean v) { visible = v; }
     static boolean isVisible() { return visible; }
+
+    static void suppressForDriving() { suppressedForDriving = true; }
+    static void allowOverlayForRun() { suppressedForDriving = false; }
+    static boolean overlaySuppressedForDriving() { return suppressedForDriving; }
 }

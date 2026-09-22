@@ -5,8 +5,8 @@ import java.util.List;
 
 /**
  * One app's fast path. The adapter only DESCRIBES the steps (intents, root commands, UI conditions);
- * the executor in {@link HybridRouter} runs them generically. Adding support for another app =
- * write one subclass + register it in {@link Adapters}.
+ * the executor in the deleted local path runs them generically. Adding support for another app =
+ * write one subclass + kept for reference.
  */
 abstract class AppAdapter {
 
@@ -60,11 +60,67 @@ abstract class AppAdapter {
     abstract boolean handles(String action);
 
     /** describe the run; return null when this adapter cannot serve the spec */
-    abstract Plan plan(LocalParser.Spec spec, HybridRouter.Host host);
+    abstract Plan plan(Spec spec, Host host);
 
     // selector helpers --------------------------------------------------------------
     static String id(String s) { return "id:" + s; }
     static String text(String s) { return "text:" + s; }
     static String desc(String s) { return "desc:" + s; }
     static String act(String s) { return "act:" + s; }
+
+    /** The local fast path was deleted. These types survive only because GenericApp needs them. */
+    static final class Spec {
+        String action = "", app = "", pkg = "", target = "", text = "";
+        String risk = "none";
+        double confidence = 0;
+        String why = "";
+        boolean executable() { return !action.isEmpty() && confidence >= 0.7; }
+        @Override public String toString() { return action + (app.isEmpty() ? "" : " app=" + app); }
+    }
+
+    interface Host {
+        String run(String cmd, int timeoutSec);
+        String contactNumber(String name);
+        android.content.Context ctx();
+        void bubble(String role, String text);
+    }
+
+    private static String genericSearchButton(String pkg) {
+        return AppAdapter.desc("Search") + "|" + AppAdapter.desc("Cari") + "|" + AppAdapter.text("Search") + "|" + AppAdapter.text("Cari")
+                + "|" + AppAdapter.id(pkg + ":id/search") + "|" + AppAdapter.id(pkg + ":id/menu_search")
+                + "|" + AppAdapter.id(pkg + ":id/search_button") + "|" + AppAdapter.id(pkg + ":id/action_search");
+    }
+    private static String genericSearchField(String pkg) {
+        return AppAdapter.id(pkg + ":id/search_src_text") + "|" + AppAdapter.id(pkg + ":id/search_text")
+                + "|" + AppAdapter.id(pkg + ":id/search_input") + "|" + AppAdapter.id(pkg + ":id/search_edit_text")
+                + "|" + AppAdapter.text("Search") + "|" + AppAdapter.text("Cari") + "|" + AppAdapter.desc("Search") + "|" + AppAdapter.desc("Cari");
+    }
+
+    /** the user's own adapter, moved here when the local executor was deleted */
+    static final class GenericApp extends AppAdapter {
+        @Override String pkg() { return ""; }
+        @Override String name() { return "App"; }
+        @Override boolean handles(String action) {
+            return "open".equals(action) || "search".equals(action);
+        }
+        @Override Plan plan(Spec spec, Host host) {
+            if (spec.pkg.isEmpty()) return null;
+            String label = spec.app.isEmpty() ? spec.pkg : spec.app;
+            if ("open".equals(spec.action)) {
+                return new Plan(spec.pkg, "Buka " + label)
+                        .add(Action.intent("android.intent.action.MAIN", "app:" + spec.pkg))
+                        .success("Dibuka: " + label);
+            }
+            String searchBtn = genericSearchButton(spec.pkg);
+            String searchField = genericSearchField(spec.pkg);
+            return new Plan(spec.pkg, "Cari di " + label + ": " + spec.target)
+                    .add(Action.intent("android.intent.action.MAIN", "app:" + spec.pkg))
+                    .add(Action.wait(searchBtn + "|" + searchField, 7000))
+                    .add(Action.tap(searchBtn + "|" + searchField))
+                    .add(Action.wait(searchField, 5000))
+                    .add(Action.input(searchField, spec.target))
+                    .add(Action.verify(text(spec.target), 8000))
+                    .success("Hasil pencarian \"" + spec.target + "\" dibuka di " + label + ".");
+        }
+    }
 }

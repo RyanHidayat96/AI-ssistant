@@ -14,8 +14,8 @@ final class Hygiene {
     private Hygiene() { }
 
     /** kill hooking servers, delete their binaries, restore SELinux - never touches /data/adb */
-    static String clean(HybridRouter.Host host) {
-        String out = host == null ? "" : host.run(cleanCmd(), 30);
+    static String clean() {
+        String out = RootShell.run(cleanCmd(), 30);
         return out == null ? "" : out.trim();
     }
 
@@ -65,8 +65,8 @@ final class Hygiene {
     }
 
     /** human-readable integrity triage: what an anti-tamper SDK would see right now */
-    static String scan(HybridRouter.Host host) {
-        String out = host == null ? "" : host.run(scanCmd(), 40);
+    static String scan() {
+        String out = RootShell.run(scanCmd(), 40);
         return out == null ? "" : out.trim();
     }
 

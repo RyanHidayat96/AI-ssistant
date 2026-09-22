@@ -192,17 +192,20 @@ final class AiClient {
             StringBuilder reasoning = new StringBuilder();
             StringBuilder raw = new StringBuilder();
             TreeMap<Integer, JSONObject> calls = new TreeMap<>();
-            boolean sse = false;
+            boolean sse = conn.getContentType() != null && conn.getContentType().contains("text/event-stream");
             boolean first = true;
+            boolean done = false;
+            String finishReason = "";
             String line;
             while ((line = br.readLine()) != null) {
                 if (cancelled) {
                     out.error = "stopped";
                     return out;
                 }
+                if (first && line.trim().isEmpty()) continue;
                 if (first) {
                     first = false;
-                    sse = line.startsWith("data:");
+                    sse = sse || line.startsWith("data:") || line.startsWith(":") || line.startsWith("event:");
                 }
                 if (!sse) {
                     raw.append(line).append('\n');
@@ -211,12 +214,17 @@ final class AiClient {
                 if (!line.startsWith("data:")) continue;
                 String chunkText = line.substring(5).trim();
                 if (chunkText.isEmpty()) continue;
-                if ("[DONE]".equals(chunkText)) break;   // stream finished: stop reading at once
+                if ("[DONE]".equals(chunkText)) { done = true; break; }
                 JSONObject chunk;
                 try {
                     chunk = new JSONObject(chunkText);
                 } catch (Throwable t) {
-                    continue;
+                    out.error = "invalid stream frame; no commands were executed";
+                    return out;
+                }
+                if (chunk.has("error")) {
+                    out.error = "provider stream error: " + cut(chunk.optString("error"), 400);
+                    return out;
                 }
                 JSONObject usage = chunk.optJSONObject("usage");
                 if (usage != null) {
@@ -230,6 +238,8 @@ final class AiClient {
                 if (choices == null || choices.length() == 0) continue;
                 JSONObject choice = choices.optJSONObject(0);
                 if (choice == null) continue;
+                Object finish = choice.opt("finish_reason");
+                if (finish instanceof String) finishReason = (String) finish;
                 JSONObject delta = choice.optJSONObject("delta");
                 if (delta == null) continue;
 
@@ -269,7 +279,10 @@ final class AiClient {
                                 acc.put("function", afn);
                             }
                             Object nv = dfn.opt("name");
-                            if (nv instanceof String) afn.put("name", afn.optString("name", "") + nv);
+                            if (nv instanceof String) {
+                                String cur = afn.optString("name", "");
+                                afn.put("name", cur.isEmpty() ? (String) nv : cur);
+                            }
                             Object av = dfn.opt("arguments");
                             if (av instanceof String) afn.put("arguments", afn.optString("arguments", "") + av);
                         }
@@ -278,6 +291,16 @@ final class AiClient {
             }
 
             if (sse) {
+                if ((!done && finishReason.isEmpty()) || "length".equals(finishReason)
+                        || "content_filter".equals(finishReason)) {
+                    out.error = "incomplete model response (" + (finishReason.isEmpty()
+                            ? "stream disconnected" : finishReason) + "); no commands were executed";
+                    return out;
+                }
+                if (content.length() == 0 && calls.isEmpty()) {
+                    out.error = "empty model response; no commands were executed";
+                    return out;
+                }
                 out.ok = true;
                 out.text = content.toString();
                 out.reasoning = reasoning.toString();
@@ -292,6 +315,11 @@ final class AiClient {
             JSONArray choices = resp.optJSONArray("choices");
             JSONObject message = null;
             if (choices != null && choices.length() > 0 && choices.optJSONObject(0) != null) {
+                String finish = choices.optJSONObject(0).optString("finish_reason", "");
+                if ("length".equals(finish) || "content_filter".equals(finish)) {
+                    out.error = "incomplete model response (" + finish + "); no commands were executed";
+                    return out;
+                }
                 message = choices.optJSONObject(0).optJSONObject("message");
                 if (message == null) {
                     String plain = choices.optJSONObject(0).optString("text", "");

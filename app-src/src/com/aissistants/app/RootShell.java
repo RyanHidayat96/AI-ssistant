@@ -170,16 +170,18 @@ final class RootShell {
             if (!openShellLocked()) return null;
             final String id = String.valueOf(System.nanoTime());
             try {
-                shellIn.write("(" + script + ") < /dev/null 2>&1; echo " + MARK + id + "_$?\n");
+                // Marker starts on its own line even when command output has no trailing newline.
+                shellIn.write("(\n" + script + "\n) < /dev/null 2>&1; "
+                        + "printf '\\n" + MARK + id + "_%s\\n' \"$?\"\n");
                 shellIn.flush();
             } catch (Throwable t) {
                 closeShell();
                 shellBroken = true;
-                return null;
+                return "[uncertain delivery: shell write failed; inspect state before retrying]";
             }
             final StringBuilder sb = new StringBuilder();
             final int[] rc = new int[]{-1};
-            final boolean[] sawMark = new boolean[]{false};
+            final java.util.concurrent.atomic.AtomicBoolean sawMark = new java.util.concurrent.atomic.AtomicBoolean();
             final java.io.BufferedReader r = shellOut;
             Thread reader = new Thread(new Runnable() {
                 @Override public void run() {
@@ -189,7 +191,7 @@ final class RootShell {
                             if (line.startsWith(MARK + id + "_")) {
                                 try { rc[0] = Integer.parseInt(line.substring((MARK + id + "_").length()).trim()); }
                                 catch (Throwable ignored) { }
-                                sawMark[0] = true;
+                                sawMark.set(true);
                                 return;
                             }
                             if (sb.length() < MAX_OUT) sb.append(line).append('\n');
@@ -200,7 +202,7 @@ final class RootShell {
             reader.setDaemon(true);
             reader.start();
             long deadline = System.currentTimeMillis() + Math.max(1, timeoutSec) * 1000L;
-            while (!sawMark[0]) {
+            while (!sawMark.get()) {
                 if (cancelled) {
                     closeShell();                      // killing the session kills the running command
                     return "[stopped by user]";

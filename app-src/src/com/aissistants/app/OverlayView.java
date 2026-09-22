@@ -100,6 +100,7 @@ final class OverlayView {
 
     static void show(Context ctx) {
         try {
+            if (OverlayHub.overlaySuppressedForDriving()) return;
             if (!canDraw(ctx)) return;
             if (current != null) { current.attach(); return; }
             current = new OverlayView(ctx);
@@ -117,6 +118,41 @@ final class OverlayView {
             android.util.Log.e("AIssistants", "overlay hide failed: " + t);
         }
         current = null;
+    }
+
+    /**
+     * The agent is about to observe or control a different app. Remove the full interactive
+     * panel, not merely its input focus: FLAG_NOT_TOUCH_MODAL still lets the panel consume taps
+     * inside its own bounds. Suppression prevents lifecycle/service callbacks from recreating it
+     * between a launch and the next UI action. The notification and non-touchable AgentBorder
+     * remain available as progress indicators.
+     */
+    static void standDownForAgent() {
+        OverlayHub.suppressForDriving();
+        final Runnable remove = new Runnable() {
+            @Override public void run() {
+                try {
+                    OverlayView ov = current;
+                    current = null;
+                    if (ov != null) ov.detach();
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistants", "overlay agent stand-down failed: " + t);
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            remove.run();
+            return;
+        }
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override public void run() {
+                try { remove.run(); }
+                finally { done.countDown(); }
+            }
+        });
+        try { done.await(350, java.util.concurrent.TimeUnit.MILLISECONDS); }
+        catch (Throwable ignored) { }
     }
 
     static boolean visible() { return current != null && current.panel != null; }
