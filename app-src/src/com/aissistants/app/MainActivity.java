@@ -3942,8 +3942,8 @@ public class MainActivity extends Activity {
             @Override public void run() {
                 int content = chatLog.getMeasuredHeight();
                 // pinned to the end? then stay pinned no matter how much was just added.
-                // NOTE: scrollTo, never fullScroll - fullScroll() calls requestChildFocus and would rip
-                // the caret out of the composer the moment the keyboard opens.
+                // scrollTo only: fullScroll() calls requestChildFocus and moves the caret out of the
+                // composer whenever the keyboard opens.
                 if (force || chatAtBottom) chatScroll.scrollTo(0, content);
             }
         });

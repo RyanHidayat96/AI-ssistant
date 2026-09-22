@@ -69,9 +69,13 @@ final class OverlayView {
         this.lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                // focusable on purpose: the user types prompts right in the panel (outside taps
-                // still reach the app underneath thanks to NOT_TOUCH_MODAL)
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                // NON-focusable by default. A driving agent verifies the target app through
+                // `dumpsys window | grep mCurrentFocus` and uiautomator: if this panel holds the
+                // input focus those checks see the panel instead of the app being driven, and the
+                // agent "loses" the app. Focus is lent to the panel only while the user types
+                // (useIme(true)), and outside taps still reach the app via NOT_TOUCH_MODAL.
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT);
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         lp.gravity = Gravity.TOP | Gravity.START;
@@ -122,6 +126,9 @@ final class OverlayView {
         if (panel != null) return;
         panel = build();
         try {
+            // keep the panel out of accessibility trees: uiautomator dumps drive the agent, and the
+            // panel's nodes would otherwise show up in them as if they were part of the target app
+            panel.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
             wm.addView(panel, lp);
             OverlayHub.setVisible(true);
             startTimer();
@@ -283,7 +290,7 @@ final class OverlayView {
             @Override public void onClick(View v) { grabIme(); }
         });
         input.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-            @Override public void onFocusChange(View v, boolean has) { if (has) grabIme(); }
+            @Override public void onFocusChange(View v, boolean has) { if (has) grabIme(); else useIme(false); }
         });
         row.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
         row.addView(chip("\u2191", ACCENT, ON_ACCENT, new Runnable() {
@@ -322,6 +329,7 @@ final class OverlayView {
         }
         input.setText("");
         OverlayHub.line("> " + text);
+        useIme(false);            // give the input focus straight back to the app being driven
         try { host.overlaySend(text); }
         catch (Throwable t) { OverlayHub.line("gagal kirim: " + t); }
     }
@@ -332,15 +340,57 @@ final class OverlayView {
     private void grabIme() {
         try {
             if (input == null) return;
+            useIme(true);                     // the window must be focusable before the IME can attach
             input.requestFocus();
             Object svc = ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
             if (svc instanceof android.view.inputmethod.InputMethodManager) {
                 ((android.view.inputmethod.InputMethodManager) svc)
                         .showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
             }
+            armFocusTimeout();
         } catch (Throwable t) {
             android.util.Log.e("AIssistants", "overlay ime: " + t);
         }
+    }
+
+    /**
+     * Lend the input focus to the panel (on) or hand it back to the app being driven (off).
+     * A focusable overlay makes `dumpsys window | grep mCurrentFocus` and uiautomator report the
+     * panel, so an agent that is driving another app thinks it lost that app - hence: focus only
+     * while the user is actually typing.
+     */
+    private void useIme(boolean on) {
+        try {
+            if (panel == null) return;
+            int before = lp.flags;
+            if (on) lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            else lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            if (lp.flags != before) wm.updateViewLayout(panel, lp);
+            if (!on) {
+                Object svc = ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (svc instanceof android.view.inputmethod.InputMethodManager) {
+                    ((android.view.inputmethod.InputMethodManager) svc)
+                            .hideSoftInputFromWindow(panel.getWindowToken(), 0);
+                }
+                if (input != null) input.clearFocus();
+                focusIdle = null;
+            }
+            android.util.Log.i("AIssistants", "overlay focusable=" + on);
+        } catch (Throwable t) {
+            android.util.Log.e("AIssistants", "overlay focus toggle: " + t);
+        }
+    }
+
+    /** a panel left focusable mid-run would keep the agent blind to the app it drives */
+    private Runnable focusIdle;
+
+    private void armFocusTimeout() {
+        if (timer == null) return;
+        if (focusIdle != null) timer.removeCallbacks(focusIdle);
+        focusIdle = new Runnable() {
+            @Override public void run() { useIme(false); }
+        };
+        timer.postDelayed(focusIdle, 45000L);
     }
 
     private boolean isAtBottom() {

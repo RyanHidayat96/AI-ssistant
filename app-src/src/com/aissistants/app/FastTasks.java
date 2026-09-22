@@ -65,7 +65,7 @@ final class FastTasks {
           "ip -4 addr show 2>/dev/null | grep -E 'inet ' | grep -v 127.0.0.1",
           "none", "IP: {out}", true),
         r("foreground", "(aplikasi (apa|yang) (lagi )?(terbuka|di depan|jalan)|app (apa )?(di depan|foreground)|lagi buka apa|current app)", "",
-          "dumpsys window | grep -m1 mCurrentFocus",
+          "dumpsys window | grep -m4 mCurrentFocus | grep -v com.aissistants.app | head -1",
           "none", "Di depan sekarang: {out}", true),
         r("top-cpu", "(proses (paling )?(berat|banyak|makan|ram|cpu)|top process|proses terberat|process(es)? top)", "",
           "top -b -n1 -o %CPU 2>/dev/null | head -14",
@@ -110,12 +110,12 @@ final class FastTasks {
         + " echo '== ERROR TERAKHIR (logcat):'; (logcat -d -t 800 2>/dev/null | grep -iE \"$p|unknownhost|exception|integrity|tamper|licensecheck|pairip|zimperium|root\" | tail -16 || true);"
         + " echo '== JEJAK OS YANG DIBACA APP:'; f=$(ps -A 2>/dev/null | grep -icE 'frida|objection'); h=$(ss -ltn 2>/dev/null | grep -cE '27042|27043'); echo \"proses-hook=$f port-hook=$h selinux=$(getenforce) dev_opts=$(settings get global development_settings_enabled) mock=$(settings get secure mock_location)\";"
         + " echo '== RESIDU BINER:'; (ls -d /data/local/tmp/*frida* /data/local/tmp/re.frida.server /data/local/tmp/ai-ssistants/*/frida-server 2>/dev/null || echo '  tidak ada');"
-        + " echo '== DI DEPAN:'; (dumpsys window 2>/dev/null | grep -m1 mCurrentFocus || true);"
+        + " echo '== DI DEPAN:'; (dumpsys window 2>/dev/null | grep -m4 mCurrentFocus | grep -v com.aissistants.app | head -2 || true);"
         + " echo '== PESAN APP (kalau ada):'; uiautomator dump /sdcard/.diag.xml >/dev/null 2>&1; (grep -oE 'text=\"[^\"]{6,90}\"' /sdcard/.diag.xml 2>/dev/null | head -6 || echo '  (layar tidak terbaca)');"
         + " if [ \"$f\" = 0 ] && [ \"$h\" = 0 ]; then echo 'VERDICT: jejak hooking bersih - kalau app masih nolak, cek dev options/mock/sertifikat/APK modif'; else echo 'VERDICT: ADA JEJAK HOOKING - ini penyebab umum pesan tamper. Jalankan: bersihkan jejak'; fi; true",
           "none", "Diagnosa {pkg}:\n{out}", true),
 
-        // ---- device hygiene (the class of problem: an app refuses with 'suspicious activity') --
+        // ---- device hygiene ------------------------------------------------------------------
         r("hygiene-scan", "(cek (jejak|deteksi|integritas|kebersihan)|deteksi root|root terdeteksi|suspicious activity|kenapa (app|aplikasi)[^\\n]{0,30}(nolak|gagal|gak bisa|tidak bisa|error)|device hygiene)", "",
           Hygiene.scanCmd(), "none", "Hasil cek integritas OS:\n{out}", true),
         r("settings-restore", "(pulihkan (setelan|setting|pengaturan)|kembalikan setelan|restore settings|balikin setelan)", "",

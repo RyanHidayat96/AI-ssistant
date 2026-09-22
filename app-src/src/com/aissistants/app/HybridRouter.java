@@ -310,8 +310,21 @@ final class HybridRouter {
     }
 
     static String windowFocus(Host host) {
-        try { return host.run("dumpsys window | grep -m1 mCurrentFocus", 10); }
-        catch (Throwable t) { return ""; }
+        try {
+            // a focusable overlay (ours) or a system dialog can be the top window: report the first
+            // focus line that is NOT our own package, so an agent driving another app never sees
+            // "AI-ssistants" as the app it just launched. Only the overlay hint is filtered - any
+            // real dialog still shows up, because the caller must be able to notice it.
+            String out = host.run("dumpsys window | grep -m4 mCurrentFocus", 10);
+            if (out != null) {
+                for (String line : out.split("\n")) {
+                    if (line.indexOf("mCurrentFocus") < 0) continue;
+                    if (line.contains("com.aissistants.app")) continue;
+                    return line.trim();
+                }
+            }
+            return out == null ? "" : out.trim();
+        } catch (Throwable t) { return ""; }
     }
 
     static String dumpUi(Host host) {

@@ -1,75 +1,91 @@
 # AI-ssistants
 
-An Android **AI assistant that owns the device**. You point it at any OpenAI-compatible
-endpoint, and it works through a **root shell**: it inspects, patches, builds, installs,
-reads app data and pokes the kernel — verifying its own work step by step — instead of
-just answering questions.
+A chat-first Android assistant that works the device instead of describing it. You point it at any
+OpenAI-compatible endpoint; the commands it proposes run through a root shell and their output is fed
+back to the model, so it can continue, verify and recover on its own.
 
-```
-AI-ssistants/
-  build.ps1 / build.cmd        aapt2 + javac + d8 + zipalign + apksigner (no Gradle)
-  app-src/
-    manifest/AndroidManifest.xml
-    res/{values,drawable}      dark theme, vector launcher icon
-    src/com/aissistants/app/
-      MainActivity.java        chat UI, quick actions, agent loop
-      AiClient.java            OpenAI-compatible client (HttpURLConnection, tool calls)
-      RootShell.java           `su -c` executor, timeout + fail-fast when root is denied
-      Store.java               endpoint config + history (private SharedPreferences)
-  ai-ssistants.keystore        signing key (alias `aissistants`)
-  release/AI-ssistants-v<ver>.apk
-```
+## Requirements
+
+- Android 11+ device with root (KernelSU or Magisk). Built and tested against Android 16 / API 35.
+- JDK 17 or newer.
+- Android SDK: build-tools 35.0.0 and platform android-35.
+- No Gradle. `build.ps1` drives aapt2, javac, d8, zipalign and apksigner directly.
 
 ## Build
 
 ```powershell
-.\build.ps1                 # -> release\AI-ssistants-v1.0.0.apk
-.\build.ps1 -Deploy         # build + adb install -r
-.\build.ps1 -Sdk D:\sdk     # explicit Android SDK (defaults to the sibling Causentry tools/sdk)
+.\build.ps1                                  # -> release\AI-ssistants-<version>.apk
+.\build.ps1 -Deploy                          # build, then adb install -r
+.\build.ps1 -Deploy -Serial <serial>         # pick a device explicitly
+.\build.ps1 -Sdk "C:\Android\Sdk"            # explicit SDK path
 ```
 
-Needs build-tools 35.0.0 + platform android-35 and a JDK 17+ (`JAVA_HOME` or Program Files).
+The SDK defaults to `..\Causentry\tools\sdk`, then to `%LOCALAPPDATA%\Android\Sdk`, then to
+`AI_SSISTANTS_SDK`. `build.cmd` is a thin wrapper for cmd.exe.
 
-## Use
+## Signing
 
-1. Install the APK, open it.
-2. Tap the status pill (**NO ROOT**) → approve the KernelSU/Magisk prompt once, or enable
-   AI-ssistants in the manager's Superuser list. The pill turns **ROOT ✓**.
-3. Tap the gear and save **Base URL** (`https://api.openai.com/v1`, `http://192.168.1.9:11434/v1`, …),
-   **API key** (empty for local servers) and **Model**.
-4. Ask for anything. Commands the model emits run as **uid 0** and their output is fed straight
-   back so it can continue and verify.
+The keystore is intentionally not in this repository (see `.gitignore`). Put `ai-ssistants.keystore`
+next to the checkout before building a release APK; the alias is `aissistants`. For a fork, generate
+your own key and adjust the alias and paths at the top of `build.ps1`.
 
-`$ <command>` in the input runs a root command yourself, without the model — useful offline.
+## Project layout
 
-## How the agent loop works
+```
+app-src/
+  manifest/AndroidManifest.xml
+  res/values                       colours, styles (dark theme)
+  res/drawable                     launcher and composer vector icons
+  src/com/aissistants/app/
+    MainActivity.java              chat UI, composer, transcript, run loop, approval gates
+    AgentPrompt.java               system instructions for the model
+    AiClient.java                  OpenAI-compatible client: streaming, tools, usage, retries
+    RootShell.java                 persistent `su` session, timeouts, output cap
+    HybridRouter.java              local executor: parser -> adapter plan -> verify
+    LocalParser.java               rule-based intent parser, no model round trip
+    Adapters.java / AppAdapter.java   per-app capability plans
+    FastTasks.java                 single-shell shortcuts for common requests
+    OverlayView.java / OverlayHub.java   floating panel while another app is driven
+    Hygiene.java                   clears hooking leftovers, restores device settings
+    SessionLog.java                append-only transcript journal per session
+    Store.java                     endpoint/model configuration, settings, history
+    AgentService.java              foreground service that keeps a run alive in the background
+build.ps1 / build.cmd
+```
+
+## How a request is handled
 
 ```
 user prompt
-  ↓  system prompt: root shell tool (run_shell), "do the work yourself, never refuse"
-model reply ──┬─ native tool_calls (run_shell)   → executed
-              └─ ```sh fenced block / RUN: line  → executed (models without tool calling)
-  ↓  stdout+stderr merged, 48 KB cap, per-command timeout (default 180 s)
-tool output is appended to the conversation and the loop repeats (≤ Max steps, default 12)
+  |
+  +-- FastTasks      single shell chain, no model call
+  +-- LocalParser    -> HybridRouter adapter plan (launch, tap, type, verify)
+  +-- model          native tool calls, or a ```sh block / `RUN:` line as a fallback
+  |
+  v                       output is capped, timed out, and returned to the conversation
+verify -> recover -> reply    the run stops when the task is done, the user stops it, or a
+                              concrete blocker is proven
 ```
 
-Quick actions (System / Apps / Processes / Logcat / Storage / Network) just prefill a strong
-prompt for that inventory, so the assistant starts from facts instead of guesses.
+`$ <command>` in the input runs a root command directly, without the model.
 
-Automation hooks (deterministic, no taps needed):
+A run keeps going while the agent drives other apps: a foreground service stops the system from
+freezing it, and a small overlay panel keeps the transcript, a STOP button and prompt input on screen.
+The panel never takes the input focus away from the app being driven.
+
+## Automation hooks
 
 ```bash
 adb shell am start -n com.aissistants.app/.MainActivity --es run 'id; uname -r'
 adb shell am start -n com.aissistants.app/.MainActivity --es prompt 'list root-capable apps'
 ```
 
-## Notes
+## Security and privacy
 
-- Nothing about the app is privileged by itself: `su` is the single door, and the app can only do
-  what the user's root manager allows. KernelSU `su` that never answers is detected and surfaced
-  as the *not granted* hint instead of hanging a request.
-- Output is capped (48 KB per command) and timed out, so a runaway command cannot wedge the chat.
-- `AutoRun` off turns every proposed command into a queue with a **Run N** button — the model
-  still plans, but nothing executes until you press it.
-- History (last turns) and the endpoint config live in the app's private prefs; only the endpoint
-  the user configured ever receives conversation data.
+- The app's privileges come from `su` alone; approvals are the root manager's decision.
+- Commands run as uid 0 with a per-command timeout and a 48 KB output cap.
+- Risky categories (install, destructive, system, egress, messaging) stop at an in-app approval gate
+  unless auto-approval is enabled.
+- Endpoint configuration, API keys and conversation history stay in the app's private storage and are
+  never committed here.
+- The model only ever receives what is sent to the endpoint you configure.

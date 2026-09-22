@@ -1,17 +1,11 @@
 package com.aissistants.app;
 
 /**
- * Builds the model's operating instructions.
+ * Builds the system instructions handed to the model: operating contract, problem-solving
+ * procedure, failure handling, device-specific recipes and runtime facts.
  *
- * Design goals:
- * - capability-first
- * - observe -> reason -> act -> verify -> recover
- * - strong autonomy without reckless mutations
- * - device state is ground truth
- * - resistant to prompt injection from device/app content
- * - efficient tool use
- * - persistent task state
- * - failure recovery and alternative-path discovery
+ * Everything above the "SESSION" marker is static text, so a provider's prefix cache keeps
+ * hitting across requests. Volatile parts (tool probe, device facts, workspace path) go last.
  */
 final class AgentPrompt {
 
@@ -463,9 +457,9 @@ final class AgentPrompt {
 
           .append(recipes());
 
-        // ---- everything BELOW this line varies per session/run --------------------------------
-        // Keep the text above byte-identical (their prefix cache bills cached tokens ~4x cheaper);
-        // the volatile parts - probe output, device facts, workspace path - go LAST on purpose.
+        // ---- everything below this line varies per session --------------------------------
+        // Keep the text above stable: a repeated prefix is billed at the provider's cached rate,
+        // so probe output, device facts and the workspace path are appended last.
         if (toolProbe != null && !toolProbe.trim().isEmpty()) {
             sb.append("TOOLS PRESENT ON THIS PHONE (auto-probed; prefer this over assumptions):\n")
               .append(toolProbe.trim())
