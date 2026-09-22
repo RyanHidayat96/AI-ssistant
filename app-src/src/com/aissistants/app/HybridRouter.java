@@ -311,20 +311,29 @@ final class HybridRouter {
 
     static String windowFocus(Host host) {
         try {
-            // a focusable overlay (ours) or a system dialog can be the top window: report the first
-            // focus line that is NOT our own package, so an agent driving another app never sees
-            // "AI-ssistants" as the app it just launched. Only the overlay hint is filtered - any
-            // real dialog still shows up, because the caller must be able to notice it.
-            String out = host.run("dumpsys window | grep -m4 mCurrentFocus", 10);
-            if (out != null) {
-                for (String line : out.split("\n")) {
-                    if (line.indexOf("mCurrentFocus") < 0) continue;
-                    if (line.contains("com.aissistants.app")) continue;
-                    return line.trim();
-                }
-            }
-            return out == null ? "" : out.trim();
+            // The floating panel must never be treated as the app being driven. Prefer the
+            // current focused window, then fall back to the focused/resumed app record.
+            String out = host.run("dumpsys window | grep -m8 -E 'mCurrentFocus|mFocusedApp'", 10);
+            String line = firstExternalFocus(out);
+            if (!line.isEmpty()) return line;
+            out = host.run("dumpsys activity activities | grep -m8 -E 'topResumedActivity|mResumedActivity|ResumedActivity'", 10);
+            line = firstExternalFocus(out);
+            return line.isEmpty() ? "" : line;
         } catch (Throwable t) { return ""; }
+    }
+
+    private static String firstExternalFocus(String out) {
+        if (out == null) return "";
+        for (String raw : out.split("\n")) {
+            String line = raw == null ? "" : raw.trim();
+            if (line.isEmpty()) continue;
+            String low = line.toLowerCase(java.util.Locale.US);
+            if (low.contains("com.aissistants.app")) continue;
+            if (low.contains("mcurrentfocus") || low.contains("mfocusedapp")
+                    || low.contains("topresumedactivity") || low.contains("mresumedactivity")
+                    || low.contains("resumedactivity")) return line;
+        }
+        return "";
     }
 
     static String dumpUi(Host host) {

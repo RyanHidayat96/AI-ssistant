@@ -2663,7 +2663,10 @@ public class MainActivity extends Activity {
                 if (p == null || p.isEmpty()) return "";
                 try { getPackageManager().getPackageInfo(p, 0); return p; } catch (Throwable t) { return ""; }
             }
-            @Override public String run(String cmd, int timeoutSec) { return RootShell.run(cmd, timeoutSec); }
+            @Override public String run(String cmd, int timeoutSec) {
+                OverlayView.releaseFocus();
+                return RootShell.run(cmd, timeoutSec);
+            }
         };
     }
 
@@ -3284,6 +3287,7 @@ public class MainActivity extends Activity {
         if (echoCommand) addBubble("tool", "$ " + cmd);
         // every command starts inside THIS session's workspace; $WD is exported for the model
         String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; " + cmd;
+        OverlayView.releaseFocus();
         String out = withRecovery(foldLong(RootShell.run(exec, store.timeoutSec())), cmd);
         if (touchesForeignTmp(cmd)) {
             out = out + "\n[workspace] part of that command pointed at /data/local/tmp OUTSIDE this session's workspace ("

@@ -75,7 +75,8 @@ final class OverlayView {
                 // agent "loses" the app. Focus is lent to the panel only while the user types
                 // (useIme(true)), and outside taps still reach the app via NOT_TOUCH_MODAL.
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSLUCENT);
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         lp.gravity = Gravity.TOP | Gravity.START;
@@ -119,6 +120,29 @@ final class OverlayView {
     }
 
     static boolean visible() { return current != null && current.panel != null; }
+
+    /** Called before agent-side observation so this panel never becomes the reported app focus. */
+    static void releaseFocus() {
+        try {
+            final OverlayView ov = current;
+            if (ov == null) return;
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                ov.useIme(false);
+                return;
+            }
+            final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                @Override public void run() {
+                    try { ov.useIme(false); }
+                    finally { done.countDown(); }
+                }
+            });
+            try { done.await(300, java.util.concurrent.TimeUnit.MILLISECONDS); }
+            catch (Throwable ignored) { }
+        } catch (Throwable t) {
+            android.util.Log.e("AIssistants", "overlay release focus failed: " + t);
+        }
+    }
 
     // ---- the panel -----------------------------------------------------------------------------
 
@@ -173,6 +197,12 @@ final class OverlayView {
         root.setElevation(dp(9));
         int pad = dp(10);
         root.setPadding(pad, pad, pad, pad);
+        root.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, MotionEvent e) {
+                if (e.getActionMasked() == MotionEvent.ACTION_OUTSIDE) useIme(false);
+                return false;
+            }
+        });
 
         LinearLayout head = new LinearLayout(ctx);
         head.setOrientation(LinearLayout.HORIZONTAL);
@@ -225,6 +255,7 @@ final class OverlayView {
         scroll.setLayoutParams(new android.widget.FrameLayout.LayoutParams(-1, -1));
         scroll.setOnTouchListener(new View.OnTouchListener() {
             @Override public boolean onTouch(View v, MotionEvent e) {
+                if (e.getActionMasked() == MotionEvent.ACTION_DOWN) useIme(false);
                 if (e.getActionMasked() == MotionEvent.ACTION_UP
                         || e.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                     atBottom = isAtBottom();     // respect the user's scroll position
@@ -367,15 +398,20 @@ final class OverlayView {
             else lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
             if (lp.flags != before) wm.updateViewLayout(panel, lp);
             if (!on) {
-                Object svc = ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
-                if (svc instanceof android.view.inputmethod.InputMethodManager) {
-                    ((android.view.inputmethod.InputMethodManager) svc)
-                            .hideSoftInputFromWindow(panel.getWindowToken(), 0);
+                boolean hadFocus = input != null && input.hasFocus();
+                boolean wasFocusable = (before & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0;
+                if (hadFocus || wasFocusable || focusIdle != null) {
+                    Object svc = ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (svc instanceof android.view.inputmethod.InputMethodManager) {
+                        ((android.view.inputmethod.InputMethodManager) svc)
+                                .hideSoftInputFromWindow(panel.getWindowToken(), 0);
+                    }
+                    if (input != null) input.clearFocus();
+                    if (focusIdle != null && timer != null) timer.removeCallbacks(focusIdle);
+                    focusIdle = null;
                 }
-                if (input != null) input.clearFocus();
-                focusIdle = null;
             }
-            android.util.Log.i("AIssistants", "overlay focusable=" + on);
+            if (on || lp.flags != before) android.util.Log.i("AIssistants", "overlay focusable=" + on);
         } catch (Throwable t) {
             android.util.Log.e("AIssistants", "overlay focus toggle: " + t);
         }
@@ -428,6 +464,7 @@ final class OverlayView {
             @Override public boolean onTouch(View v, MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
+                        useIme(false);
                         downX = e.getRawX(); downY = e.getRawY();
                         startW = panelW; startH = transcriptH;
                         return true;
@@ -496,7 +533,10 @@ final class OverlayView {
         p.setMargins(dp(5), 0, 0, 0);
         t.setLayoutParams(p);
         t.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { action.run(); }
+            @Override public void onClick(View v) {
+                try { action.run(); }
+                finally { useIme(false); }
+            }
         });
         return t;
     }
@@ -507,16 +547,9 @@ final class OverlayView {
         if (input != null && input.getParent() instanceof View) {
             ((View) input.getParent()).setVisibility(collapsed ? View.GONE : View.VISIBLE);
         }
-        // a collapsed pill must never hold the keyboard focus
-        try {
-            if (collapsed) {
-                lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-                if (input != null) input.clearFocus();
-            } else {
-                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-            }
-            if (panel != null) wm.updateViewLayout(panel, lp);
-        } catch (Throwable ignored) { }
+        // Collapse/expand must not make the panel a focused app. Only the text field may borrow
+        // focus, and it gives it back through useIme(false).
+        useIme(false);
         if (panel != null) {
             View head = ((LinearLayout) panel).getChildAt(0);
             // swap the arrow chip label
@@ -612,6 +645,7 @@ final class OverlayView {
             @Override public boolean onTouch(View v, MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
+                        useIme(false);
                         startX = lp.x;
                         startY = lp.y;
                         downX = e.getRawX();

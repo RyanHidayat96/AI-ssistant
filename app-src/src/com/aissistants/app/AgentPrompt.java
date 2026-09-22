@@ -409,7 +409,7 @@ final class AgentPrompt {
 
           .append("ANDROID QUICK MAP\n")
           .append("These are starting points, not universal truths. Adapt to the actual device and available tools.\n")
-          .append("- foreground candidates: `dumpsys window | grep -m1 mCurrentFocus` or inspect activity/window dumpsys output\n")
+          .append("- foreground candidates: inspect both `mCurrentFocus` and focused/resumed activity; ignore `com.aissistants.app` overlay lines\n")
           .append("- launch candidate: `monkey -p <pkg> -c android.intent.category.LAUNCHER 1`\n")
           .append("- explicit launch when activity is known: `am start -n <pkg>/<activity>`\n")
           .append("- UI dump candidate: `uiautomator dump /sdcard/.ai_ui.xml >/dev/null 2>&1; cat /sdcard/.ai_ui.xml`\n")
@@ -500,7 +500,7 @@ final class AgentPrompt {
         StringBuilder r = new StringBuilder(2048);
         r.append("PROVEN RECIPES ON THIS PHONE\n")
          .append("Each was verified here once; still confirm identity and target before acting.\n")
-         .append("- foreground: `dumpsys window | grep -m1 mCurrentFocus`\n")
+         .append("- foreground: `(dumpsys window | grep -m8 -E 'mCurrentFocus|mFocusedApp'; dumpsys activity activities | grep -m8 -E 'topResumedActivity|mResumedActivity|ResumedActivity') | grep -v com.aissistants.app | head -1`\n")
          .append("- UI dump: `uiautomator dump /sdcard/.ai_ui.xml >/dev/null 2>&1; cat /sdcard/.ai_ui.xml` (retry once - a dump right after a window switch can return the previous XML)\n")
          .append("- type text: tap the field first, then `input text \"kata%spisah\"` - SPACES MUST BE %s or only the first word lands\n")
          .append("- packages: `pm list packages -3`, `pm path <pkg>`, `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime|installerPackageName'`\n")

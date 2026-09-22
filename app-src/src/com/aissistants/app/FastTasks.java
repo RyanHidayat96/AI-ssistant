@@ -44,6 +44,11 @@ final class FastTasks {
             "vip", "premium", "pro", "subscribe", "subscription", "berlangganan", "langganan", "bayar",
             "paid", "license", "lisensi", "purchase", "billing", "entitlement", "unlock", "terkunci"));
 
+    private static final String FOCUS_CMD =
+            "(dumpsys window 2>/dev/null | grep -m8 -E 'mCurrentFocus|mFocusedApp'; "
+                    + "dumpsys activity activities 2>/dev/null | grep -m8 -E 'topResumedActivity|mResumedActivity|ResumedActivity') "
+                    + "| grep -v com.aissistants.app | head -1";
+
     private static final Rule[] RULES = {
         // ---- read-only device facts -------------------------------------------------------
         r("battery", "(baterai|battery|daya|isi baterai)", "",
@@ -68,7 +73,7 @@ final class FastTasks {
           "ip -4 addr show 2>/dev/null | grep -E 'inet ' | grep -v 127.0.0.1",
           "none", "IP: {out}", true),
         r("foreground", "(aplikasi (apa|yang) (lagi )?(terbuka|di depan|jalan)|app (apa )?(di depan|foreground)|lagi buka apa|current app)", "",
-          "dumpsys window | grep -m4 mCurrentFocus | grep -v com.aissistants.app | head -1",
+          FOCUS_CMD,
           "none", "Di depan sekarang: {out}", true),
         r("top-cpu", "(proses (paling )?(berat|banyak|makan|ram|cpu)|top process|proses terberat|process(es)? top)", "",
           "top -b -n1 -o %CPU 2>/dev/null | head -14",
@@ -113,7 +118,7 @@ final class FastTasks {
         + " echo '== ERROR TERAKHIR (logcat):'; (logcat -d -t 800 2>/dev/null | grep -iE \"$p|unknownhost|exception|fatal|crash|integrity|tamper|license|licensecheck|billing|purchase|subscription|subscribe|premium|vip|entitlement|paywall|pairip|zimperium|root\" | tail -24 || true);"
         + " echo '== JEJAK OS YANG DIBACA APP:'; f=$(ps -A 2>/dev/null | grep -icE 'frida|objection'); h=$(ss -ltn 2>/dev/null | grep -cE '27042|27043'); echo \"proses-hook=$f port-hook=$h selinux=$(getenforce) dev_opts=$(settings get global development_settings_enabled) mock=$(settings get secure mock_location)\";"
         + " echo '== RESIDU BINER:'; (ls -d /data/local/tmp/*frida* /data/local/tmp/re.frida.server /data/local/tmp/ai-ssistants/*/frida-server 2>/dev/null || echo '  tidak ada');"
-        + " echo '== DI DEPAN:'; (dumpsys window 2>/dev/null | grep -m4 mCurrentFocus | grep -v com.aissistants.app | head -2 || true);"
+        + " echo '== DI DEPAN:'; (" + FOCUS_CMD + " || true);"
         + " echo '== PESAN APP (kalau ada):'; uiautomator dump /sdcard/.diag.xml >/dev/null 2>&1; (grep -oE 'text=\"[^\"]{6,90}\"' /sdcard/.diag.xml 2>/dev/null | head -6 || echo '  (layar tidak terbaca)');"
         + " if [ \"$f\" = 0 ] && [ \"$h\" = 0 ]; then echo 'VERDICT: jejak hooking bersih - kalau app masih nolak, cek dev options/mock/sertifikat/APK modif'; else echo 'VERDICT: ADA JEJAK HOOKING - ini penyebab umum pesan tamper. Jalankan: bersihkan jejak'; fi; true",
           "none", "Diagnosa {pkg}:\n{out}", true),
