@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
                     "(install|add)"),
             safeRe("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0)",
                     "rm\\s+-[a-zA-Z]*[rf]"),
-            safeRe("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|>\\s*\\S*/data/adb/|(cp|mv|rm|ln|chmod|chown)\\s+[^;|]*/data/adb/|sed\\s+-i[^;|]*/data/adb/|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\(|curl[^|;]*(-o|--output)[^|;]*/data/local/tmp|wget[^|;]*/data/local/tmp|\\breboot\\b|\\bctl\\.(restart|start|stop)\\b|\\bsvc\\s+power\\s+(reboot|shutdown)\\b|\\bkill(all)?\\s+(-[0-9]+\\s+)?(zygote|system_server|init)\\b|\\bsetprop\\s+(sys\\.(powerctl|boot)|init\\.[a-z_.]*)\\b|(^|[;&|]\\s*)(stop|start)\\s*($|[;&|])",
+            safeRe("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|>\\s*\\S*/data/adb/|(cp|mv|rm|ln|chmod|chown)\\s+[^;|]*/data/adb/|sed\\s+-i[^;|]*/data/adb/|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\(|curl[^|;]*(-o|--output)[^|;]*/data/local/tmp|wget[^|;]*/data/local/tmp|\\breboot\\b|\\bctl\\.(restart|start|stop)\\b|\\bsvc\\s+power\\s+(reboot|shutdown)\\b|\\bkill(all)?\\s+(-[0-9]+\\s+)?(zygote|system_server|init|systemui|surfaceflinger|com\\.android\\.systemui)\\b|\\bsetprop\\s+(sys\\.(powerctl|boot)|init\\.[a-z_.]*)\\b|(^|[;&|]\\s*)(stop|start)\\s*($|[;&|])",
                     "mount\\s+[^|;]*(remount|,rw)|setenforce\\s+0|settings\\s+put|\\|\\s*(sh|bash)\\b"),
             safeRe("(curl[^|;]*(--data|-d\\s|-F\\s|-T\\s|--upload-file|-X\\s*(POST|PUT|PATCH))|wget[^|;]*--post-data|\\bscp\\b|\\brsync\\b|\\bnc\\s+-)",
                     "curl[^|;]*(--data|-d\\s|-F\\s)|\\bscp\\b|\\brsync\\b"),
@@ -240,6 +240,9 @@ public class MainActivity extends Activity {
     // anti-rabbit-hole: repeated read-only digging on one artefact (see analysisNudge)
     private final java.util.HashMap<String, Integer> analysisHits = new java.util.HashMap<>();
     private final java.util.HashSet<String> analysisWarned = new java.util.HashSet<>();
+    // no-progress brake: consecutive read-only steps that never changed device state
+    private int idleSteps;
+    private int idleWarned;
     private String lastUsage = "";
     private int screen = 0;   // 0 chat, 1 chats, 2 settings
 
@@ -2341,6 +2344,7 @@ public class MainActivity extends Activity {
         repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
+        idleSteps = 0; idleWarned = 0;
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
         runStartMs = System.currentTimeMillis();
         loopBroken = false;
@@ -2466,6 +2470,7 @@ public class MainActivity extends Activity {
         repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
+        idleSteps = 0; idleWarned = 0;
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
         runStartMs = System.currentTimeMillis();
         loopBroken = false;
@@ -2979,6 +2984,38 @@ public class MainActivity extends Activity {
         return "";
     }
 
+    /** Read-only steps that never change the device: a run can dig through tools forever and end with nothing. */
+    private String progressNudge(String cmd) {
+        try {
+            String low = cmd == null ? "" : cmd.toLowerCase(Locale.ENGLISH);
+            boolean mutates = low.contains(">") || low.contains("tee")
+                    || low.matches("(?s).*\\b(install|uninstall|rm|rmdir|mv|cp|touch|mkdir|chmod|chown|"
+                            + "kill|killall|pkill|reboot|truncate|dd|ln|am|svc|setprop|insmod|rmmod|mount|stop|start)\\b.*");
+            if (mutates) { idleSteps = 0; idleWarned = 0; return ""; }
+            idleSteps++;
+            if (idleSteps == 8 && idleWarned < 1) {
+                idleWarned = 1;
+                return "\n[APP NOTE: 8 steps in a row changed nothing on the device. Name the one fact that is "
+                     + "still missing and the change you will make, then make it - or report the concrete blocker. "
+                     + "Reading more files is not progress.]";
+            }
+            if (idleSteps == 16 && idleWarned < 2) {
+                idleWarned = 2;
+                return "\n[APP NOTE: 16 steps without a single state change. Stop investigating: run the smallest "
+                     + "concrete change (with rollback), or answer with the blocker, its evidence and the realistic "
+                     + "alternative. Another read-only command is not an option.]";
+            }
+            if (idleSteps >= 26 && idleWarned < 3) {
+                idleWarned = 3;
+                loopBroken = true;
+                addBubble("note", "guard: " + idleSteps + " langkah tanpa perubahan apa pun \u00b7 run dihentikan");
+                return "\n[EXPLORATION STOPPED after " + idleSteps + " steps without a state change. Write the "
+                     + "conclusion now: what was proven, what blocks the task, and the realistic alternative.]";
+            }
+        } catch (Throwable ignored) { }
+        return "";
+    }
+
     private static String targetKey(String low) {
         try {
             java.util.regex.Matcher m = java.util.regex.Pattern
@@ -3114,7 +3151,7 @@ public class MainActivity extends Activity {
                                 result = "[skipped: the model sent an empty command]";
                             } else {
                                 result = runCommand(cmd.trim());
-                                result = result + analysisNudge(cmd);
+                                result = result + analysisNudge(cmd) + progressNudge(cmd);
                                 if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
                             }
                         }
@@ -3135,7 +3172,7 @@ public class MainActivity extends Activity {
                 for (String cmd : cmds) {
                     if (stop) break;
                     String result = runCommand(cmd);
-                    result = result + analysisNudge(cmd);
+                    result = result + analysisNudge(cmd) + progressNudge(cmd);
                     if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
                     try {
                         JSONObject tm = new JSONObject();
@@ -3623,6 +3660,7 @@ public class MainActivity extends Activity {
         repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
+        idleSteps = 0; idleWarned = 0;
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
         runStartMs = System.currentTimeMillis();
         loopBroken = false;
