@@ -92,6 +92,8 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private LinearLayout chatScreen, chatLog, pendingBar;
     private ScrollView chatScroll;
+    /** scroll viewport; owns transient chips so they overlay messages without moving the composer */
+    private FrameLayout chatScrollWrap;
     private TextView barTitle, subtitle, pill;
     private EditText input;
     private ImageButton sendBtn;
@@ -156,8 +158,12 @@ public class MainActivity extends Activity {
     private final java.util.Map<String, Integer> runCounts = new java.util.HashMap<>();
     /** first output of each command, replayed when the model insists on repeating it */
     private final java.util.Map<String, String> runOutputs = new java.util.HashMap<>();
-    /** how many times the guard had to refuse each command; 3 = the run is stopped as a loop */
+    /** how many times the guard had to refuse each command; cached output becomes a model nudge */
     private final java.util.Map<String, Integer> guardHits = new java.util.HashMap<>();
+    /** hard safety valve across every duplicate command in one run */
+    private int repeatGuardTotal = 0;
+    private static final int REPEAT_CACHE_AFTER = 2;
+    private static final int REPEAT_RUNAWAY_LIMIT = 12;
     private volatile boolean loopBroken = false;
     private volatile boolean stuckRun = false;   // guard tripped: think at max for the rest of the run
 
@@ -174,6 +180,7 @@ public class MainActivity extends Activity {
     private TextView jumpChip;
     private int jumpCount;
     private int jumpTotal;
+    private boolean jumpAnnounced;
     private boolean chatAtBottom = true;
     /** long chats: only this many bubbles are rendered at once, older ones page in on demand */
     private static final int WINDOW_PAGE = 80;
@@ -270,7 +277,7 @@ public class MainActivity extends Activity {
                         inputRow.setPadding(dp(GUTTER), dp(6), dp(GUTTER),
                                 ime > 0 ? dp(12) : navigationBarHeight() + dp(12));
                     }
-                    if (ime > 0) scrollToBottom(true);
+                    if (ime > 0) scrollToBottom(false);
                 }
                 return wi;
             }
@@ -280,7 +287,8 @@ public class MainActivity extends Activity {
         loadSessions();
         screen = 0;
         root.removeAllViews();
-        root.addView(chatScreen);
+        root.addView(chatScreen, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.requestApplyInsets();
         renderTranscript(true);
         refreshStatus();
         if (getIntent() != null) handleIntent(getIntent());
@@ -447,12 +455,15 @@ public class MainActivity extends Activity {
     private void showChat() {
         screen = 0;
         root.removeAllViews();
-        root.addView(chatScreen);
+        root.addView(chatScreen, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.requestApplyInsets();
         // opening a long session lands on the newest message (like any chat app); older pages
         // are pulled in from the top row on demand
         renderFrom = Integer.MAX_VALUE;
         chatAtBottom = true;
         jumpCount = 0;
+        jumpTotal = 0;
+        jumpAnnounced = false;
         renderTranscript(true);
     }
 
@@ -798,8 +809,8 @@ public class MainActivity extends Activity {
             @Override public void onScrollChange(View v, int sx, int sy, int ox, int oy) { updateGroupChip(); onChatScrolled(); }
         });
         chatScroll.setVerticalScrollBarEnabled(false);     // our own thumb is draggable, the stock bar is not
-        FrameLayout scrollWrap = new FrameLayout(this);
-        scrollWrap.addView(chatScroll, new FrameLayout.LayoutParams(-1, -1));
+        chatScrollWrap = new FrameLayout(this);
+        chatScrollWrap.addView(chatScroll, new FrameLayout.LayoutParams(-1, -1));
         thumbHit = new FrameLayout(this);
         FrameLayout.LayoutParams thlp = new FrameLayout.LayoutParams(dp(26), dp(48), Gravity.RIGHT | Gravity.TOP);
         thlp.setMargins(0, dp(4), 0, 0);
@@ -810,9 +821,9 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams tvp = new FrameLayout.LayoutParams(dp(6), -1, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         tvp.setMargins(0, 0, dp(3), 0);
         thumbHit.addView(thumb, tvp);
-        scrollWrap.addView(thumbHit);
+        chatScrollWrap.addView(thumbHit);
         installThumbDrag();
-        chatScreen.addView(scrollWrap, new LinearLayout.LayoutParams(-1, 0, 1));
+        chatScreen.addView(chatScrollWrap, new LinearLayout.LayoutParams(-1, 0, 1));
         ensureJumpChip();          // sits just above the input row, so the keyboard never covers it
         ensureGroupChip();
 
@@ -879,6 +890,7 @@ public class MainActivity extends Activity {
         input.setMinLines(1);
         input.setMaxLines(4);
         input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
+        input.setShowSoftInputOnFocus(true);
         input.setMinHeight(dp(52));
         input.setPadding(dp(6), dp(6), dp(6), dp(6));
         input.setBackground(null);
@@ -886,12 +898,12 @@ public class MainActivity extends Activity {
         // away go nowhere: tap - tap - type is a common complaint with selectable transcripts
         input.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                try {
-                    input.requestFocus();
-                    android.view.inputmethod.InputMethodManager imm =
-                            (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-                    if (imm != null) imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
-                } catch (Throwable ignored) { }
+                showComposerKeyboard();
+            }
+        });
+        input.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus) showComposerKeyboard();
             }
         });
         input.addTextChangedListener(new android.text.TextWatcher() {
@@ -1004,7 +1016,7 @@ public class MainActivity extends Activity {
             chatScroll.post(new Runnable() {
                 @Override public void run() { chatScroll.scrollTo(0, 0); }
             });
-            jumpCount = 0; jumpTotal = 0; chatAtBottom = false;
+            jumpCount = 0; jumpTotal = 0; jumpAnnounced = false; chatAtBottom = false;
             if (jumpChip != null) jumpChip.setVisibility(View.GONE);
         } else {
             int total = snap.size();
@@ -1052,15 +1064,21 @@ public class MainActivity extends Activity {
         }
         if (busy) { busyView = busyRow(); chatLog.addView(busyView); }
         if (!snap.isEmpty()) scrollToBottom(forceBottom);
-        if (chatAtBottom) {
-            // the content just changed (new bubble / expand / collapse): land on the end again,
-            // via scrollTo so the composer keeps the caret
-            chatLog.post(new Runnable() { @Override public void run() {
-                if (chatScroll != null && chatLog != null) chatScroll.scrollTo(0, chatLog.getMeasuredHeight()); } });
+        int total = snap.size();                       // how many persisted transcript entries this session has now
+        if (chatAtBottom || total < jumpTotal) {
+            jumpCount = 0;
+            jumpAnnounced = false;
+        } else if (total > jumpTotal) {
+            int firstNew = Math.max(0, Math.min(jumpTotal, total));
+            for (int i = firstNew; i < total; i++) {
+                String role = (String) snap.get(i)[0];
+                if ("user".equals(role)) continue;   // never call the user's own prompt a new update
+                jumpCount++;
+                // Tool output renders as one group, so count its whole run as one update.
+                while ("tool".equals(role) && i + 1 < total
+                        && "tool".equals((String) snap.get(i + 1)[0])) i++;
+            }
         }
-        int total = snap.size();                       // how many bubbles this session has now
-        if (chatAtBottom) jumpCount = 0;
-        else if (total > jumpTotal) jumpCount += (total - jumpTotal);
         jumpTotal = total;
         refreshJumpChip();
         if (snap.size() > WINDOW_PAGE || chatLog.getChildCount() > WINDOW_PAGE + 20) {
@@ -1411,30 +1429,29 @@ public class MainActivity extends Activity {
         groupChip.setVisibility(View.VISIBLE);
     }
 
-    /** small centred pill, bottom of the chat: down arrow + how many messages arrived while reading up */
+    /** Floating bottom pill: stays above composer without changing the transcript viewport. */
     private void ensureJumpChip() {
         if (jumpChip != null) return;
         jumpChip = tv(12, ON_ACCENT, Typeface.BOLD);
-        jumpChip.setBackground(ripple(ACCENT, ACCENT, 20));
-        jumpChip.setPadding(dp(14), dp(8), dp(14), dp(8));
-        jumpChip.setText("\u2193 pesan baru");
-        setButtonA11y(jumpChip, "Jump to the newest message");
+        jumpChip.setGravity(Gravity.CENTER);
+        jumpChip.setMinHeight(dp(48));
+        jumpChip.setBackground(ripple(ACCENT, ACCENT, 24));
+        jumpChip.setPadding(dp(16), 0, dp(16), 0);
+        jumpChip.setText("\u2193 pembaruan baru");
+        setButtonA11y(jumpChip, "Lompat ke pesan terbaru");
         jumpChip.setVisibility(View.GONE);
-        LinearLayout.LayoutParams jlp = new LinearLayout.LayoutParams(-2, -2);
-        jlp.gravity = Gravity.CENTER_HORIZONTAL;
-        jlp.setMargins(0, dp(4), 0, dp(4));
-        if (chatScreen != null) chatScreen.addView(jumpChip, jlp);
+        FrameLayout.LayoutParams jlp = new FrameLayout.LayoutParams(-2, dp(48),
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        jlp.setMargins(0, 0, 0, dp(10));
+        if (chatScrollWrap != null) chatScrollWrap.addView(jumpChip, jlp);
         jumpChip.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 jumpCount = 0;
+                jumpAnnounced = false;
                 chatAtBottom = true;
                 renderFrom = Integer.MAX_VALUE;      // re-anchor the window on the newest bubbles
                 jumpChip.setVisibility(View.GONE);
-                renderTranscript(false);
-                if (chatScroll == null || chatLog == null) return;
-                chatScroll.post(new Runnable() {
-                    @Override public void run() { chatScroll.smoothScrollTo(0, chatLog.getMeasuredHeight()); }
-                });
+                renderTranscript(true);
             }
         });
     }
@@ -1444,7 +1461,10 @@ public class MainActivity extends Activity {
         if (chatScroll == null || chatLog == null) return;
         int remain = chatLog.getMeasuredHeight() - (chatScroll.getScrollY() + chatScroll.getHeight());
         boolean atBottom = remain <= dp(48);
-        if (atBottom) jumpCount = 0;
+        if (atBottom) {
+            jumpCount = 0;
+            jumpAnnounced = false;
+        }
         chatAtBottom = atBottom;
         refreshJumpChip();
         updateThumb();
@@ -1506,18 +1526,26 @@ public class MainActivity extends Activity {
         thumbHit.setVisibility(View.VISIBLE);
     }
 
-    /** the pill is available any time the end is out of view: expand/collapse, new messages, mid-chat */
+    /** Pill appears only while reader is away from the newest transcript entry. */
     private void refreshJumpChip() {
         if (jumpChip == null) return;
-        boolean show = !chatAtBottom && chatScreen != null && chatScreen.getVisibility() == View.VISIBLE;
-        if (!show) { jumpChip.setVisibility(View.GONE); return; }
+        boolean show = !chatAtBottom && screen == 0 && chatScreen != null && chatScreen.isShown();
+        if (!show) {
+            jumpChip.setVisibility(View.GONE);
+            if (chatAtBottom) jumpAnnounced = false;
+            return;
+        }
         jumpChip.setText(jumpCount > 0
-                ? "\u2193 " + jumpCount + " pesan baru"
+                ? "\u2193 " + jumpCount + " pembaruan baru"
                 : "\u2193 ke bawah");
         setButtonA11y(jumpChip, jumpCount > 0
-                ? "Jump to the newest message, " + jumpCount + " new"
-                : "Jump to the end of the chat");
+                ? "Lompat ke pesan terbaru, " + jumpCount + " pembaruan baru"
+                : "Lompat ke akhir percakapan");
         jumpChip.setVisibility(View.VISIBLE);
+        if (jumpCount > 0 && !jumpAnnounced) {
+            jumpAnnounced = true;
+            jumpChip.announceForAccessibility(jumpCount + " pembaruan baru. Ketuk untuk pesan terbaru.");
+        }
     }
 
     private View busyRow() {
@@ -2289,6 +2317,9 @@ public class MainActivity extends Activity {
     private void midRunSend() {
         String text = input.getText().toString().trim();
         if (text.isEmpty()) return;
+        chatAtBottom = true;
+        jumpCount = 0;
+        jumpAnnounced = false;
         input.setText("");
         lastPrompt = text;
         synchronized (injectedQueue) { injectedQueue.add(text); }
@@ -2307,6 +2338,7 @@ public class MainActivity extends Activity {
         runCounts.clear();
         runOutputs.clear();
         guardHits.clear();
+        repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
@@ -2375,6 +2407,9 @@ public class MainActivity extends Activity {
 
     private void send(String text) {
         if (busy) { toast("Still working \u2014 stop it first"); return; }
+        chatAtBottom = true;
+        jumpCount = 0;
+        jumpAnnounced = false;
         AiClient.resetCancel();
         RootShell.resetCancel();
         if (text.startsWith("$")) {
@@ -2428,6 +2463,7 @@ public class MainActivity extends Activity {
         runCounts.clear();
         runOutputs.clear();
         guardHits.clear();
+        repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
@@ -2880,8 +2916,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Read-only analysis of the SAME artefact over and over is what turned a "why does this app
-     *  fail" question into APK surgery. Count it, and tell the model - twice, then hard. */
+    /** Keep repeated read-only inspection of one target from consuming the whole run. */
     private String analysisNudge(String cmd) {
         try {
             String low = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.US);
@@ -2894,15 +2929,14 @@ public class MainActivity extends Activity {
             int n = (seen == null ? 0 : seen) + 1;
             analysisHits.put(key, n);
             if (n == 6 && analysisWarned.add(key)) {
-                return "\n[APP NOTE: " + n + " read-only commands on " + key + " without a conclusion. Stop digging into "
-                     + "the artefact. An app that refuses to start is an OS-state question: hook processes, ports "
-                     + "27042/27043, SELinux, developer options, mock location, leftover hook binaries. Check those, "
-                     + "or say which fact you are still missing.]";
+                return "\n[APP NOTE: " + n + " read-only commands on " + key + " without a conclusion. Preserve the "
+                     + "evidence, state what it proves and what fact is missing, then make one narrower check likely to "
+                     + "change the decision or move to the next task. Do not repeat a broad scan of unchanged input.]";
             }
             if (n == 14 && analysisWarned.add(key + "#stop")) {
-                return "\n[APP NOTE: hard stop on " + key + " after " + n + " steps. Report now: the symptom you saw, the "
-                     + "cause visible in the OS state, and the single command that would confirm it. Do not open the "
-                     + "artefact again.]";
+                return "\n[APP NOTE: read-only loop budget reached on " + key + " after " + n + " steps. Report strongest "
+                     + "evidence and remaining uncertainty, then use a different source or action. Do not inspect this "
+                     + "unchanged target again in this run.]";
             }
         } catch (Throwable ignored) { }
         return "";
@@ -3043,6 +3077,7 @@ public class MainActivity extends Activity {
                                 result = "[skipped: the model sent an empty command]";
                             } else {
                                 result = runCommand(cmd.trim());
+                                result = result + analysisNudge(cmd);
                                 if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
                             }
                         }
@@ -3076,7 +3111,7 @@ public class MainActivity extends Activity {
                 if (loopBroken) break;
             }
             if (!brokeEarly && !stop && loopBroken) {
-                addBubble("note", "run dihentikan (perintah sama diulang) - kirim 'lanjut' buat pendekatan lain");
+                addBubble("note", "run dihentikan karena loop command berulang - kirim 'lanjut' untuk jalur baru");
             }
         } catch (Throwable t) {
             runErrored = true;
@@ -3177,29 +3212,38 @@ public class MainActivity extends Activity {
         }
         Integer seen = runCounts.get(cmd);
         int n = seen == null ? 0 : seen;
-        if (n >= 2) {
+        if (n >= REPEAT_CACHE_AFTER) {
             Integer gh = guardHits.get(cmd);
             int hits = gh == null ? 0 : gh;
             guardHits.put(cmd, hits + 1);
+            repeatGuardTotal++;
             stuckRun = true;
-            android.util.Log.e("AIssistants", "guard trip " + (hits + 1) + " for: " + firstLine(cmd));
+            android.util.Log.e("AIssistants", "guard repeat " + (hits + 1) + " total="
+                    + repeatGuardTotal + " for: " + firstLine(cmd));
             if (hits == 0) {
                 audit("guard", "REPEAT", cmd);
-                addBubble("note", "guard: perintah ini sudah jalan 2x \u00b7 pakai output lama \u00b7 " + firstLine(cmd));
+                addBubble("note", "guard: command sama sudah jalan " + REPEAT_CACHE_AFTER
+                        + "x \u00b7 output lama dipakai \u00b7 " + firstLine(cmd));
             }
-            if (hits + 1 >= 5) {
-                loopBroken = true;
-                addBubble("note", "guard: perintah sama " + (hits + 1) + "x \u00b7 run dihentikan \u00b7 " + firstLine(cmd));
-                return "[the app STOPPED this run: you kept re-running a command that already ran twice. "
-                        + "Report what you already have instead of repeating it.]";
-            }
-            if (hits + 1 == 3) addBubble("note", "guard: ulangan ke-3 \u00b7 ganti pendekatan \u00b7 " + firstLine(cmd));
             String prev = runOutputs.get(cmd);
-            return "[this exact command already ran twice (repetition " + (hits + 1) + "/5 - the app stops the run at 5). Here it is again:\n"
-                    + (prev == null ? "(no output)" : clip(prev))
-                    + "\nDo NOT run it verbatim again. CHANGE THE APPROACH: a different tool, different pattern/flags, "
-                    + "`grep -aoE 'pattern'`, `fold -w 160`, `strings -n 6`, page it with `sed -n '1,40p'`, "
-                    + "or re-read your plan notes and take another route.]";
+            String cached = prev == null ? "(no output)" : clip(prev);
+            if (repeatGuardTotal >= REPEAT_RUNAWAY_LIMIT) {
+                loopBroken = true;
+                addBubble("note", "guard: runaway loop " + repeatGuardTotal
+                        + "x \u00b7 run dihentikan \u00b7 " + firstLine(cmd));
+                return "[RUNAWAY LOOP STOPPED: too many duplicate commands in this run. "
+                        + "Use cached output below, write a conclusion, and do not call this tool path again.\n"
+                        + "CACHED OUTPUT:\n" + cached + "]";
+            }
+            if (hits + 1 == 3) {
+                addBubble("note", "guard: repeat ke-3 \u00b7 agent dipaksa ganti pendekatan \u00b7 " + firstLine(cmd));
+            }
+            return "[DUPLICATE COMMAND BLOCKED: this exact command already ran " + REPEAT_CACHE_AFTER
+                    + " times. It was NOT executed again. Cached output follows.\nCACHED OUTPUT:\n"
+                    + cached
+                    + "\nNEXT ACTION REQUIRED: do not run this command again. Pick a different method now: "
+                    + "narrow extraction with `grep -aoE`, page specific lines with `sed -n`, inspect identity with "
+                    + "`ls -l`/`file`/hash, use `readelf`/`unzip -l`, or conclude from current evidence.]";
         }
         runCounts.put(cmd, n + 1);
         final String wd = workDir();
@@ -3339,7 +3383,7 @@ public class MainActivity extends Activity {
                 String head = c.length() > keep ? c.substring(0, keep) : c;
                 String stub = "[earlier step" + (prevCmd.isEmpty() ? "" : ": `" + cmdHead(prevCmd) + "`")
                         + " - output was " + c.length() + " chars, trimmed to save tokens. Head: " + head
-                        + "\n... (still need it? re-run that command or read it from disk)]";
+                        + "\n... (still need it? use a narrower different command or read saved artifact)]";
                 try { m.put("content", stub); } catch (Throwable ignored) { }
                 total -= c.length() - stub.length();
             }
@@ -3532,9 +3576,13 @@ public class MainActivity extends Activity {
         RootShell.resetCancel();
         busy = true;
         stop = false;
+        chatAtBottom = true;
+        jumpCount = 0;
+        jumpAnnounced = false;
         runCounts.clear();
         runOutputs.clear();
         guardHits.clear();
+        repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
@@ -3668,7 +3716,14 @@ public class MainActivity extends Activity {
                     + "test -d /data/adb/ksu && echo 'root manager: KernelSU'; "
                     + "test -d /data/adb/magisk && echo 'root manager: Magisk'", 30);
         } catch (Throwable ignored) { }
-        return AgentPrompt.build(workDir(), store.toolProbe(), facts);
+        String prompt = AgentPrompt.build(workDir(), store.toolProbe(), facts);
+        // the volatile blocks must sit at the very END: verify the offsets instead of trusting the code
+        android.util.Log.i("AIssistants", "system prompt chars=" + prompt.length()
+                + " staticHeadEnd=" + prompt.lastIndexOf("PROVEN RECIPES ON THIS PHONE")
+                + " dynamicAt=" + prompt.lastIndexOf("TOOLS PRESENT ON THIS PHONE")
+                + "/" + prompt.lastIndexOf("DEVICE FACTS")
+                + " workspaceAt=" + prompt.lastIndexOf("SESSION WORKSPACE"));
+        return prompt;
     }
     // ==================== helpers ====================
 
@@ -3844,6 +3899,29 @@ public class MainActivity extends Activity {
         setVoiceUi(false);
     }
 
+    /** Focus can arrive before the composer is attached after a transcript render; defer IME once. */
+    private void showComposerKeyboard() {
+        final EditText field = input;
+        if (field == null) return;
+        field.requestFocus();
+        field.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (input != field || !field.hasFocus()) return;
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= 30 && field.getWindowInsetsController() != null) {
+                        field.getWindowInsetsController().show(WindowInsets.Type.ime());
+                    }
+                } catch (Throwable ignored) { }
+                try {
+                    android.view.inputmethod.InputMethodManager imm =
+                            (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                    if (imm != null) imm.showSoftInput(field,
+                            android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                } catch (Throwable ignored) { }
+            }
+        }, 80);
+    }
+
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
 
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
@@ -3863,11 +3941,10 @@ public class MainActivity extends Activity {
         chatScroll.post(new Runnable() {
             @Override public void run() {
                 int content = chatLog.getMeasuredHeight();
-                int remain = content - (chatScroll.getScrollY() + chatScroll.getHeight());
                 // pinned to the end? then stay pinned no matter how much was just added.
                 // NOTE: scrollTo, never fullScroll - fullScroll() calls requestChildFocus and would rip
                 // the caret out of the composer the moment the keyboard opens.
-                if (force || chatAtBottom || remain < dp(220)) chatScroll.scrollTo(0, content);
+                if (force || chatAtBottom) chatScroll.scrollTo(0, content);
             }
         });
     }
