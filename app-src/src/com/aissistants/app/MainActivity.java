@@ -139,8 +139,8 @@ public class MainActivity extends Activity {
     private static final java.util.regex.Pattern[] CAT_RE = {
             safeRe("(pkg|apt|apt-get|dpkg|pip|pip3|npm|yarn|pnpm|gem|go|apk|pm|magisk|cargo)\\s+(-{1,2}[\\w=-]+\\s+)*(install|add|i|-i)\\b",
                     "(install|add)"),
-            safeRe("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0)",
-                    "rm\\s+-[a-zA-Z]*[rf]"),
+            safeRe("(rm\\s+-[a-zA-Z]*[rf]|\\bshred\\s|dd\\s+[^|;]*of=/dev/|\\bmkfs|MASTER_CLEAR|--wipe|truncate\\s+-s\\s+0|pm\\s+(-[\\w-]+\\s+)*(uninstall|disable-user|disable|clear|suspend)|cmd\\s+package\\s+(uninstall|suspend))",
+                    "rm\\s+-[a-zA-Z]*[rf]|pm\\s+uninstall"),
             safeRe("(mount\\s+[^|;]*(remount|,rw)|\\binsmod\\b|\\brmmod\\b|magisk\\s+--(install|remove|uninstall)|\\bksud\\b|setenforce\\s+0|>\\s*\\S*/data/adb/|(cp|mv|rm|ln|chmod|chown)\\s+[^;|]*/data/adb/|sed\\s+-i[^;|]*/data/adb/|wm\\s+(size|density)\\s+[0-9]|settings\\s+put|svc\\s+(data|wifi|bluetooth|power)|\\|\\s*(sh|bash)\\b|eval\\s+\\$\\(|curl[^|;]*(-o|--output)[^|;]*/data/local/tmp|wget[^|;]*/data/local/tmp|\\breboot\\b|\\bctl\\.(restart|start|stop)\\b|\\bsvc\\s+power\\s+(reboot|shutdown)\\b|\\bkill(all)?\\s+(-[0-9]+\\s+)?(zygote|system_server|init|systemui|surfaceflinger|com\\.android\\.systemui)\\b|\\bsetprop\\s+(sys\\.(powerctl|boot)|init\\.[a-z_.]*)\\b|(^|[;&|]\\s*)(stop|start)\\s*($|[;&|])",
                     "mount\\s+[^|;]*(remount|,rw)|setenforce\\s+0|settings\\s+put|\\|\\s*(sh|bash)\\b"),
             safeRe("(curl[^|;]*(--data|-d\\s|-F\\s|-T\\s|--upload-file|-X\\s*(POST|PUT|PATCH))|wget[^|;]*--post-data|\\bscp\\b|\\brsync\\b|\\bnc\\s+-)",
@@ -231,6 +231,8 @@ public class MainActivity extends Activity {
     private HybridRouter.Host hybridHost;
     private LocalParser.AppLookup appLookup;
     private String fastPathText;
+    /** the text of the run in flight - kept after the fast path hands over, so the guard can classify it */
+    private String runTaskText;
     /** when the current run started, so the finish notice can say how long it took */
     private long runStartMs;
     /** the overlay needs a way back into the activity's own send path */
@@ -2441,6 +2443,7 @@ public class MainActivity extends Activity {
         addBubble("user", text);
         lastPrompt = text;
         fastPathText = text;      // the hybrid router gets first shot inside the worker
+        runTaskText = text;       // kept for the whole run: the guard reads it to tell analysis from action
         try {
             JSONObject um = new JSONObject();
             um.put("role", "user");
@@ -2988,6 +2991,18 @@ public class MainActivity extends Activity {
     }
 
     /** Read-only steps that never change the device: a run can dig through tools forever and end with nothing. */
+    /** true when the task is read-only by nature (audit, reverse engineering, inspection), so the
+     *  no-progress guard nudges instead of cutting the run short */
+    private boolean analysisTask() {
+        try {
+            String t = runTaskText == null ? "" : runTaskText.toLowerCase(java.util.Locale.ENGLISH);
+            return t.matches("(?s).*\\b(analisa\\w*|analisis|audit|review|periksa|telusuri|investigasi|"
+                    + "diagnos\\w*|debug|reverse|rekayasa balik|pelajari|riset|research|bandingkan|inspect\\w*|scan\\w*)\\b.*");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private String progressNudge(String cmd) {
         try {
             String low = cmd == null ? "" : cmd.toLowerCase(Locale.ENGLISH);
@@ -2996,6 +3011,7 @@ public class MainActivity extends Activity {
                             + "kill|killall|pkill|reboot|truncate|dd|ln|am|svc|setprop|insmod|rmmod|mount|stop|start)\\b.*");
             if (mutates) { idleSteps = 0; idleWarned = 0; return ""; }
             idleSteps++;
+            boolean analysis = analysisTask();
             if (idleSteps == 8 && idleWarned < 1) {
                 idleWarned = 1;
                 return "\n[APP NOTE: 8 steps in a row changed nothing on the device. Name the one fact that is "
@@ -3010,10 +3026,28 @@ public class MainActivity extends Activity {
             }
             if (idleSteps >= 26 && idleWarned < 3) {
                 idleWarned = 3;
+                if (analysis) {
+                    // an audit / reverse-engineering task is read-only by nature: nudge, do not stop
+                    return "\n[APP NOTE: " + idleSteps + " read-only steps. This looks like an analysis task, so keep "
+                         + "going - but stay purposeful: targeted extraction instead of full dumps, and name the "
+                         + "conclusion you are building toward so the user can follow it.]";
+                }
                 loopBroken = true;
                 addBubble("note", "guard: " + idleSteps + " langkah tanpa perubahan apa pun \u00b7 run dihentikan");
                 return "\n[EXPLORATION STOPPED after " + idleSteps + " steps without a state change. Write the "
                      + "conclusion now: what was proven, what blocks the task, and the realistic alternative.]";
+            }
+            if (analysis && idleSteps == 60 && idleWarned < 4) {
+                idleWarned = 4;
+                return "\n[APP NOTE: 60 read-only steps on this analysis. Either start writing the answer with what is "
+                     + "already proven, or switch to a single targeted check that closes the remaining question.]";
+            }
+            if (analysis && idleSteps >= 120 && idleWarned < 5) {
+                idleWarned = 5;
+                loopBroken = true;
+                addBubble("note", "guard: " + idleSteps + " langkah read-only \u00b7 run dihentikan, laporan dipaksa");
+                return "\n[ANALYSIS STOPPED after " + idleSteps + " read-only steps. Write the report now from the "
+                     + "evidence already collected, and name what is still unverified.]";
             }
         } catch (Throwable ignored) { }
         return "";
