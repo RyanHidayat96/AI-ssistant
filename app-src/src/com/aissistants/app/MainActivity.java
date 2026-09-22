@@ -501,9 +501,6 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
         tlp.setMargins(dp(8), 0, 0, 0);
         bar.addView(t, tlp);
-        bar.addView(iconBtn("\u002B", new View.OnClickListener() {
-            @Override public void onClick(View x) { newChat(); }
-        }));
         v.addView(bar);
 
         ScrollView sc = new ScrollView(this);
@@ -1562,7 +1559,9 @@ public class MainActivity extends Activity {
     /** Pill appears only while reader is away from the newest transcript entry. */
     private void refreshJumpChip() {
         if (jumpChip == null) return;
-        boolean show = !chatAtBottom && screen == 0 && chatScreen != null && chatScreen.isShown();
+        boolean hasBelow = chatScroll != null && chatScroll.getChildCount() > 0
+                && chatScroll.getChildAt(0).getHeight() > chatScroll.getHeight();
+        boolean show = !chatAtBottom && hasBelow && screen == 0 && chatScreen != null && chatScreen.isShown();
         if (!show) {
             jumpChip.setVisibility(View.GONE);
             if (chatAtBottom) jumpAnnounced = false;
