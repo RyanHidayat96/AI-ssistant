@@ -165,6 +165,10 @@ public class MainActivity extends Activity {
     private static final int REPEAT_CACHE_AFTER = 2;
     private static final int REPEAT_RUNAWAY_LIMIT = 12;
     private volatile boolean loopBroken = false;
+    /** guard stopped the run: give the model one last turn to write the conclusion, with no tools */
+    private volatile boolean reportOnly = false;
+    /** a whole-filesystem scan gets exactly one warning per run */
+    private volatile boolean deepScanWarned = false;
     private volatile boolean stuckRun = false;   // guard tripped: think at max for the rest of the run
 
     /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
@@ -231,6 +235,8 @@ public class MainActivity extends Activity {
     private HybridRouter.Host hybridHost;
     private LocalParser.AppLookup appLookup;
     private String fastPathText;
+    /** the last command a model turn issued - guard stop notes quote it as the run's last evidence */
+    private String lastCmdSeen = "";
     /** the text of the run in flight - kept after the fast path hands over, so the guard can classify it */
     private String runTaskText;
     /** when the current run started, so the finish notice can say how long it took */
@@ -243,6 +249,9 @@ public class MainActivity extends Activity {
     private final java.util.HashMap<String, Integer> analysisHits = new java.util.HashMap<>();
     private final java.util.HashSet<String> analysisWarned = new java.util.HashSet<>();
     // no-progress brake: consecutive read-only steps that never changed device state
+    /** binary-digging budget: read-only commands aimed at apk/dex/so artefacts */
+    private int digSteps;
+    private int digWarned;
     private int idleSteps;
     private int idleWarned;
     private String lastUsage = "";
@@ -2346,11 +2355,11 @@ public class MainActivity extends Activity {
         repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
-        idleSteps = 0; idleWarned = 0;
+        idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
         runStartMs = System.currentTimeMillis();
-        loopBroken = false;
-        stuckRun = false;
+        loopBroken = false; reportOnly = false; deepScanWarned = false;
+        stuckRun = false; reportOnly = false; deepScanWarned = false;
         ensureWorkDir();
         lastAssistantSaid = "";
         startAgentService();
@@ -2473,11 +2482,11 @@ public class MainActivity extends Activity {
         repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
-        idleSteps = 0; idleWarned = 0;
+        idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
         runStartMs = System.currentTimeMillis();
-        loopBroken = false;
-        stuckRun = false;
+        loopBroken = false; reportOnly = false; deepScanWarned = false;
+        stuckRun = false; reportOnly = false; deepScanWarned = false;
         refreshToolProbe(false);
         ensureWorkDir();
         lastAssistantSaid = "";
@@ -3003,14 +3012,72 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** read-only commands that only dig through binaries: counted across targets so the model
+     *  cannot dodge the budget by switching from one dex/apk to the next */
+    private boolean digsArtefacts(String low) {
+        boolean reads = low.matches("(?s).*\\b(unzip|grep|strings|sed|awk|head|tail|cat|readelf|objdump|"
+                + "zipinfo|dexdump|baksmali|xxd|hexdump|file)\\b.*");
+        boolean artefact = low.contains(".apk") || low.contains(".dex") || low.contains(".so")
+                || low.contains("classes") || low.contains("smali") || low.contains("libil2cpp")
+                || low.contains("/data/app/");
+        return reads && artefact;
+    }
+
     private String progressNudge(String cmd) {
         try {
+            if (cmd != null && !cmd.trim().isEmpty()) lastCmdSeen = cmd.trim();
             String low = cmd == null ? "" : cmd.toLowerCase(Locale.ENGLISH);
-            boolean mutates = low.contains(">") || low.contains("tee")
+
+            // --- digging budget: reads binaries without touching the app's real state
+            int dig = 0;
+            if (digsArtefacts(low)) {
+                digSteps++;
+                dig = digSteps;
+                boolean analysis = analysisTask();
+                int stopAt = analysis ? 44 : 22;
+                if (dig == 10 && digWarned < 1) {
+                    digWarned = 1;
+                    return "\n[APP NOTE: 10 read-only commands digging through binaries. That is not the app "
+                         + "behaving - it is strings inside a file. Go to the live source of truth instead: the "
+                         + "app's own UI, its prefs/db/config, its runtime state, its network traffic. One real "
+                         + "observation beats another grep.]";
+                }
+                if (dig >= stopAt && digWarned < 2) {
+                    digWarned = 2;
+                    if (!analysis) {
+                        reportOnly = true;
+                        addBubble("note", "guard: " + dig + " langkah ngubek biner tanpa bukti baru \u00b7 run dihentikan" + " \u00b7 terakhir: " + evid());
+                        return "\n[EXPLORATION STOPPED after " + dig + " commands digging through binaries. Write "
+                             + "the conclusion from the evidence you already have: what is proven, what blocks the "
+                             + "task, and the realistic alternative.]";
+                    }
+                    return "\n[APP NOTE: " + dig + " binary-reading steps on this analysis. Start writing the "
+                         + "conclusion with what is proven, or make one targeted runtime check.]";
+                }
+            }
+
+            // --- general no-progress budget: a step counts as progress only when it changes real state
+            boolean writesOut = false;
+            java.util.regex.Matcher r = java.util.regex.Pattern.compile(">>?\\s*([^\\s;|&()]+)").matcher(low);
+            while (r.find()) {
+                String t = r.group(1);
+                if (t.startsWith("/dev/null") || t.startsWith("/sdcard") || t.startsWith("/dev/")
+                        || t.contains("$wd") || t.contains("/tmp/ai-ssistants")) continue;
+                writesOut = true;
+                break;
+            }
+            boolean mutates = writesOut || low.contains("tee ")
                     || low.matches("(?s).*\\b(install|uninstall|rm|rmdir|mv|cp|touch|mkdir|chmod|chown|"
-                            + "kill|killall|pkill|reboot|truncate|dd|ln|am|svc|setprop|insmod|rmmod|mount|stop|start)\\b.*");
+                            + "kill|killall|pkill|reboot|truncate|dd|ln|am|svc|setprop|insmod|rmmod|mount)\\b.*");
+            if (low.matches("(?s).*\\bfind\\s+/\\s.*") && !deepScanWarned) {
+                deepScanWarned = true;
+                return "\n[APP NOTE: an unbounded find from / can run for minutes and stall the run. "
+                     + "Bound it (find /data/app, /system/bin, /data/data/<pkg>) or ask the kernel directly: "
+                     + "command -v, ls, pm path, dumpsys.]";
+            }
             if (mutates) { idleSteps = 0; idleWarned = 0; return ""; }
             idleSteps++;
+            android.util.Log.i("AIssistants", "guard: idle=" + idleSteps + " dig=" + dig + " warned=" + idleWarned);
             boolean analysis = analysisTask();
             if (idleSteps == 8 && idleWarned < 1) {
                 idleWarned = 1;
@@ -3027,13 +3094,12 @@ public class MainActivity extends Activity {
             if (idleSteps >= 26 && idleWarned < 3) {
                 idleWarned = 3;
                 if (analysis) {
-                    // an audit / reverse-engineering task is read-only by nature: nudge, do not stop
                     return "\n[APP NOTE: " + idleSteps + " read-only steps. This looks like an analysis task, so keep "
                          + "going - but stay purposeful: targeted extraction instead of full dumps, and name the "
                          + "conclusion you are building toward so the user can follow it.]";
                 }
-                loopBroken = true;
-                addBubble("note", "guard: " + idleSteps + " langkah tanpa perubahan apa pun \u00b7 run dihentikan");
+                reportOnly = true;
+                addBubble("note", "guard: " + idleSteps + " langkah tanpa perubahan apa pun \u00b7 run dihentikan" + " \u00b7 terakhir: " + evid());
                 return "\n[EXPLORATION STOPPED after " + idleSteps + " steps without a state change. Write the "
                      + "conclusion now: what was proven, what blocks the task, and the realistic alternative.]";
             }
@@ -3051,6 +3117,12 @@ public class MainActivity extends Activity {
             }
         } catch (Throwable ignored) { }
         return "";
+    }
+
+    /** one line of context for a guard stop: the last command, trimmed to a readable head */
+    private String evid() {
+        String c = lastCmdSeen == null ? "" : lastCmdSeen.replace('\n', ' ').trim();
+        return c.length() > 160 ? c.substring(0, 160) + "..." : c;
     }
 
     private static String targetKey(String low) {
@@ -3117,7 +3189,7 @@ public class MainActivity extends Activity {
                         + " payloadChars=" + msgs.toString().length());
                 final boolean hadImage = hasImagePart(msgs);
                 AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
-                        msgs, tools(), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
+                        msgs, (reportOnly ? null : tools()), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
                             @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
                         });
                 if (!reply.ok && hadImage && reply.error != null && reply.error.indexOf("400") >= 0) {
@@ -3125,7 +3197,7 @@ public class MainActivity extends Activity {
                     stripImageParts(msgs);
                     addBubble("note", "model refused the image \u2014 retried with the file path only");
                     reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
-                            msgs, tools(), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
+                            msgs, (reportOnly ? null : tools()), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
                                 @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
                             });
                 }
@@ -3727,11 +3799,11 @@ public class MainActivity extends Activity {
         repeatGuardTotal = 0;
         analysisHits.clear();
         analysisWarned.clear();
-        idleSteps = 0; idleWarned = 0;
+        idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
         runStartMs = System.currentTimeMillis();
-        loopBroken = false;
-        stuckRun = false;
+        loopBroken = false; reportOnly = false; deepScanWarned = false;
+        stuckRun = false; reportOnly = false; deepScanWarned = false;
         stepNow = 0;
         lastAssistantSaid = "";
         startAgentService();
