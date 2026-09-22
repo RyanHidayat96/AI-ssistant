@@ -2670,7 +2670,10 @@ public class MainActivity extends Activity {
             }
             @Override public String run(String cmd, int timeoutSec) {
                 OverlayView.releaseFocus();
-                return RootShell.run(cmd, timeoutSec);
+                // same wrapper as the model's shell path: the fast/plan path must see $WD and $TOOLS too
+                String wd = workDir();
+                return RootShell.run("cd " + wd + " 2>/dev/null; export WD=" + wd
+                        + "; export TOOLS=" + toolsDir() + "; " + cmd, timeoutSec);
             }
         };
     }
@@ -3236,18 +3239,48 @@ public class MainActivity extends Activity {
         return "/data/local/tmp/ai-ssistants/" + id.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 
-    /** create the workspace before a run, so nothing a session makes lands in the shared dir */
+    /** shared, persistent cache for downloaded tools (smali, jadx, python, ...) - reused by every session.
+     *  Lives under /data/adb (root area, survives reboots and cleaner apps), NOT under /data/local/tmp. */
+    static String toolsDir() {
+        String t = toolsCache;
+        return (t == null || t.isEmpty()) ? "/data/adb/ai-ssistants/tools" : t;
+    }
+    private static volatile String toolsCache = "";
+
+    /** create the workspace before a run, so nothing a session makes lands in the shared dir.
+     *  Also resolves the TOOL CACHE once: a persistent directory where downloaded binaries can be
+     *  *executed* (that is why /data/adb comes first, then the app's own files dir, then /data/local -
+     *  never /data/local/tmp, which cleaners wipe). */
     private void ensureWorkDir() {
         foreignTmpWarned = false;
         try {
-            RootShell.run("mkdir -p " + workDir() + " && chmod 700 " + workDir(), 15);
+            String wd = workDir();
+            String script =
+                    "WDIR=\"" + wd + "\"; mkdir -p \"$WDIR\" && chmod 700 \"$WDIR\";"
+                  + " probe() { D=\"$1\"; mkdir -p \"$D\" 2>/dev/null || return 1; chmod 700 \"$D\" 2>/dev/null;"
+                  + "   rm -f \"$D/.probe\" 2>/dev/null; cp /system/bin/echo \"$D/.probe\" 2>/dev/null || return 1;"
+                  + "   chmod 700 \"$D/.probe\" 2>/dev/null || return 1;"
+                  + "   R=$(\"$D/.probe\" ok 2>/dev/null); rm -f \"$D/.probe\" 2>/dev/null; [ \"$R\" = ok ]; };"
+                  + " T='';"
+                  + " for D in /data/adb/ai-ssistants/tools /data/data/com.aissistants.app/files/tools /data/local/ai-ssistants/tools; do"
+                  + "   probe \"$D\" && { T=\"$D\"; break; }; done;"
+                  + " [ -n \"$T\" ] || T=/data/local/ai-ssistants/tools;"
+                  + " printf 'CACHE=%s\\n' \"$T\"";
+            String out = RootShell.run(script, 25);
+            // the persistent shell appends its own sentinel, so pull the path out with a pattern
+            java.util.regex.Matcher m = out == null ? null
+                    : java.util.regex.Pattern.compile("(/data/[^\\s]*/tools)").matcher(out);
+            if (m != null && m.find()) {
+                toolsCache = m.group(1);
+                android.util.Log.i("AIssistants", "tool cache: " + toolsCache);
+            }
         } catch (Throwable ignored) { }
     }
 
-    /** does this command point at /data/local/tmp OUTSIDE this session's workspace? */
+    /** does this command point at /data/local/tmp OUTSIDE this session's workspace (or the tool cache)? */
     private boolean touchesForeignTmp(String cmd) {
         if (cmd == null) return false;
-        return cmd.replace(workDir(), "").contains("/data/local/tmp");
+        return cmd.replace(workDir(), "").replace(toolsDir(), "").contains("/data/local/tmp");
     }
 
     /** run one command as root, echo it in the chat, return the output for the model */
@@ -3323,7 +3356,7 @@ public class MainActivity extends Activity {
         final String wd = workDir();
         if (echoCommand) addBubble("tool", "$ " + cmd);
         // every command starts inside THIS session's workspace; $WD is exported for the model
-        String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; " + cmd;
+        String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + toolsDir() + "; " + cmd;
         OverlayView.releaseFocus();
         String out = withRecovery(foldLong(RootShell.run(exec, store.timeoutSec())), cmd);
         if (touchesForeignTmp(cmd)) {

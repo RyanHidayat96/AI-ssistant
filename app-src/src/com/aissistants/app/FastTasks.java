@@ -126,6 +126,9 @@ final class FastTasks {
         // ---- device hygiene ------------------------------------------------------------------
         r("hygiene-scan", "(cek (jejak|deteksi|integritas|kebersihan)|deteksi root|root terdeteksi|suspicious activity|kenapa (app|aplikasi)[^\\n]{0,30}(nolak|gagal|gak bisa|tidak bisa|error)|device hygiene)", "",
           Hygiene.scanCmd(), "none", "Hasil cek integritas OS:\n{out}", true),
+        r("agent-tools", "(tool (apa|yang) (saja|sudah ada)|tools? agent|cache tool|daftar tool|tool .*terpasang|tool apa)", "",
+          "T=\"$TOOLS\"; echo \"cache: $T\"; du -sh \"$T\" 2>/dev/null || true; ls -la \"$T\" 2>/dev/null || true; echo '-- catatan --'; cat \"$T/agent-tools.md\" 2>/dev/null || echo '(belum ada catatan)'",
+          "none", "Tool agent (cache bersama, dipakai ulang antar sesi):\n{out}", true),
         r("settings-restore", "(pulihkan (setelan|setting|pengaturan)|kembalikan setelan|restore settings|balikin setelan)", "",
           "f=/data/local/tmp/ai-ssistants/state.log; if [ ! -s \"$f\" ]; then echo 'belum ada catatan perubahan'; exit 0; fi;"
         + " awk '{a[NR]=$0} END{for(i=NR;i>0;i--) print a[i]}' \"$f\" | awk '!/^SETTINGS /{next} !seen[$2\" \"$3]++{print $2, $3, $4}'"

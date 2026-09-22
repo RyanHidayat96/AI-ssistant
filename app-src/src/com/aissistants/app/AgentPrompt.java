@@ -299,7 +299,8 @@ final class AgentPrompt {
           .append("Reuse confirmed information until evidence suggests it changed.\n\n")
 
           .append("TOOL ACQUISITION\n")
-        .append("If a capability is genuinely missing, pick the smallest available option once, verify it works with a harmless test, then return to the task. Check for an existing alternative (toybox/busybox command, installed app, Termux package) before downloading anything.\n")
+        .append("If a capability is genuinely missing, pick the smallest available option once, verify it works with a harmless test, then return to the task. Check $TOOLS and any existing alternative (toybox/busybox command, installed app, Termux package) before downloading anything.\n")
+        .append("Install or unpack new tools INTO $TOOLS so later runs reuse them; never keep a tool only inside this session's workspace, and never download the same tool twice.\n")
         .append("Never install, download or compile tools as exploration, and never repeat a failed acquisition: change the method or report the missing capability in one line.\n\n")
 
         .append("TOOL COMPATIBILITY\n")
@@ -469,7 +470,8 @@ final class AgentPrompt {
           .append("- Store generated scripts, pulled files, patches, backups, diagnostic artifacts, filtered logs, and temporary files here whenever practical.\n")
           .append("- Files outside the workspace may be inspected or modified only when the requested task genuinely requires it and the target identity is established.\n")
           .append("- Do not scatter temporary agent artifacts across unrelated device locations.\n")
-          .append("- Clean temporary agent-generated helpers when finished unless they are useful task deliverables.\n\n")
+          .append("- Clean temporary agent-generated helpers when finished unless they are useful task deliverables.\n")
+          .append("- TOOL CACHE: $TOOLS is a persistent, shared directory (not a temporary one) chosen once per device, where downloaded binaries can be executed. Look there BEFORE downloading anything; install or unpack new tools INTO it and keep them, so a later run never downloads the same tool twice. Record the name, version and how to run it in $TOOLS/agent-tools.md.\n\n")
 
           .append("FINAL DIRECTIVE\n")
           .append("Be curious, evidence-driven, adaptive, and persistent. ")
@@ -510,7 +512,8 @@ final class AgentPrompt {
          .append("- packages: `pm list packages -3`, `pm path <pkg>`, `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime|installerPackageName'`\n")
          .append("- app data: /data/data can be masked by a tmpfs inside the app's mount namespace - try `nsenter -t 1 -m -- ls /data/data/<pkg>` before concluding it is unreadable\n")
          .append("- APK: pull the real file with `cp $(pm path <pkg> | sed 's/package://') $WD/app-base.apk`; peek with `unzip -l` and `unzip -p <apk> classes.dex | strings`\n")
-         .append("- /system/bin has no java, python3, apktool, zip or jarsigner; Termux is installed but its packages are not, and `pkg` refuses to run as root - run it as the Termux uid from `pm list packages -U | grep com.termux`\n")
+         .append("- /system/bin has no java, python3, apktool, zip or jarsigner; Termux is installed but bare (`pkg` refuses root - run it as the Termux uid from `pm list packages -U`)\n")
+         .append("- tools: check `$TOOLS` before downloading; install or unpack there (never only in the session workspace) and note name/version/usage in `$TOOLS/agent-tools.md`\n")
          .append("- install: `pm install -r -d <apk>`; on INSTALL_FAILED_UPDATE_INCOMPATIBLE say so instead of silently uninstalling\n")
          .append("- signature/attestation: this phone already runs KernelSU modules (tricky_store, zygisk_detach, morphe patches, hma) - try a patched APK as-is before assuming signatures block you\n")
          .append("- wifi: `cmd wifi connect-network <ssid> wpa2 <pass>` (this PERSISTS the psk); the driver refuses monitor mode, so aircrack-style work is impossible here\n")

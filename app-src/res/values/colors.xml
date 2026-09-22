@@ -6,4 +6,5 @@
     <color name="fg">#FFE8EDF7</color>
     <color name="muted">#FF93A0B8</color>
     <color name="accent">#FF3B82F6</color>
+    <color name="ic_launcher_background">#FFFFFFFF</color>
 </resources>
