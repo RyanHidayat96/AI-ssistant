@@ -247,6 +247,10 @@ public class MainActivity extends Activity {
     private int bubbleTick = 0;
     private long lastBak = 0L;
     private JSONObject cur;
+    /** Draft edit stays non-destructive until the revised message is sent. */
+    private int editingBubbleIndex = -1;
+    private String editingBubbleText = "";
+    private String editingSessionId = "";
     /** once the shared-dir warning was shown for this run */
     private boolean foreignTmpWarned;
     private final List<JSONObject> messages = new ArrayList<>();
@@ -1507,7 +1511,10 @@ public class MainActivity extends Activity {
                     input.postDelayed(new Runnable() { @Override public void run() { openAppPicker(at); } }, 120);
                 }
             }
-            @Override public void afterTextChanged(android.text.Editable e) { refreshSendBtn(); }
+            @Override public void afterTextChanged(android.text.Editable e) {
+                if (editingBubbleIndex >= 0 && e.length() == 0) clearMessageEdit();
+                refreshSendBtn();
+            }
         });
         input.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent event) {
@@ -1591,7 +1598,8 @@ public class MainActivity extends Activity {
             for (int i = 0; i < b.length(); i++) {
                 JSONObject o = b.optJSONObject(i);
                 if (o == null) continue;
-                snap.add(new Object[]{o.optString("role", "note"), o.optString("text", ""), o.optLong("t", 0) });
+                snap.add(new Object[]{o.optString("role", "note"), o.optString("text", ""),
+                        o.optLong("t", 0), Integer.valueOf(i) });
             }
         }
 
@@ -1630,7 +1638,7 @@ public class MainActivity extends Activity {
                 if ("tool".equals(role)) {
                     int j = i;
                     while (j < renderTo && "tool".equals((String) snap.get(j)[0])) j++;
-                    final int start = i;
+                    final int start = ((Integer) snap.get(i)[3]).intValue();
                     final int count = j - i;
                     final String key = cur.optString("id", "") + ":" + start;
                     boolean open = expandedGroups.contains(key) && count <= GROUP_RENDER_MAX;
@@ -1638,8 +1646,9 @@ public class MainActivity extends Activity {
                     tagTranscriptRow(hidx, start);
                     if (open) {
                         for (int k = i; k < j; k++) {
-                            addBubbleView("tool", (String) snap.get(k)[1], (Long) snap.get(k)[2], "tool");
-                            tagLastTranscriptRow(k);
+                            int bubbleIndex = ((Integer) snap.get(k)[3]).intValue();
+                            addBubbleView("tool", (String) snap.get(k)[1], (Long) snap.get(k)[2], "tool", bubbleIndex);
+                            tagLastTranscriptRow(bubbleIndex);
                         }
                     }
                     groupKeys.add(key);
@@ -1653,8 +1662,9 @@ public class MainActivity extends Activity {
                     prev = role;
                     continue;
                 }
-                addBubbleView(role, (String) m[1], (Long) m[2], prev);
-                tagLastTranscriptRow(i);
+                int bubbleIndex = ((Integer) m[3]).intValue();
+                addBubbleView(role, (String) m[1], (Long) m[2], prev, bubbleIndex);
+                tagLastTranscriptRow(bubbleIndex);
                 prev = role;
             }
         }
@@ -1785,7 +1795,7 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    private void addBubbleView(String role, String text, long t, String prevRole) {
+    private void addBubbleView(String role, String text, long t, String prevRole, final int bubbleIndex) {
         boolean user = "user".equals(role);
         boolean tool = "tool".equals(role);
         boolean note = "note".equals(role);
@@ -1862,7 +1872,54 @@ public class MainActivity extends Activity {
             if (!note && user) slp.gravity = Gravity.END;
             row.addView(s, slp);
         }
+        if (!note && !tool) addBubbleActions(row, user, text, bubbleIndex);
         chatLog.addView(row);
+    }
+
+    /** Compact per-message actions: icon-only, full touch targets, never steal text selection. */
+    private void addBubbleActions(LinearLayout row, boolean user, final String text, final int bubbleIndex) {
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(user ? Gravity.END : Gravity.START);
+        if (user && !busy) {
+            actions.addView(bubbleAction(R.drawable.ic_edit_20, uiText(R.string.a11y_edit_message),
+                    new View.OnClickListener() {
+                        @Override public void onClick(View v) { beginMessageEdit(bubbleIndex, text); }
+                    }));
+        }
+        actions.addView(bubbleAction(R.drawable.ic_copy_20, uiText(R.string.a11y_copy_message),
+                new View.OnClickListener() {
+                    @Override public void onClick(View v) { copyMessage(text); }
+                }));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(40));
+        lp.gravity = user ? Gravity.END : Gravity.START;
+        lp.setMargins(user ? 0 : dp(2), dp(1), user ? dp(2) : 0, 0);
+        row.addView(actions, lp);
+    }
+
+    private ImageButton bubbleAction(int drawable, String label, View.OnClickListener listener) {
+        ImageButton b = new ImageButton(this);
+        b.setImageResource(drawable);
+        b.setImageTintList(ColorStateList.valueOf(MUTED));
+        b.setScaleType(ImageView.ScaleType.CENTER);
+        b.setPadding(dp(10), dp(10), dp(10), dp(10));
+        b.setBackground(ripple(Color.TRANSPARENT, 0, 20));
+        b.setOnClickListener(listener);
+        setButtonA11y(b, label);
+        b.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
+        return b;
+    }
+
+    private void copyMessage(String text) {
+        try {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("message", text));
+            toast(uiText(R.string.chat_copied));
+        } catch (Throwable error) {
+            toast(uiText(R.string.toast_copy_failed));
+        }
     }
 
     /** Small safe Markdown subset for model replies. User and shell text remain literal. */
@@ -2762,6 +2819,7 @@ public class MainActivity extends Activity {
             store.saveSessions(sessions.toString());
         }
         messages.clear();
+        clearMessageEdit();
         pending.clear();
         allowInChat.clear();
         if (pendingBar != null) pendingBar.setVisibility(View.GONE);
@@ -2777,6 +2835,7 @@ public class MainActivity extends Activity {
                 cur = o;
                 synchronized (lock) { store.setActiveId(id); }
                 messages.clear();
+                clearMessageEdit();
                 allowInChat.clear();
                 rebuildModelMessages();
                 showChat();
@@ -2812,6 +2871,7 @@ public class MainActivity extends Activity {
                 else { cur = newSessionObj(); sessions.put(cur); }
                 store.setActiveId(cur.optString("id"));
                 messages.clear();
+                clearMessageEdit();
                 rebuildModelMessages();
             }
             store.saveSessions(sessions.toString());
@@ -2854,6 +2914,7 @@ public class MainActivity extends Activity {
                             try { cur.put("bubbles", new JSONArray()); } catch (Throwable ignored) { }
                         }
                         messages.clear();
+                        clearMessageEdit();
                         pending.clear();
                         if (pendingBar != null) pendingBar.setVisibility(View.GONE);
                         persist();
@@ -2911,6 +2972,82 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void clearMessageEdit() {
+        editingBubbleIndex = -1;
+        editingBubbleText = "";
+        editingSessionId = "";
+        if (input != null) input.setHint(uiText(R.string.chat_input_hint));
+    }
+
+    /** Put an existing user turn into the composer; persistence waits until the new turn is sent. */
+    private void beginMessageEdit(int bubbleIndex, String text) {
+        if (busy || stop) { toast(uiText(R.string.chat_edit_stop_first)); return; }
+        if (cur == null || input == null) return;
+        synchronized (lock) {
+            JSONArray bubbles = bubblesOf(cur);
+            JSONObject bubble = bubbleIndex >= 0 && bubbleIndex < bubbles.length()
+                    ? bubbles.optJSONObject(bubbleIndex) : null;
+            if (bubble == null || !"user".equals(bubble.optString("role"))
+                    || !TextUtils.equals(text, bubble.optString("text", ""))) {
+                toast(uiText(R.string.chat_edit_changed));
+                return;
+            }
+        }
+        editingBubbleIndex = bubbleIndex;
+        editingBubbleText = text == null ? "" : text;
+        editingSessionId = cur.optString("id", "");
+        input.setHint(uiText(R.string.chat_edit_hint));
+        input.setText(editingBubbleText);
+        input.setSelection(input.length());
+        refreshSendBtn();
+        showComposerKeyboard();
+        toast(uiText(R.string.chat_edit_ready));
+    }
+
+    /**
+     * Codex-style branch: replace the selected user turn only when its revision is submitted.
+     * Later transcript, provider context, task checkpoint, and durable log are removed together.
+     */
+    private boolean applyMessageEditBranch() {
+        if (editingBubbleIndex < 0) return true;
+        if (cur == null || !editingSessionId.equals(cur.optString("id", ""))) {
+            clearMessageEdit();
+            toast(uiText(R.string.chat_edit_changed));
+            return false;
+        }
+        JSONArray branch;
+        synchronized (lock) {
+            branch = ChatBranch.beforeEditedUser(bubblesOf(cur), editingBubbleIndex, editingBubbleText);
+            if (branch == null) {
+                clearMessageEdit();
+                toast(uiText(R.string.chat_edit_changed));
+                return false;
+            }
+            try { cur.put("bubbles", branch); } catch (Throwable ignored) { return false; }
+        }
+        clearMessageEdit();
+        messages.clear();
+        pending.clear();
+        synchronized (injectedQueue) { injectedQueue.clear(); }
+        allowInChat.clear();
+        if (pendingBar != null) pendingBar.setVisibility(View.GONE);
+        expandedGroups.clear();
+        renderFrom = Integer.MAX_VALUE;
+        renderTo = Integer.MAX_VALUE;
+        chatAtBottom = true;
+        jumpCount = 0;
+        jumpTotal = 0;
+        jumpAnnounced = false;
+        try {
+            taskMemory = new AgentMemory(getFilesDir(), cur.optString("id", "default"));
+            taskMemory.clear();
+        } catch (Throwable ignored) { }
+        rebuildModelMessages();
+        persist();
+        seedOverlay();
+        return true;
+    }
+
     private void addBubble(String role, String text) {
         try {
             OverlayHub.line(mirrorLine(role, text));
@@ -2940,6 +3077,7 @@ public class MainActivity extends Activity {
     private void onSend() {
         String text = input.getText().toString().trim();
         if (text.isEmpty()) return;
+        if (!applyMessageEditBranch()) return;
         input.setText("");
         send(text);
     }

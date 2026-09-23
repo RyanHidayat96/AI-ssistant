@@ -322,6 +322,14 @@
     <string name="a11y_open_chats">Buka chat</string>
     <string name="a11y_more_options">Opsi lainnya</string>
     <string name="a11y_edit">Ubah</string>
+    <string name="a11y_edit_message">Ubah pesan</string>
+    <string name="a11y_copy_message">Salin pesan</string>
+    <string name="chat_copied">Tersalin</string>
+    <string name="toast_copy_failed">Pesan tidak dapat disalin</string>
+    <string name="chat_edit_stop_first">Tunggu tugas benar-benar berhenti sebelum mengubah pesan</string>
+    <string name="chat_edit_hint">Mengubah pesan — hapus teks untuk batal</string>
+    <string name="chat_edit_ready">Mengubah pesan. Kirim untuk membuat cabang dari sini.</string>
+    <string name="chat_edit_changed">Pesan berubah. Mulai ubah lagi.</string>
     <string name="a11y_action">Tindakan</string>
     <string name="a11y_manual_command">Perintah manual: %1$s</string>
     <string name="review_allow_once">Izinkan sekali</string>

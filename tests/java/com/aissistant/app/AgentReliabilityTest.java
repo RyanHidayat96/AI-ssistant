@@ -27,6 +27,7 @@ public final class AgentReliabilityTest {
         testAppLockHashing();
         testToolValidation();
         testMemory();
+        testMessageBranch();
         testRunGuard();
         testCapabilityTriage();
         testPromptIsGeneral();
@@ -76,6 +77,12 @@ public final class AgentReliabilityTest {
         String excerpt = AgentMemory.excerpt("head" + repeat('x', 80) + "tail", 20);
         check(excerpt.contains("head") && excerpt.contains("tail"), "excerpt retains both ends");
         rejectsEvidence(memory, "../checkpoint.txt");
+        memory.clear();
+        check(memory.checkpoint().isEmpty(), "branch clears saved task checkpoint");
+        boolean oldEvidenceRemoved = false;
+        try { memory.readEvidence(id, 0); }
+        catch (Exception expected) { oldEvidenceRemoved = true; }
+        check(oldEvidenceRemoved, "branch clears saved task evidence");
 
         JSONArray bubbles = new JSONArray();
         bubbles.put(new JSONObject().put("role", "user").put("text", "original goal"));
@@ -90,6 +97,22 @@ public final class AgentReliabilityTest {
             actionKept |= text.contains("ACTION: id");
         }
         check(goalKept && actionKept, "resume retains goal and paired tool evidence");
+    }
+
+    private static void testMessageBranch() throws Exception {
+        JSONArray transcript = new JSONArray();
+        transcript.put(new JSONObject().put("role", "user").put("text", "original task"));
+        transcript.put(new JSONObject().put("role", "tool").put("text", "$ id"));
+        transcript.put(new JSONObject().put("role", "tool").put("text", "uid=0"));
+        transcript.put(new JSONObject().put("role", "assistant").put("text", "partial answer"));
+
+        JSONArray branch = ChatBranch.beforeEditedUser(transcript, 0, "original task");
+        check(branch != null && branch.length() == 0, "edit branches before original user turn");
+        branch.put(new JSONObject().put("role", "user").put("text", "revised task"));
+        String restored = AgentMemory.restore(branch).get(0).optString("content");
+        check("revised task".equals(restored), "branch context excludes old tool work and answer");
+        check(ChatBranch.beforeEditedUser(transcript, 0, "stale text") == null,
+                "branch rejects a message that changed before submit");
     }
 
     private static void testRunGuard() {

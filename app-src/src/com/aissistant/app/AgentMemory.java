@@ -72,6 +72,19 @@ final class AgentMemory {
                 + "\n" + text.substring(offset, end);
     }
 
+    /** Discard task-scoped state when conversation branches before the task. */
+    void clear() {
+        try {
+            File[] files = dir.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file != null && file.isFile()) file.delete();
+                }
+            }
+        } catch (Throwable ignored) { }
+        sequence = 0;
+    }
+
     private void ensureDir() throws Exception {
         if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("Cannot create session memory");
     }

@@ -322,6 +322,14 @@
     <string name="a11y_open_chats">Open chats</string>
     <string name="a11y_more_options">More options</string>
     <string name="a11y_edit">Edit</string>
+    <string name="a11y_edit_message">Edit message</string>
+    <string name="a11y_copy_message">Copy message</string>
+    <string name="chat_copied">Copied</string>
+    <string name="toast_copy_failed">Could not copy message</string>
+    <string name="chat_edit_stop_first">Wait until task has stopped before editing a message</string>
+    <string name="chat_edit_hint">Editing message — clear to cancel</string>
+    <string name="chat_edit_ready">Editing message. Send to branch from here.</string>
+    <string name="chat_edit_changed">Message changed. Start editing it again.</string>
     <string name="a11y_action">Action</string>
     <string name="a11y_manual_command">Manual command: %1$s</string>
     <string name="review_allow_once">Allow once</string>

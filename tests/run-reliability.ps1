@@ -18,6 +18,7 @@ $sources = @(
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentPrompt.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentSkills.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentTools.java"),
+  (Join-Path $Root "app-src\src\com\aissistant\app\ChatBranch.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentMemory.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\ReferenceReader.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\RunGuard.java"),
