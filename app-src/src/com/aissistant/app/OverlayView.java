@@ -2,6 +2,7 @@ package com.aissistant.app;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Typeface;
@@ -15,6 +16,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -24,7 +26,7 @@ import java.util.ArrayList;
 /**
  * Floating panel that keeps the run visible while the agent drives another app: the activity goes to
  * the background (opening WhatsApp, a game, the dialer), this window stays on top with the live
- * status, the last transcript lines, STOP and a way back into the app.
+ * status, the last transcript lines, and a way back into the app.
  */
 final class OverlayView {
 
@@ -56,6 +58,9 @@ final class OverlayView {
     private TextView jumpPill;       // "↓ N" pill: new lines arrived while the user reads older ones
     private int pendingNew;
     private android.widget.EditText input;
+    private ImageButton actionBtn;
+    /** 0 disabled, 1 send, 2 stop: avoids rebuilding the button every refresh tick. */
+    private int actionMode = -1;
     private int panelW;          // panel width in px (draggable)
     private int transcriptH;     // chat area height in px (draggable)
     private android.view.View grip;
@@ -293,13 +298,6 @@ final class OverlayView {
         statusView.setSingleLine(true);
         statusView.setEllipsize(TextUtils.TruncateAt.END);
         head.addView(statusView, new LinearLayout.LayoutParams(0, -2, 1));
-
-        head.addView(chip("STOP", DANGER, ON_ACCENT, new Runnable() {
-            @Override public void run() {
-                OverlayHub.requestStop();
-                flash("dihentikan…");
-            }
-        }));
         head.addView(chip(collapsed ? "\u25B2" : "\u25BC", LINE, FG, new Runnable() {
             @Override public void run() { toggleCollapse(); }
         }));
@@ -383,9 +381,18 @@ final class OverlayView {
                 | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent e) {
-                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) { fireInput(); return true; }
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+                        && input.getText() != null && input.getText().toString().trim().length() > 0) {
+                    fireInput();
+                    return true;
+                }
                 return false;
             }
+        });
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { refreshComposerAction(); }
+            @Override public void afterTextChanged(android.text.Editable s) { refreshComposerAction(); }
         });
         // tapping the field must grab focus and pull the keyboard up, like a normal chat box
         input.setOnClickListener(new View.OnClickListener() {
@@ -395,11 +402,18 @@ final class OverlayView {
             @Override public void onFocusChange(View v, boolean has) { if (has) grabIme(); else useIme(false); }
         });
         row.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
-        row.addView(chip("\u2191", ACCENT, ON_ACCENT, new Runnable() {
-            @Override public void run() { fireInput(); }
-        }));
+        actionBtn = new ImageButton(ctx);
+        actionBtn.setScaleType(android.widget.ImageView.ScaleType.CENTER);
+        actionBtn.setPadding(dp(10), dp(10), dp(10), dp(10));
+        actionBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { fireInput(); }
+        });
+        LinearLayout.LayoutParams actionLp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        actionLp.gravity = Gravity.CENTER_VERTICAL;
+        actionLp.setMargins(dp(2), 0, dp(1), 0);
+        row.addView(actionBtn, actionLp);
         root.addView(row);
-
+        refreshComposerAction();
         // resize grip: drag to change width + chat height, double-tap to reset
         grip = buildGrip();
         grip.setOnClickListener(new View.OnClickListener() {
@@ -419,11 +433,20 @@ final class OverlayView {
         return root;
     }
 
-    /** hand the typed prompt to the activity (same path as the main input row) */
+    /** Keep the floating action identical to the main composer: empty+busy stops, text sends. */
     private void fireInput() {
         if (input == null) return;
         String text = input.getText() == null ? "" : input.getText().toString().trim();
-        if (text.isEmpty()) return;
+        if (text.isEmpty()) {
+            if (OverlayHub.busy()) {
+                MainActivity host = MainActivity.instance;
+                if (host != null) host.overlayStop();
+                else OverlayHub.requestStop();
+                flash("dihentikan…");
+                refreshComposerAction();
+            }
+            return;
+        }
         MainActivity host = MainActivity.instance;
         if (host == null) {
             OverlayHub.line("(app-nya sudah ditutup - buka AI-ssistant dulu)");
@@ -434,6 +457,28 @@ final class OverlayView {
         useIme(false);            // give the input focus straight back to the app being driven
         try { host.overlaySend(text); }
         catch (Throwable t) { OverlayHub.line("gagal kirim: " + t); }
+    }
+
+    private void refreshComposerAction() {
+        if (actionBtn == null) return;
+        boolean hasText = input != null && input.getText() != null
+                && input.getText().toString().trim().length() > 0;
+        int next = OverlayHub.busy() && !hasText ? 2 : (hasText ? 1 : 0);
+        if (next == actionMode) return;
+        actionMode = next;
+        if (next == 2) {
+            actionBtn.setImageResource(R.drawable.ic_stop_20);
+            actionBtn.setImageTintList(ColorStateList.valueOf(ON_ACCENT));
+            actionBtn.setBackground(circle(DANGER));
+            actionBtn.setAlpha(1f);
+            actionBtn.setContentDescription("Stop current run");
+        } else {
+            actionBtn.setImageResource(R.drawable.ic_arrow_upward_24);
+            actionBtn.setImageTintList(ColorStateList.valueOf(next == 1 ? ON_ACCENT : MUTED));
+            actionBtn.setBackground(circle(next == 1 ? ACCENT : LINE));
+            actionBtn.setAlpha(next == 1 ? 1f : .78f);
+            actionBtn.setContentDescription("Send message");
+        }
     }
 
     private boolean mainAlive() { return MainActivity.instance != null; }
@@ -690,6 +735,7 @@ final class OverlayView {
     private void refresh() {
         if (panel == null) return;
         try {
+            refreshComposerAction();
             String st = OverlayHub.status();
             if (statusView != null) {
                 statusView.setText(st == null || st.isEmpty() ? "AI-ssistant \u00b7 jalan" : st);
@@ -837,6 +883,13 @@ final class OverlayView {
         g.setColor(fill);
         g.setCornerRadius(dp(radius));
         if (stroke != fill) g.setStroke(dp(1), stroke);
+        return g;
+    }
+
+    private GradientDrawable circle(int fill) {
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setColor(fill);
         return g;
     }
 

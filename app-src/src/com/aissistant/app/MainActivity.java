@@ -2318,6 +2318,7 @@ public class MainActivity extends Activity {
         AiClient.cancel();
         ReferenceReader.cancel();
         RootShell.cancel();
+        try { AgentService.clearPermissionRequired(this); } catch (Throwable ignored) { }
         java.util.concurrent.CountDownLatch l = permLatch;
         if (l != null) {
             java.util.concurrent.atomic.AtomicInteger r = permResult;
@@ -2360,6 +2361,7 @@ public class MainActivity extends Activity {
     }
 
     private void stopAgentService() {
+        try { AgentService.clearPermissionRequired(this); } catch (Throwable ignored) { }
         try { stopService(new Intent(this, AgentService.class)); } catch (Throwable ignored) { }
         try {
             android.app.NotificationManager nm =
@@ -2587,6 +2589,14 @@ public class MainActivity extends Activity {
     // in any other app will see a running hook on its default port and refuse to start. So every
     // run ends with a cleanup, and the user gets a one-tap triage + clean.
 
+    /** Route the floating stop button through the exact same cancellation path as the main composer. */
+    void overlayStop() {
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (busy) doStop();
+            }
+        });
+    }
     /** a prompt typed in the floating panel: mid-run input while busy, a normal send otherwise */
     void overlaySend(final String text) {
         if (text == null || text.trim().isEmpty()) return;
@@ -3428,8 +3438,10 @@ public class MainActivity extends Activity {
         final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
         final java.util.concurrent.atomic.AtomicInteger res =
                 new java.util.concurrent.atomic.AtomicInteger(PERM_DENY);
+        final int ci = Math.max(0, java.util.Arrays.asList(CAT_KEYS).indexOf(cat));
         permLatch = latch;
         permResult = res;
+        if (!appVisible) AgentService.permissionRequired(this, CAT_LABEL[ci], cmd);
         ui.post(new Runnable() {
             @Override public void run() {
                 LinearLayout box = new LinearLayout(MainActivity.this);
@@ -3452,7 +3464,6 @@ public class MainActivity extends Activity {
                 mlp.setMargins(0, dp(6), 0, 0);
                 box.addView(msg, mlp);
 
-                final int ci = Math.max(0, java.util.Arrays.asList(CAT_KEYS).indexOf(cat));
                 final String[] labels = { "Izinkan sekali", "Izinkan di percakapan ini", "Izinkan selalu (" + CAT_KEYS[ci] + ")", "Tolak" };
                 final AlertDialog[] holder = new AlertDialog[1];
                 for (int i = 0; i < labels.length; i++) {
@@ -3493,8 +3504,11 @@ public class MainActivity extends Activity {
             }
         });
         try { latch.await(); } catch (Throwable ignored) { }
-        permLatch = null;
-        permResult = null;
+        finally {
+            try { AgentService.clearPermissionRequired(this); } catch (Throwable ignored) { }
+            permLatch = null;
+            permResult = null;
+        }
         return res.get();
     }
 

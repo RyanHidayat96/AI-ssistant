@@ -45,6 +45,7 @@ public class AgentService extends Service {
     }
 
     @Override public void onDestroy() {
+        clearPermissionRequired(this);
         try { OverlayView.hide(); } catch (Throwable ignored) { }
         super.onDestroy();
     }
@@ -69,6 +70,62 @@ public class AgentService extends Service {
         } catch (Throwable ignored) { }
     }
 
+    // ---- permission needed notice ----------------------------------------------------------
+    private static final String CH_PERMISSION = "permission";
+    private static final int ID_PERMISSION = 3;
+
+    /** Surface a paused approval when the chat is behind another app. */
+    static void permissionRequired(Context ctx, String label, String command) {
+        if (ctx == null || MainActivity.appVisible) return;
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CH_PERMISSION) == null) {
+                NotificationChannel c = new NotificationChannel(CH_PERMISSION, "Izin agent",
+                        NotificationManager.IMPORTANCE_HIGH);
+                c.setShowBadge(true);
+                c.enableVibration(true);
+                nm.createNotificationChannel(c);
+            }
+            String action = label == null || label.trim().isEmpty() ? "aksi agent" : label.trim();
+            String line = notificationLine(command);
+            String body = "Agent menunggu persetujuan: " + action;
+            if (!line.isEmpty()) body += "\n$ " + line;
+            Intent open = new Intent(ctx, MainActivity.class);
+            open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, ID_PERMISSION, open,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                    ? new Notification.Builder(ctx, CH_PERMISSION)
+                    : new Notification.Builder(ctx);
+            b.setContentTitle("AI-ssistant · perlu izin")
+                    .setContentText("Tap untuk review: " + action)
+                    .setStyle(new Notification.BigTextStyle().bigText(body))
+                    .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                    .setContentIntent(pi)
+                    .setAutoCancel(false)
+                    .setOnlyAlertOnce(true)
+                    .setCategory(Notification.CATEGORY_STATUS)
+                    .setWhen(System.currentTimeMillis())
+                    .setShowWhen(true);
+            if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_HIGH);
+            nm.notify(ID_PERMISSION, b.build());
+        } catch (Throwable t) {
+            android.util.Log.e("AIssistant", "permission notification failed: " + t);
+        }
+    }
+
+    static void clearPermissionRequired(Context ctx) {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(ID_PERMISSION);
+        } catch (Throwable ignored) { }
+    }
+
+    private static String notificationLine(String raw) {
+        String line = raw == null ? "" : raw.replace('\n', ' ').replace('\r', ' ').trim();
+        return line.length() > 180 ? line.substring(0, 180) + "…" : line;
+    }
     // ---- "task finished" notice -----------------------------------------------------------
     private static final String CH_DONE = "done";
     private static final int ID_DONE = 2;
