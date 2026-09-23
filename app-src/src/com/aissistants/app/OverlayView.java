@@ -28,16 +28,16 @@ import java.util.ArrayList;
  */
 final class OverlayView {
 
-    private static final int SURFACE = Color.rgb(19, 28, 43);
-    private static final int TOOL_BG = Color.rgb(8, 13, 22);
-    private static final int LINE = Color.rgb(34, 48, 74);
-    private static final int FG = Color.rgb(232, 237, 247);
-    private static final int MUTED = Color.rgb(147, 160, 184);
-    private static final int ACCENT = Color.rgb(59, 130, 246);
+    private static final int SURFACE = Color.rgb(23, 25, 28);
+    private static final int TOOL_BG = Color.rgb(16, 17, 19);
+    private static final int LINE = Color.rgb(42, 45, 51);
+    private static final int FG = Color.rgb(231, 233, 236);
+    private static final int MUTED = Color.rgb(155, 161, 169);
+    private static final int ACCENT = Color.rgb(90, 110, 140);
     private static final int COMMAND = Color.rgb(134, 239, 172);
     private static final int OUTPUT = Color.rgb(203, 213, 225);
     private static final int DANGER = Color.rgb(239, 68, 68);
-    private static final int ON_ACCENT = Color.rgb(6, 18, 31);
+    private static final int ON_ACCENT = Color.rgb(14, 15, 17);
 
     private static OverlayView current;
 
@@ -731,8 +731,8 @@ final class OverlayView {
         rlp.setMargins(0, dp(5), 0, 0);
         row.setLayoutParams(rlp);
 
-        TextView t = line(s, user ? ON_ACCENT : FG, Typeface.NORMAL, 12);
-        t.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 13));
+        TextView t = line(s, FG, Typeface.NORMAL, 12);
+        t.setBackground(round(SURFACE, LINE, 13));   // neutral: text selection must stay visible
         t.setPadding(dp(9), dp(6), dp(9), dp(6));
         t.setMaxWidth(Math.max(dp(160), widthPx() - dp(36)));
         row.addView(t, new LinearLayout.LayoutParams(-2, -2));

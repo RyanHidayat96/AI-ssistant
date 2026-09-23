@@ -73,14 +73,14 @@ public class MainActivity extends Activity {
     private static final int GUTTER = 20;
     private static final int ROW_MIN = 56;
 
-    private static final int BG        = Color.rgb(11, 18, 32);
-    private static final int SURFACE   = Color.rgb(19, 28, 43);
-    private static final int TOOL_BG   = Color.rgb(8, 13, 22);
-    private static final int LINE      = Color.rgb(34, 48, 74);
-    private static final int FG        = Color.rgb(232, 237, 247);
-    private static final int MUTED     = Color.rgb(147, 160, 184);
+    private static final int BG        = Color.rgb(14, 15, 17);
+    private static final int SURFACE   = Color.rgb(23, 25, 28);
+    private static final int TOOL_BG   = Color.rgb(16, 17, 19);
+    private static final int LINE      = Color.rgb(42, 45, 51);
+    private static final int FG        = Color.rgb(231, 233, 236);
+    private static final int MUTED     = Color.rgb(155, 161, 169);
     private static final int STAMP     = Color.rgb(111, 125, 150);
-    private static final int ACCENT    = Color.rgb(59, 130, 246);
+    private static final int ACCENT    = Color.rgb(90, 110, 140);
     private static final int COMMAND   = Color.rgb(134, 239, 172);
     private static final int OUTPUT    = Color.rgb(203, 213, 225);
     private static final int CODE_BG   = Color.rgb(30, 41, 59);
@@ -88,7 +88,7 @@ public class MainActivity extends Activity {
     private static final int OK        = Color.rgb(34, 197, 94);
     private static final int WARN      = Color.rgb(245, 158, 11);
     private static final int DANGER    = Color.rgb(239, 68, 68);
-    private static final int ON_ACCENT = Color.rgb(6, 18, 31);
+    private static final int ON_ACCENT = Color.rgb(14, 15, 17);
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Object lock = new Object();
@@ -1231,7 +1231,7 @@ public class MainActivity extends Activity {
             row.addView(card, new LinearLayout.LayoutParams(-2, -2));
         } else {
             boolean shell = user && text.trim().startsWith("$ ");
-            TextView b = tv(shell ? 13 : 15, shell ? COMMAND : (user ? ON_ACCENT : FG), Typeface.NORMAL);
+            TextView b = tv(shell ? 13 : 15, shell ? COMMAND : FG, Typeface.NORMAL);
             String shown = text.length() > 6000 ? text.substring(0, 6000) + "\n\u2026 (truncated)" : text;
             b.setText(user ? shown : markdownText(shown));
             b.setTextIsSelectable(true);
@@ -1243,7 +1243,7 @@ public class MainActivity extends Activity {
                 b.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.90f));
                 b.setContentDescription("Perintah manual: " + shown);
             } else {
-                b.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 18));
+                b.setBackground(round(SURFACE, LINE, 18));
                 b.setPadding(dp(14), dp(10), dp(14), dp(10));
                 b.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.84f));
             }
