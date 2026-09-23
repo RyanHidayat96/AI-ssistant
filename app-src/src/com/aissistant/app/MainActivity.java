@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -56,7 +56,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * AI-ssistants - a chat-first assistant that owns the device.
+ * AI-ssistant - a chat-first assistant that owns the device.
  *
  * One activity, three screens (chat / chats / settings), drawn programmatically:
  *  - chat     : bubbles (user right, assistant left, root output as monospace cards, notices),
@@ -136,7 +136,7 @@ public class MainActivity extends Activity {
         try {
             return java.util.regex.Pattern.compile(re);
         } catch (Throwable t) {
-            android.util.Log.e("aissistants", "bad gate pattern, using fallback: " + t.getMessage());
+            android.util.Log.e("aissistant", "bad gate pattern, using fallback: " + t.getMessage());
             return java.util.regex.Pattern.compile(fallback);
         }
     }
@@ -353,7 +353,7 @@ public class MainActivity extends Activity {
         stopVoiceInput(false);      // never hold the mic open in the background
         // the agent may be driving another app from under us: keep the run visible
         try {
-            android.util.Log.i("AIssistants", "onStop: busy=" + busy + " canDraw=" + OverlayView.canDraw(this));
+            android.util.Log.i("AIssistant", "onStop: busy=" + busy + " canDraw=" + OverlayView.canDraw(this));
             if (busy && OverlayView.canDraw(this)) { seedOverlay(); OverlayView.show(this); }
         } catch (Throwable ignored) { }
         persist();
@@ -382,7 +382,7 @@ public class MainActivity extends Activity {
     protected void onStop() {
         super.onStop();
         appVisible = false;
-        android.util.Log.i("AIssistants", "onStop: appVisible=false");
+        android.util.Log.i("AIssistant", "onStop: appVisible=false");
         persist();
     }
 
@@ -390,7 +390,7 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         appVisible = true;
-        android.util.Log.i("AIssistants", "onStart: appVisible=true");
+        android.util.Log.i("AIssistant", "onStart: appVisible=true");
         // back in the app: the panel would only duplicate what is on screen
         try { OverlayView.hide(); } catch (Throwable ignored) { }
     }
@@ -821,7 +821,7 @@ public class MainActivity extends Activity {
         barTitle = tv(17, FG, Typeface.BOLD);
         barTitle.setSingleLine(true);
         barTitle.setEllipsize(TextUtils.TruncateAt.END);
-        barTitle.setText("AI-ssistants");
+        barTitle.setText("AI-ssistant");
         subtitle = tv(12, MUTED, Typeface.NORMAL);
         subtitle.setSingleLine(true);
         subtitle.setEllipsize(TextUtils.TruncateAt.END);
@@ -932,7 +932,7 @@ public class MainActivity extends Activity {
         field.addView(attach, alp);
 
         input = new EditText(this);
-        input.setHint("Ask AI-ssistants");
+        input.setHint("Ask AI-ssistant");
         input.setHintTextColor(MUTED);
         input.setTextColor(FG);
         input.setTextSize(16);
@@ -1039,7 +1039,7 @@ public class MainActivity extends Activity {
         // caret and swallow the first characters typed into the composer. Remember and restore it.
         final boolean keepFocus = input != null && input.hasFocus();
         final int keepSel = keepFocus ? input.getSelectionStart() : 0;
-        barTitle.setText("New chat".equals(titleOf(cur)) ? "AI-ssistants" : titleOf(cur));
+        barTitle.setText("New chat".equals(titleOf(cur)) ? "AI-ssistant" : titleOf(cur));
         chatLog.removeAllViews();
         groupKeys.clear();
         groupSpans.clear();
@@ -1126,7 +1126,7 @@ public class MainActivity extends Activity {
         jumpTotal = total;
         refreshJumpChip();
         if (snap.size() > WINDOW_PAGE || chatLog.getChildCount() > WINDOW_PAGE + 20) {
-            android.util.Log.i("AIssistants", "transcript: total=" + snap.size() + " rendered="
+            android.util.Log.i("AIssistant", "transcript: total=" + snap.size() + " rendered="
                     + chatLog.getChildCount() + " from=" + renderFrom + " in "
                     + (System.currentTimeMillis() - t0) + "ms");
         }
@@ -1586,7 +1586,7 @@ public class MainActivity extends Activity {
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
                         thumbHeld = true;
-                        android.util.Log.i("AIssistants", "thumb drag start");
+                        android.util.Log.i("AIssistant", "thumb drag start");
                         startY = e.getRawY();
                         startScroll = chatScroll.getScrollY();
                         if (thumb != null) thumb.setAlpha(1f);
@@ -1683,7 +1683,7 @@ public class MainActivity extends Activity {
         v.setPadding(0, dp(18), 0, dp(8));
 
         TextView t = tv(21, FG, Typeface.BOLD);
-        t.setText(hasActiveModel() ? "What would you like to check?" : "Set up AI-ssistants");
+        t.setText(hasActiveModel() ? "What would you like to check?" : "Set up AI-ssistant");
         TextView s = tv(13, MUTED, Typeface.NORMAL);
         s.setText(hasActiveModel()
                 ? "Describe a goal. Risky root actions are reviewed by default."
@@ -2275,7 +2275,7 @@ public class MainActivity extends Activity {
         synchronized (messages) {
             messages.clear();
             try { messages.addAll(AgentMemory.restore(bubblesOf(cur))); }
-            catch (Exception error) { android.util.Log.e("AIssistants", "restore context", error); }
+            catch (Exception error) { android.util.Log.e("AIssistant", "restore context", error); }
         }
     }
 
@@ -2651,9 +2651,9 @@ public class MainActivity extends Activity {
                 if (!line.isEmpty()) lines.add(line);
             }
             OverlayHub.setAll(lines);
-            android.util.Log.i("AIssistants", "overlay seeded with " + lines.size() + " chat lines");
+            android.util.Log.i("AIssistant", "overlay seeded with " + lines.size() + " chat lines");
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "seed failed: " + t);
+            android.util.Log.e("AIssistant", "seed failed: " + t);
         }
     }
 
@@ -2663,7 +2663,7 @@ public class MainActivity extends Activity {
         try { AgentBorder.hide(); } catch (Throwable ignored) { }
         try {
             if (appVisible) {
-                android.util.Log.i("AIssistants", "run finished while the app is on screen - no notification");
+                android.util.Log.i("AIssistant", "run finished while the app is on screen - no notification");
                 return;                       // they are looking at the chat already
             }
             long secs = runStartMs > 0 ? (System.currentTimeMillis() - runStartMs) / 1000 : 0;
@@ -2674,11 +2674,11 @@ public class MainActivity extends Activity {
             if (secs > 0) b.append(b.length() > 0 ? "  \u00b7  " : "").append(secs).append("s");
             if (outcome != null && !outcome.isEmpty()) b.append(b.length() > 0 ? "  \u00b7  " : "").append(outcome);
             String titleName = titleOf(cur);
-            AgentService.done(this, "AI-ssistants \u00b7 selesai"
+            AgentService.done(this, "AI-ssistant \u00b7 selesai"
                     + (titleName.isEmpty() ? "" : " \u00b7 " + titleName),
                     b.length() == 0 ? "Agent sudah selesai bekerja." : b.toString());
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "notifyRunFinished: " + t);
+            android.util.Log.e("AIssistant", "notifyRunFinished: " + t);
         }
     }
 
@@ -2691,9 +2691,9 @@ public class MainActivity extends Activity {
                     addBubble("note", "hygiene \u00b7 " + line);
                 } });
             }
-            android.util.Log.i("AIssistants", "hygiene: " + out.replace("\n", " | "));
+            android.util.Log.i("AIssistant", "hygiene: " + out.replace("\n", " | "));
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "hygiene failed: " + t);
+            android.util.Log.e("AIssistant", "hygiene failed: " + t);
         }
     }
 
@@ -2940,7 +2940,7 @@ public class MainActivity extends Activity {
                         "[RUNTIME: execution stopped. Give one final report from recorded evidence: verified results, "
                         + "changes, uncertainties and next check. Budget exhaustion is not proof of impossibility. "
                         + "Do not emit tools, RUN commands, or claim unverified success.]"));
-                android.util.Log.i("AIssistants", "req step=" + stepNow + " msgs=" + msgs.length()
+                android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
                         + " payloadChars=" + msgs.toString().length());
                 final boolean hadImage = hasImagePart(msgs);
                 AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
@@ -3001,7 +3001,7 @@ public class MainActivity extends Activity {
                             aborted = true;
                             result = "[not executed: the app stopped this run before this call. Do not retry it; "
                                     + "report what you already have or take a different approach.]";
-                            android.util.Log.e("AIssistants", "closed dangling tool_call " + callId);
+                            android.util.Log.e("AIssistant", "closed dangling tool_call " + callId);
                         } else {
                             try {
                                 JSONObject args = AgentTools.arguments(call);
@@ -3093,14 +3093,14 @@ public class MainActivity extends Activity {
     private String workDir() {
         String id = cur == null ? "" : cur.optString("id", "");
         if (id.isEmpty()) id = "default";
-        return "/data/local/tmp/ai-ssistants/" + id.replaceAll("[^A-Za-z0-9_.-]", "_");
+        return "/data/local/tmp/ai-ssistant/" + id.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 
     /** shared, persistent cache for downloaded tools (smali, jadx, python, ...) - reused by every session.
      *  Lives under /data/adb (root area, survives reboots and cleaner apps), NOT under /data/local/tmp. */
     static String toolsDir() {
         String t = toolsCache;
-        return (t == null || t.isEmpty()) ? "/data/adb/ai-ssistants/tools" : t;
+        return (t == null || t.isEmpty()) ? "/data/adb/ai-ssistant/tools" : t;
     }
     private static volatile String toolsCache = "";
 
@@ -3119,9 +3119,9 @@ public class MainActivity extends Activity {
                   + "   chmod 700 \"$D/.probe\" 2>/dev/null || return 1;"
                   + "   R=$(\"$D/.probe\" ok 2>/dev/null); rm -f \"$D/.probe\" 2>/dev/null; [ \"$R\" = ok ]; };"
                   + " T='';"
-                  + " for D in /data/adb/ai-ssistants/tools /data/data/com.aissistants.app/files/tools /data/local/ai-ssistants/tools; do"
+                  + " for D in /data/adb/ai-ssistant/tools /data/data/com.aissistant.app/files/tools /data/local/ai-ssistant/tools; do"
                   + "   probe \"$D\" && { T=\"$D\"; break; }; done;"
-                  + " [ -n \"$T\" ] || T=/data/local/ai-ssistants/tools;"
+                  + " [ -n \"$T\" ] || T=/data/local/ai-ssistant/tools;"
                   + " printf 'CACHE=%s\\n' \"$T\"";
             String out = RootShell.run(script, 25);
             // the persistent shell appends its own sentinel, so pull the path out with a pattern
@@ -3129,7 +3129,7 @@ public class MainActivity extends Activity {
                     : java.util.regex.Pattern.compile("(/data/[^\\s]*/tools)").matcher(out);
             if (m != null && m.find()) {
                 toolsCache = m.group(1);
-                android.util.Log.i("AIssistants", "tool cache: " + toolsCache);
+                android.util.Log.i("AIssistant", "tool cache: " + toolsCache);
             }
         } catch (Throwable ignored) { }
     }
@@ -3182,7 +3182,7 @@ public class MainActivity extends Activity {
             guardHits.put(cmd, hits + 1);
             repeatGuardTotal++;
             stuckRun = true;
-            android.util.Log.e("AIssistants", "guard repeat " + (hits + 1) + " total="
+            android.util.Log.e("AIssistant", "guard repeat " + (hits + 1) + " total="
                     + repeatGuardTotal + " for: " + firstLine(cmd));
             if (hits == 0) {
                 audit("guard", "REPEAT", cmd);
@@ -3664,7 +3664,7 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) { }
         String prompt = AgentPrompt.build(workDir(), store.toolProbe(), facts);
         // the volatile blocks must sit at the very END: verify the offsets instead of trusting the code
-        android.util.Log.i("AIssistants", "system prompt chars=" + prompt.length()
+        android.util.Log.i("AIssistant", "system prompt chars=" + prompt.length()
                 + " staticHeadEnd=" + prompt.lastIndexOf("ANDROID RECIPE CANDIDATES")
                 + " dynamicAt=" + prompt.lastIndexOf("TOOL INVENTORY SNAPSHOT")
                 + "/" + prompt.lastIndexOf("DEVICE FACTS")

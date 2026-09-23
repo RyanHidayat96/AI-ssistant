@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import org.json.JSONObject;
 
@@ -57,7 +57,7 @@ final class ReferenceReader {
                 connection.setRequestProperty("Accept-Encoding", "identity");
                 connection.setRequestProperty("Cookie", "");
                 connection.setRequestProperty("Authorization", "");
-                connection.setRequestProperty("User-Agent", "AI-ssistants-reference/1.0");
+                connection.setRequestProperty("User-Agent", "AI-ssistant-reference/1.0");
                 int status = connection.getResponseCode();
                 if (System.currentTimeMillis() > deadline) throw new java.io.IOException("Reference request timed out");
                 if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {

@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import java.io.InputStream;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +19,7 @@ final class RootShell {
     /** what to say while KernelSU has not handed root to this app yet */
     static final String NO_ROOT_HINT =
             "root not granted yet.\n"
-          + "Open the KernelSU / Magisk manager, go to Superuser, enable AI-ssistants "
+          + "Open the KernelSU / Magisk manager, go to Superuser, enable AI-ssistant "
           + "(or approve the request when it pops up), then tap the status pill to re-check.\n"
           + "Nothing runs as uid 0 until that is done.";
 
@@ -31,7 +31,7 @@ final class RootShell {
     private static volatile boolean cancelled;
 
     /** where the running script records its process-group id, so Stop can kill its whole tree */
-    private static final String PGFILE = "/data/local/tmp/.aissistants_pg";
+    private static final String PGFILE = "/data/local/tmp/.aissistant_pg";
 
     static Boolean state() { return granted; }
 
@@ -152,12 +152,12 @@ final class RootShell {
                 shell = p;
                 shellIn = w;
                 shellOut = r;
-                android.util.Log.i("AIssistants", "root shell: persistent session up");
+                android.util.Log.i("AIssistant", "root shell: persistent session up");
                 return true;
             }
-            android.util.Log.e("AIssistants", "root shell: handshake failed (uid0=" + uid0 + ")");
+            android.util.Log.e("AIssistant", "root shell: handshake failed (uid0=" + uid0 + ")");
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "root shell: " + t);
+            android.util.Log.e("AIssistant", "root shell: " + t);
         }
         if (p != null) { try { p.destroyForcibly(); } catch (Throwable ignored) { } }
         shellBroken = true;
@@ -283,7 +283,7 @@ final class RootShell {
             return out + (rc == 0 ? "" : "\n[exit " + rc + "]");
         } catch (Throwable t) {
             return "root shell unavailable: " + t
-                    + "\n(grant root to AI-ssistants in KernelSU/Magisk, then retry)";
+                    + "\n(grant root to AI-ssistant in KernelSU/Magisk, then retry)";
         } finally {
             if (live == p) live = null;
             if (p != null) p.destroy();

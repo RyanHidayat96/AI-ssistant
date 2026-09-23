@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 /** Discoverable guides. Device capability always comes from current tool evidence. */
 final class AgentSkills {

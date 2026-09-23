@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -11,7 +11,7 @@ import android.os.IBinder;
 
 /**
  * Keeps the agent process alive, unfrozen and on the network while a task runs - essential when
- * the task drives OTHER apps (open WhatsApp, tap, type): AI-ssistants goes to the background and
+ * the task drives OTHER apps (open WhatsApp, tap, type): AI-ssistant goes to the background and
  * the system would otherwise freeze it / cut its network, stalling the agent loop mid-task.
  */
 public class AgentService extends Service {
@@ -37,7 +37,7 @@ public class AgentService extends Service {
         // the run keeps going while the agent drives OTHER apps - only then does the panel belong
         // on screen; while the user is looking at the chat it would just cover it
         try {
-            android.util.Log.i("AIssistants", "service start: appVisible=" + MainActivity.appVisible
+            android.util.Log.i("AIssistant", "service start: appVisible=" + MainActivity.appVisible
                     + " canDraw=" + OverlayView.canDraw(this));
             if (!MainActivity.appVisible && OverlayView.canDraw(this)) OverlayView.show(this);
         } catch (Throwable ignored) { }
@@ -53,7 +53,7 @@ public class AgentService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(ctx, CHANNEL)
                 : new Notification.Builder(ctx);
-        return b.setContentTitle("AI-ssistants")
+        return b.setContentTitle("AI-ssistant")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setOngoing(true)
@@ -94,7 +94,7 @@ public class AgentService extends Service {
                     : new Notification.Builder(ctx);
             String body = summary == null || summary.trim().isEmpty()
                     ? "Agent sudah selesai bekerja." : summary.trim();
-            b.setContentTitle(title == null || title.isEmpty() ? "AI-ssistants \u00b7 selesai" : title)
+            b.setContentTitle(title == null || title.isEmpty() ? "AI-ssistant \u00b7 selesai" : title)
                     .setContentText(body)
                     .setStyle(new Notification.BigTextStyle().bigText(body))
                     .setSmallIcon(android.R.drawable.checkbox_on_background)
@@ -103,9 +103,9 @@ public class AgentService extends Service {
                     .setWhen(System.currentTimeMillis())
                     .setShowWhen(true);
             nm.notify(ID_DONE, b.build());
-            android.util.Log.i("AIssistants", "finished notification: " + body);
+            android.util.Log.i("AIssistant", "finished notification: " + body);
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "done notification failed: " + t);
+            android.util.Log.e("AIssistant", "done notification failed: " + t);
         }
     }
 }

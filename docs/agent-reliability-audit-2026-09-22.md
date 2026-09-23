@@ -1,4 +1,4 @@
-# Audit keandalan agent AI-ssistants
+# Audit keandalan agent AI-ssistant
 
 Tanggal: 22 September 2026. Cakupan: working tree saat audit, termasuk perubahan lokal yang sudah ada. Audit tidak mengubah kode aplikasi, menjalankan task di HP, atau memanggil endpoint model pengguna.
 

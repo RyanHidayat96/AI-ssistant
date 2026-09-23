@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 /**
  * Builds the system instructions handed to the model: operating contract, problem-solving
@@ -19,7 +19,7 @@ final class AgentPrompt {
         StringBuilder sb = new StringBuilder(48_000);
 
         sb.append("IDENTITY AND MISSION\n")
-          .append("You are AI-ssistants, an autonomous privileged local Android operator running on the user's own rooted phone. ")
+          .append("You are AI-ssistant, an autonomous privileged local Android operator running on the user's own rooted phone. ")
           .append("You control the device through a root shell tool and Android UI interaction. ")
           .append("Your job is not merely to explain what could be done. Your job is to investigate the real device, ")
           .append("solve the requested problem, perform the necessary actions, verify the result, recover from failures, ")
@@ -296,7 +296,7 @@ final class AgentPrompt {
           .append("Coordinates are fallback only.\n")
           .append("Before coordinate taps, confirm the foreground app, orientation, expected geometry, and that the target is visible.\n")
           .append("Account for dialogs, keyboards, permission prompts, scrolling, overlays, loading states, activity changes, and orientation changes.\n\n")
-          .append("When driving another app, ignore AI-ssistants overlay as self UI. ")
+          .append("When driving another app, ignore AI-ssistant overlay as self UI. ")
           .append("The runtime keeps it visible for the user, removes its focus/touch from the target path, and masks it during pixel screenshots. ")
           .append("Do not tap or reason from assistant overlay/border nodes; focus on the foreground target app.\n\n")
 
@@ -435,7 +435,7 @@ final class AgentPrompt {
 
           .append("ANDROID QUICK MAP\n")
           .append("These are starting points, not universal truths. Adapt to the actual device and available tools.\n")
-          .append("- foreground candidates: inspect both `mCurrentFocus` and focused/resumed activity; ignore `com.aissistants.app` overlay lines\n")
+          .append("- foreground candidates: inspect both `mCurrentFocus` and focused/resumed activity; ignore `com.aissistant.app` overlay lines\n")
           .append("- launch candidate: `monkey -p <pkg> -c android.intent.category.LAUNCHER 1`\n")
           .append("- explicit launch when activity is known: `am start -n <pkg>/<activity>`\n")
           .append("- UI dump candidate: `uiautomator dump /sdcard/.ai_ui.xml >/dev/null 2>&1; cat /sdcard/.ai_ui.xml`\n")

@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -154,7 +154,7 @@ final class AiClient {
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Accept", "text/event-stream, application/json");
-            conn.setRequestProperty("User-Agent", "AI-ssistants/1.3 (Android)");
+            conn.setRequestProperty("User-Agent", "AI-ssistant/1.3 (Android)");
             if (apiKey != null && !apiKey.trim().isEmpty()) {
                 conn.setRequestProperty("Authorization", "Bearer " + apiKey.trim());
             }
@@ -169,11 +169,11 @@ final class AiClient {
             int code = conn.getResponseCode();
             if (code >= 400) {
                 out.error = "HTTP " + code + ": " + cut(slurp(conn.getErrorStream()), 600);
-                android.util.Log.e("AIssistants", "HTTP " + code + " from " + url + " :: " + out.error);
+                android.util.Log.e("AIssistant", "HTTP " + code + " from " + url + " :: " + out.error);
                 // a provider that rejects our optional extras answers 400; retry the plain OpenAI body once
                 if (code == 400 && !minimal) {
                     plainOnly.add(base);      // remember: this endpoint does not take our extras
-                    android.util.Log.i("AIssistants", "HTTP 400 - ulang tanpa field khusus provider (diingat untuk " + base + ")");
+                    android.util.Log.i("AIssistant", "HTTP 400 - ulang tanpa field khusus provider (diingat untuk " + base + ")");
                     Reply plain = complete(baseUrl, apiKey, model, messages, tools, temperature, thinking,
                             timeoutSec, maxTokens, cb, true);
                     boolean plainOk = plain != null && plain.ok
@@ -181,7 +181,7 @@ final class AiClient {
                     if (plainOk) return plain;
                     if (plain != null && plain.error != null && !plain.error.isEmpty()) {
                         out.error = plain.error;
-                        android.util.Log.e("AIssistants", "HTTP 400 also on the plain body :: " + out.error);
+                        android.util.Log.e("AIssistant", "HTTP 400 also on the plain body :: " + out.error);
                     }
                 }
                 return out;
@@ -231,7 +231,7 @@ final class AiClient {
                     out.promptTokens = usage.optInt("prompt_tokens", out.promptTokens);
                     out.completionTokens = usage.optInt("completion_tokens", out.completionTokens);
                     out.cacheHitTokens = usage.optInt("prompt_cache_hit_tokens", out.cacheHitTokens);
-                    android.util.Log.i("AIssistants", "usage prompt=" + out.promptTokens
+                    android.util.Log.i("AIssistant", "usage prompt=" + out.promptTokens
                             + " cacheHit=" + out.cacheHitTokens + " completion=" + out.completionTokens);
                 }
                 JSONArray choices = chunk.optJSONArray("choices");

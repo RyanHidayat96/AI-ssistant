@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -46,7 +46,7 @@ public final class AgentReliabilityTest {
     }
 
     private static void testMemory() throws Exception {
-        Path root = Files.createTempDirectory("aissistants-memory-");
+        Path root = Files.createTempDirectory("aissistant-memory-");
         AgentMemory memory = new AgentMemory(root.toFile(), "session / test");
         check(memory.checkpoint().isEmpty(), "new memory starts blank");
         memory.saveCheckpoint("GOAL\nrepair\nVERIFIED\nnone yet");

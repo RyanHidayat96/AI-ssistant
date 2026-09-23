@@ -1,13 +1,13 @@
 <#
-  AI-ssistants - build a standalone rooted-device AI assistant APK.
+  AI-ssistant - build a standalone rooted-device AI assistant APK.
 
-    .\build.ps1              build + sign  ->  release\AI-ssistants-v<ver>.apk
+    .\build.ps1              build + sign  ->  release\AI-ssistant-v<ver>.apk
     .\build.ps1 -Deploy      also `adb install -r` the APK
     .\build.ps1 -NoClean     skip the clean step (faster when nothing changed)
 
   No Gradle: aapt2 + javac + d8 + zipalign + apksigner, same proven pipeline the
   Causentry module uses. The Android SDK is taken from, in order:
-  $env:AI_SSISTANTS_SDK, the sibling Causentry checkout, %LOCALAPPDATA%\Android\Sdk.
+  $env:AI_SSISTANT_SDK, the sibling Causentry checkout, %LOCALAPPDATA%\Android\Sdk.
 #>
 [CmdletBinding()]
 param(
@@ -23,9 +23,9 @@ $Root = $PSScriptRoot
 $Src = Join-Path $Root "app-src"
 $Build = Join-Path $Root "build"
 $Release = Join-Path $Root "release"
-$Ks = Join-Path $Root "ai-ssistants.keystore"
-$KsAlias = "aissistants"
-$KsPass = "aissistants"
+$Ks = Join-Path $Root "ai-ssistant.keystore"
+$KsAlias = "aissistant"
+$KsPass = "aissistant"
 
 function Say($m, $c = "Gray") { Write-Host $m -ForegroundColor $c }
 function Die($m) { Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
@@ -59,9 +59,17 @@ $Java = Find-Java
 $JavaBin = Split-Path -Parent $Java
 $Javac = Join-Path $JavaBin "javac.exe"
 $Keytool = Join-Path $JavaBin "keytool.exe"
+function Invoke-Keytool {
+  param([string[]]$KeytoolArgs)
+  if (Test-Path $Keytool) {
+    & $Keytool @KeytoolArgs
+  } else {
+    & $Java -m "java.base/sun.security.tools.keytool.Main" @KeytoolArgs
+  }
+}
 
 if (-not $Sdk) {
-  $Sdk = $env:AI_SSISTANTS_SDK
+  $Sdk = $env:AI_SSISTANT_SDK
   if (-not $Sdk) {
     $sibling = Join-Path (Split-Path -Parent $Root) "Causentry\tools\sdk"
     if (Test-Path $sibling) { $Sdk = $sibling }
@@ -77,10 +85,10 @@ $d8Jar = Join-Path $Bt "lib\d8.jar"
 $signerJar = Join-Path $Bt "lib\apksigner.jar"
 
 foreach ($f in @($Javac, $aapt2, $zipalign, $d8Jar, $signerJar, $AJar)) {
-  if (-not (Test-Path $f)) { Die "missing toolchain file: $f`n     install build-tools 35.0.0 + platform android-35, or set AI_SSISTANTS_SDK" }
+  if (-not (Test-Path $f)) { Die "missing toolchain file: $f`n     install build-tools 35.0.0 + platform android-35, or set AI_SSISTANT_SDK" }
 }
 
-Say "== AI-ssistants build ==" 
+Say "== AI-ssistant build =="
 Say "   root    : $Root"
 Say "   java    : $Java"
 Say "   sdk     : $Sdk"
@@ -150,11 +158,15 @@ if ($LASTEXITCODE -ne 0) { Die "zipalign failed" }
 Say "[6/6] signing"
 if (-not (Test-Path $Ks)) {
   Say "      creating keystore (alias $KsAlias)"
-  & $Keytool -genkeypair -keystore $Ks -alias $KsAlias -keyalg RSA -keysize 2048 -validity 10000 `
-    -storepass $KsPass -keypass $KsPass -dname "CN=AI-ssistants,O=AI-ssistants,C=ID"
+  Invoke-Keytool @(
+    "-genkeypair", "-keystore", $Ks, "-alias", $KsAlias,
+    "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+    "-storepass", $KsPass, "-keypass", $KsPass,
+    "-dname", "CN=AI-ssistant,O=AI-ssistant,C=ID"
+  )
   if ($LASTEXITCODE -ne 0) { Die "keytool failed" }
 }
-$outApk = Join-Path $Release "AI-ssistants-v$Version.apk"
+$outApk = Join-Path $Release "AI-ssistant-v$Version.apk"
 & $Java -jar $signerJar sign --ks $Ks --ks-key-alias $KsAlias `
   --ks-pass "pass:$KsPass" --key-pass "pass:$KsPass" --out $outApk $aligned
 if ($LASTEXITCODE -ne 0) { Die "apksigner failed" }

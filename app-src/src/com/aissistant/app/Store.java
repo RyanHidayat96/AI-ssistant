@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -13,7 +13,7 @@ import android.content.SharedPreferences;
  */
 final class Store {
 
-    private static final String PREF = "aissistants";
+    private static final String PREF = "aissistant";
     private final SharedPreferences sp;
 
     Store(Context ctx) {

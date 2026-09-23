@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 /**
  * Device hygiene: the assistant is allowed to use heavy tooling (frida, hook scripts, adb tricks)
@@ -25,7 +25,7 @@ final class Hygiene {
               + " pkill -9 -f frida-server 2>/dev/null;"
               + " pkill -9 -f re.frida.server 2>/dev/null;"
               + " pkill -9 -f frida-helper 2>/dev/null;"
-              + " for p in $(pgrep -f '/data/local/tmp/ai-ssistants/' 2>/dev/null); do kill -9 $p 2>/dev/null; done;"
+              + " for p in $(pgrep -f '/data/local/tmp/ai-ssistant/' 2>/dev/null); do kill -9 $p 2>/dev/null; done;"
               + " for p in $(pgrep -f '/data/local/tmp/frida' 2>/dev/null); do kill -9 $p 2>/dev/null; done;"
               + " rm -rf /data/local/tmp/re.frida.server 2>/dev/null;"
               + " find /data/local/tmp -maxdepth 3 -type f -name 'frida-server*' -delete 2>/dev/null;"
@@ -79,7 +79,7 @@ final class Hygiene {
               + " echo 'MOCK LOCATION:'; settings get secure mock_location;"
               + " echo 'PROPS:'; getprop ro.boot.verifiedbootstate; getprop ro.boot.flash.locked; getprop ro.debuggable; getprop ro.build.type; getprop ro.build.tags;"
               + " echo 'SU TERLIHAT DI PATH:'; (command -v su || echo '  tidak ada di PATH');"
-              + " echo 'BINARY HOOKING TERTINGGAL:'; (ls -d /data/local/tmp/*frida* /data/local/tmp/re.frida.server /data/local/tmp/ai-ssistants/*/frida-server 2>/dev/null || echo '  tidak ada');"
+              + " echo 'BINARY HOOKING TERTINGGAL:'; (ls -d /data/local/tmp/*frida* /data/local/tmp/re.frida.server /data/local/tmp/ai-ssistant/*/frida-server 2>/dev/null || echo '  tidak ada');"
               + " echo 'SISTEM RW/MOUNT ANEH:'; (mount | grep -E ' /system | /vendor | /product ' | grep -v ' ro,' | head -4 || echo '  tidak ada'); true";
         return cmd;
     }

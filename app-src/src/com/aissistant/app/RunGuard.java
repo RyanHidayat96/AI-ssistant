@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

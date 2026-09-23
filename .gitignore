@@ -3,7 +3,7 @@
 /release/
 
 # Signing material: never commit a keystore.
-# Keep ai-ssistants.keystore next to the checkout (alias: aissistants).
+# Keep ai-ssistant.keystore next to the checkout (alias: aissistant).
 *.keystore
 *.jks
 *.p12

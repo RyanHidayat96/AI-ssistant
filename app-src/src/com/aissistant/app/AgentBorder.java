@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -48,7 +48,7 @@ public final class AgentBorder {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             boolean drives = drivesTargetApp(c);
             if (!drives) return;
-            android.util.Log.i("AIssistants", "border ping hit: " + c.substring(0, Math.min(60, c.length())));
+            android.util.Log.i("AIssistant", "border ping hit: " + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
             targetSession = true;
             H.post(new Runnable() { @Override public void run() { show(ac); } });
@@ -99,8 +99,8 @@ public final class AgentBorder {
             if (now - lastFocusCheck < 2500L) return;      // cheap: at most one probe per 2.5s
             lastFocusCheck = now;
             String out = RootShell.run("dumpsys window | grep -m1 mCurrentFocus", 6);
-            if (out == null || !out.contains("com.aissistants.app")) return;
-            android.util.Log.i("AIssistants", "overlay held focus - release + pass-through");
+            if (out == null || !out.contains("com.aissistant.app")) return;
+            android.util.Log.i("AIssistant", "overlay held focus - release + pass-through");
             try { OverlayView.prepareForAgent(ctx, false); } catch (Throwable ignored) { }
         } catch (Throwable ignored) { }
     }
@@ -116,7 +116,7 @@ public final class AgentBorder {
     private static void drop() {
         try {
             if (pulse != null) { pulse.stop(); pulse = null; }
-            if (view != null && wm != null) { wm.removeViewImmediate(view); android.util.Log.i("AIssistants", "border gone"); }
+            if (view != null && wm != null) { wm.removeViewImmediate(view); android.util.Log.i("AIssistant", "border gone"); }
         } catch (Throwable ignored) { }
         view = null;
     }
@@ -144,11 +144,11 @@ public final class AgentBorder {
             if (android.os.Build.VERSION.SDK_INT >= 28)
                 lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
             wm.addView(e, lp);
-            android.util.Log.i("AIssistants", "border window added");
+            android.util.Log.i("AIssistant", "border window added");
             view = e;
             pulse = new Pulse(e);
             pulse.start();
-        } catch (Throwable t) { android.util.Log.w("AIssistants", "border show FAILED: " + t); }
+        } catch (Throwable t) { android.util.Log.w("AIssistant", "border show FAILED: " + t); }
     }
 
     /**

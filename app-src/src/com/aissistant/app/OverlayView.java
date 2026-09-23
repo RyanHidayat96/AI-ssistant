@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import android.content.Context;
 import android.content.Intent;
@@ -64,7 +64,7 @@ final class OverlayView {
     private OverlayView(Context ctx) {
         this.ctx = ctx;
         this.wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
-        android.content.SharedPreferences sp = ctx.getSharedPreferences("aissistants", Context.MODE_PRIVATE);
+        android.content.SharedPreferences sp = ctx.getSharedPreferences("aissistant", Context.MODE_PRIVATE);
         panelW = sp.getInt("ovW", 0);
         transcriptH = sp.getInt("ovH", 0);
         if (panelW <= 0) panelW = defaultWidth();
@@ -113,16 +113,16 @@ final class OverlayView {
             current = new OverlayView(ctx);
             current.attach();
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay show failed: " + t);
+            android.util.Log.e("AIssistant", "overlay show failed: " + t);
         }
     }
 
     static void hide() {
-        android.util.Log.i("AIssistants", "overlay hide requested\n" + android.util.Log.getStackTraceString(new Throwable()));
+        android.util.Log.i("AIssistant", "overlay hide requested\n" + android.util.Log.getStackTraceString(new Throwable()));
         try {
             if (current != null) current.detach();
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay hide failed: " + t);
+            android.util.Log.e("AIssistant", "overlay hide failed: " + t);
         }
         current = null;
     }
@@ -148,7 +148,7 @@ final class OverlayView {
                     ov.setAgentPassThrough(true);
                     if (hideForCapture) ov.detach();
                 } catch (Throwable t) {
-                    android.util.Log.e("AIssistants", "overlay prepare for agent failed: " + t);
+                    android.util.Log.e("AIssistant", "overlay prepare for agent failed: " + t);
                 }
             }
         };
@@ -179,7 +179,7 @@ final class OverlayView {
                     ov.setAgentPassThrough(false);
                     if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
                 } catch (Throwable t) {
-                    android.util.Log.e("AIssistants", "overlay finish agent observation failed: " + t);
+                    android.util.Log.e("AIssistant", "overlay finish agent observation failed: " + t);
                 }
             }
         };
@@ -211,7 +211,7 @@ final class OverlayView {
             try { done.await(300, java.util.concurrent.TimeUnit.MILLISECONDS); }
             catch (Throwable ignored) { }
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay release focus failed: " + t);
+            android.util.Log.e("AIssistant", "overlay release focus failed: " + t);
         }
     }
 
@@ -227,9 +227,9 @@ final class OverlayView {
             wm.addView(panel, lp);
             OverlayHub.setVisible(true);
             startTimer();
-            android.util.Log.i("AIssistants", "overlay up");
+            android.util.Log.i("AIssistant", "overlay up");
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay add failed: " + t);
+            android.util.Log.e("AIssistant", "overlay add failed: " + t);
             panel = null;
         }
     }
@@ -426,7 +426,7 @@ final class OverlayView {
         if (text.isEmpty()) return;
         MainActivity host = MainActivity.instance;
         if (host == null) {
-            OverlayHub.line("(app-nya sudah ditutup - buka AI-ssistants dulu)");
+            OverlayHub.line("(app-nya sudah ditutup - buka AI-ssistant dulu)");
             return;
         }
         input.setText("");
@@ -451,7 +451,7 @@ final class OverlayView {
             }
             armFocusTimeout();
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay ime: " + t);
+            android.util.Log.e("AIssistant", "overlay ime: " + t);
         }
     }
 
@@ -487,9 +487,9 @@ final class OverlayView {
                     focusIdle = null;
                 }
             }
-            if (on || lp.flags != before) android.util.Log.i("AIssistants", "overlay focusable=" + on);
+            if (on || lp.flags != before) android.util.Log.i("AIssistant", "overlay focusable=" + on);
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay focus toggle: " + t);
+            android.util.Log.e("AIssistant", "overlay focus toggle: " + t);
         }
     }
 
@@ -504,9 +504,9 @@ final class OverlayView {
                 lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
             }
             if (panel != null && lp.flags != before) wm.updateViewLayout(panel, lp);
-            if (on || lp.flags != before) android.util.Log.i("AIssistants", "overlay passThrough=" + on);
+            if (on || lp.flags != before) android.util.Log.i("AIssistant", "overlay passThrough=" + on);
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay pass-through toggle: " + t);
+            android.util.Log.e("AIssistant", "overlay pass-through toggle: " + t);
         }
     }
 
@@ -598,13 +598,13 @@ final class OverlayView {
             }
             if (panel != null) panel.requestLayout();
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay resize: " + t);
+            android.util.Log.e("AIssistant", "overlay resize: " + t);
         }
     }
 
     private void saveSize() {
         try {
-            ctx.getSharedPreferences("aissistants", Context.MODE_PRIVATE).edit()
+            ctx.getSharedPreferences("aissistant", Context.MODE_PRIVATE).edit()
                     .putInt("ovW", panelW).putInt("ovH", transcriptH).apply();
         } catch (Throwable ignored) { }
     }
@@ -636,7 +636,12 @@ final class OverlayView {
 
     private void toggleCollapse() {
         collapsed = !collapsed;
-        if (scroll != null) scroll.setVisibility(collapsed ? View.GONE : View.VISIBLE);
+        // The ScrollView lives in a fixed-height holder. Hiding only the ScrollView leaves that
+        // holder measured at transcriptH, so the overlay window looks unchanged. Collapse the
+        // holder itself (including the new-message pill) so WRAP_CONTENT can actually shrink.
+        View transcriptHolder = scroll != null && scroll.getParent() instanceof View
+                ? (View) scroll.getParent() : null;
+        if (transcriptHolder != null) transcriptHolder.setVisibility(collapsed ? View.GONE : View.VISIBLE);
         if (input != null && input.getParent() instanceof View) {
             ((View) input.getParent()).setVisibility(collapsed ? View.GONE : View.VISIBLE);
         }
@@ -659,7 +664,21 @@ final class OverlayView {
                 }
             }
         }
+        relayoutWindowToContent();
         refresh();
+    }
+
+    /** A WindowManager overlay does not always remeasure WRAP_CONTENT after a child is hidden. */
+    private void relayoutWindowToContent() {
+        final View p = panel;
+        if (p == null) return;
+        p.requestLayout();
+        p.post(new Runnable() {
+            @Override public void run() {
+                if (panel != p) return;
+                try { wm.updateViewLayout(p, lp); } catch (Throwable ignored) { }
+            }
+        });
     }
 
     private void flash(String s) {
@@ -673,7 +692,7 @@ final class OverlayView {
         try {
             String st = OverlayHub.status();
             if (statusView != null) {
-                statusView.setText(st == null || st.isEmpty() ? "AI-ssistants \u00b7 jalan" : st);
+                statusView.setText(st == null || st.isEmpty() ? "AI-ssistant \u00b7 jalan" : st);
             }
             if (collapsed || body == null) return;
             ArrayList<String> lines = OverlayHub.all();
@@ -709,7 +728,7 @@ final class OverlayView {
                 }
             }
         } catch (Throwable t) {
-            android.util.Log.e("AIssistants", "overlay refresh: " + t);
+            android.util.Log.e("AIssistant", "overlay refresh: " + t);
         }
     }
 

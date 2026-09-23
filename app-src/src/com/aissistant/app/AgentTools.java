@@ -1,4 +1,4 @@
-package com.aissistants.app;
+package com.aissistant.app;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

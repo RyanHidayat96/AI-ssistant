@@ -1,4 +1,4 @@
-# AI-ssistants
+# AI-ssistant
 
 A chat-first Android assistant that works the device instead of describing it. You point it at any
 OpenAI-compatible endpoint; the commands it proposes run through a root shell and their output is fed
@@ -15,19 +15,19 @@ back to the model, so it can continue, verify and recover on its own.
 ## Build
 
 ```powershell
-.\build.ps1                                  # -> release\AI-ssistants-<version>.apk
+.\build.ps1                                  # -> release\AI-ssistant-<version>.apk
 .\build.ps1 -Deploy                          # build, then adb install -r
 .\build.ps1 -Deploy -Serial <serial>         # pick a device explicitly
 .\build.ps1 -Sdk "C:\Android\Sdk"            # explicit SDK path
 ```
 
 The SDK defaults to `..\Causentry\tools\sdk`, then to `%LOCALAPPDATA%\Android\Sdk`, then to
-`AI_SSISTANTS_SDK`. `build.cmd` is a thin wrapper for cmd.exe.
+`AI_SSISTANT_SDK`. `build.cmd` is a thin wrapper for cmd.exe.
 
 ## Signing
 
-The keystore is intentionally not in this repository (see `.gitignore`). Put `ai-ssistants.keystore`
-next to the checkout before building a release APK; the alias is `aissistants`. For a fork, generate
+The keystore is intentionally not in this repository (see `.gitignore`). Put `ai-ssistant.keystore`
+next to the checkout before building a release APK; the alias is `aissistant`. For a fork, generate
 your own key and adjust the alias and paths at the top of `build.ps1`.
 
 ## Project layout
@@ -37,7 +37,7 @@ app-src/
   manifest/AndroidManifest.xml
   res/values                       colours, styles (dark theme)
   res/drawable                     launcher and composer vector icons
-  src/com/aissistants/app/
+  src/com/aissistant/app/
     MainActivity.java              chat UI, composer, transcript, run loop, approval gates
     AgentPrompt.java               system instructions for the model
     AiClient.java                  OpenAI-compatible client: streaming, tools, usage, retries
@@ -77,8 +77,8 @@ The panel never takes the input focus away from the app being driven.
 ## Automation hooks
 
 ```bash
-adb shell am start -n com.aissistants.app/.MainActivity --es run 'id; uname -r'
-adb shell am start -n com.aissistants.app/.MainActivity --es prompt 'list root-capable apps'
+adb shell am start -n com.aissistant.app/.MainActivity --es run 'id; uname -r'
+adb shell am start -n com.aissistant.app/.MainActivity --es prompt 'list root-capable apps'
 ```
 
 ## Security and privacy
