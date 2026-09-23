@@ -112,9 +112,14 @@ public class MainActivity extends Activity {
     private ImageButton sendBtn;
     private ImageButton micBtn;
     private android.speech.SpeechRecognizer speech;
+    private static final long VOICE_FINAL_TIMEOUT_MS = 3500L;
+    /** 0 unknown, 1 accepted, -1 rejected by the device recognizer. */
+    private int bilingualSpeechSupport;
     /** A recognition transaction remains active until its terminal callback arrives. */
     private boolean listening;
     private boolean voiceStopRequested;
+    private boolean voiceBilingualRequested;
+    private boolean voiceFallbackUsed;
     private long voiceSession;
     private Runnable voiceStopWatchdog;
     private String voiceBase = "";
@@ -4813,6 +4818,7 @@ public class MainActivity extends Activity {
         }
         final long session = ++voiceSession;
         voiceStopRequested = false;
+        voiceFallbackUsed = false;
         voiceBase = input == null ? "" : input.getText().toString().trim();
         hideComposerKeyboard();
         try {
@@ -4838,6 +4844,7 @@ public class MainActivity extends Activity {
                 @Override public void onError(int code) {
                     if (!isActiveVoiceSession(session)) return;
                     boolean stoppedByUser = voiceStopRequested;
+                    if (!stoppedByUser && retryVoiceWithoutBilingual(session, code)) return;
                     finishVoiceSession(session);
                     // A manual stop commonly reaches recognizers as ERROR_CLIENT or NO_MATCH.
                     // The partial transcript is already kept, so this is not actionable failure.
@@ -4863,18 +4870,9 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            Intent ri = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            ri.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            ri.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            ri.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-            // Use the recognizer's own language preference. Forcing the app locale can fail when
-            // its language model is not installed on the device.
-            if (android.os.Build.VERSION.SDK_INT >= 33) {
-                ri.putExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_FORMATTING,
-                        android.speech.RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY);
-                ri.putExtra(android.speech.RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true);
-            }
+            voiceBilingualRequested = wantsBilingualSpeech();
+            Intent ri = voiceRecognizerIntent(voiceBilingualRequested);
+            probeBilingualSpeechSupport(ri, voiceBilingualRequested);
             listening = true;
             setVoiceUi(true);
             speech.startListening(ri);
@@ -4882,6 +4880,8 @@ public class MainActivity extends Activity {
             if (session == voiceSession) {
                 listening = false;
                 voiceStopRequested = false;
+                voiceBilingualRequested = false;
+                voiceFallbackUsed = false;
                 setVoiceUi(false);
             }
             destroySpeechRecognizer();
@@ -4893,6 +4893,83 @@ public class MainActivity extends Activity {
         if (speech == null) speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
     }
 
+    /** Build one normal conversational recognizer request. The device's selected speech service
+     * remains authoritative; Android 14+ can switch between Indonesian and English itself. */
+    private Intent voiceRecognizerIntent(boolean bilingual) {
+        Intent ri = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        ri.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        ri.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        ri.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        // Do not force app locale. The recognizer's user-selected primary language remains the
+        // starting language, avoiding failures where a matching offline model is absent.
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_FORMATTING,
+                    android.speech.RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY);
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true);
+        }
+        if (bilingual && android.os.Build.VERSION.SDK_INT >= 34) {
+            java.util.ArrayList<String> languages = new java.util.ArrayList<String>();
+            languages.add("id-ID");
+            languages.add("en-US");
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true);
+            ri.putExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH,
+                    android.speech.RecognizerIntent.LANGUAGE_SWITCH_BALANCED);
+            ri.putStringArrayListExtra(
+                    android.speech.RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, languages);
+            ri.putStringArrayListExtra(
+                    android.speech.RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
+                    new java.util.ArrayList<String>(languages));
+        }
+        return ri;
+    }
+
+    private boolean wantsBilingualSpeech() {
+        return android.os.Build.VERSION.SDK_INT >= 34 && bilingualSpeechSupport >= 0;
+    }
+
+    /** Probe once without delaying recording. Unsupported vendors fall back next session. */
+    private void probeBilingualSpeechSupport(Intent ri, boolean bilingual) {
+        if (!bilingual || bilingualSpeechSupport != 0 || speech == null
+                || android.os.Build.VERSION.SDK_INT < 33) return;
+        try {
+            speech.checkRecognitionSupport(ri, getMainExecutor(),
+                    new android.speech.RecognitionSupportCallback() {
+                        @Override public void onSupportResult(android.speech.RecognitionSupport support) {
+                            bilingualSpeechSupport = 1;
+                        }
+
+                        @Override public void onError(int error) {
+                            bilingualSpeechSupport = -1;
+                            android.util.Log.i("AIssistant", "bilingual STT unsupported: " + error);
+                        }
+                    });
+        } catch (Throwable ignored) { }
+    }
+
+    /** A vendor can reject language-switch extras as a language or generic client error. */
+    private boolean retryVoiceWithoutBilingual(long session, int code) {
+        if (!voiceBilingualRequested || voiceFallbackUsed || !isActiveVoiceSession(session)) return false;
+        boolean languageFailure = code == android.speech.SpeechRecognizer.ERROR_CLIENT
+                || code == android.speech.SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
+                || (android.os.Build.VERSION.SDK_INT >= 33
+                && code == android.speech.SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE);
+        if (!languageFailure) return false;
+        voiceFallbackUsed = true;
+        voiceBilingualRequested = false;
+        // ERROR_CLIENT is also used for transient interruption on several vendor recognizers;
+        // do not permanently disable bilingual mode from that one ambiguous signal.
+        if (code != android.speech.SpeechRecognizer.ERROR_CLIENT) bilingualSpeechSupport = -1;
+        try {
+            if (speech == null) ensureSpeechRecognizer();
+            if (speech == null) return false;
+            speech.startListening(voiceRecognizerIntent(false));
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private boolean isActiveVoiceSession(long session) {
         return listening && session == voiceSession;
     }
@@ -4901,6 +4978,8 @@ public class MainActivity extends Activity {
         if (session != voiceSession) return;
         listening = false;
         voiceStopRequested = false;
+        voiceBilingualRequested = false;
+        voiceFallbackUsed = false;
         clearVoiceStopWatchdog();
         setVoiceUi(false);
     }
@@ -4953,6 +5032,8 @@ public class MainActivity extends Activity {
             voiceSession++;
             listening = false;
             voiceStopRequested = false;
+            voiceBilingualRequested = false;
+            voiceFallbackUsed = false;
             clearVoiceStopWatchdog();
             setVoiceUi(false);
             try { if (speech != null) speech.cancel(); } catch (Throwable ignored) { }
@@ -4982,7 +5063,7 @@ public class MainActivity extends Activity {
                 destroySpeechRecognizer();
             }
         };
-        ui.postDelayed(voiceStopWatchdog, 1800L);
+        ui.postDelayed(voiceStopWatchdog, VOICE_FINAL_TIMEOUT_MS);
     }
 
     private void clearVoiceStopWatchdog() {
