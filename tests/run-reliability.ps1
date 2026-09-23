@@ -14,6 +14,7 @@ if (-not (Test-Path $Json)) {
 New-Item -ItemType Directory -Force -Path $Classes | Out-Null
 
 $sources = @(
+  (Join-Path $Root "app-src\src\com\aissistant\app\AppLock.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentPrompt.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentSkills.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentTools.java"),

@@ -269,6 +269,13 @@ public class MainActivity extends Activity {
     private int idleWarned;
     private String lastUsage = "";
     private int screen = 0;   // 0 chat, 1 chats, 2 settings
+    /** Local app-lock state. An active agent run remains an authenticated session. */
+    private boolean appUnlocked = true;
+    private boolean lockVisible;
+    private boolean lockOnForeground;
+    private int screenBeforeLock;
+    private Intent deferredIntent;
+    private android.os.CancellationSignal fingerprintCancellation;
 
     // ==================== lifecycle ====================
 
@@ -276,6 +283,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         store = new Store(this);
+        appUnlocked = !store.appLockEnabled();
         jrnl = new SessionLog(getFilesDir());
         instance = this;
         startupHygiene();          // a killed run / reboot must not leave the phone flagged
@@ -315,10 +323,7 @@ public class MainActivity extends Activity {
         migrateEndpoints();
         loadSessions();
         screen = 0;
-        root.removeAllViews();
-        root.addView(chatScreen, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.requestApplyInsets();
-        renderTranscript(true);
+        if (store.appLockEnabled()) showAppLockScreen(); else showChat();
         refreshStatus();
         if (getIntent() != null) handleIntent(getIntent());
     }
@@ -356,6 +361,9 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         stopVoiceInput(false);      // never hold the mic open in the background
+        // A quick app switch may pause without reaching onStop before it comes back.
+        // Lock here, except while a user-started agent session is still working.
+        if (!busy) armAppLock();
         // the agent may be driving another app from under us: keep the run visible
         try {
             android.util.Log.i("AIssistant", "onStop: busy=" + busy + " canDraw=" + OverlayView.canDraw(this));
@@ -366,6 +374,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        cancelFingerprintPrompt();
         try { if (speech != null) { speech.destroy(); speech = null; } } catch (Throwable ignored) { }
         if (instance == this) instance = null;
         super.onDestroy();
@@ -388,6 +397,7 @@ public class MainActivity extends Activity {
         super.onStop();
         appVisible = false;
         android.util.Log.i("AIssistant", "onStop: appVisible=false");
+        if (!busy) armAppLock();
         persist();
     }
 
@@ -398,10 +408,31 @@ public class MainActivity extends Activity {
         android.util.Log.i("AIssistant", "onStart: appVisible=true");
         // back in the app: the panel would only duplicate what is on screen
         try { OverlayView.hide(); } catch (Throwable ignored) { }
+        if (lockOnForeground && !busy && store != null && store.appLockEnabled()) {
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    if (lockOnForeground && !busy && store.appLockEnabled()) showAppLockScreen();
+                }
+            });
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // A fast Home/app-switch resumes the existing activity without a new onStart.
+        if (lockOnForeground && !busy && store != null && store.appLockEnabled()) {
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    if (lockOnForeground && !busy && store.appLockEnabled()) showAppLockScreen();
+                }
+            });
+        }
     }
 
     @Override
     public void onBackPressed() {
+        if (lockVisible) { moveTaskToBack(true); return; }
         if (screen == 3) { showSettings(); return; }
         if (screen != 0) { showChat(); return; }
         super.onBackPressed();
@@ -410,6 +441,10 @@ public class MainActivity extends Activity {
     /** automation hooks: `--es run "<script>"` asks for in-app approval before executing as root. */
     private void handleIntent(Intent intent) {
         if (intent == null) return;
+        if (requireAppUnlock()) {
+            deferredIntent = new Intent(intent);
+            return;
+        }
         String run = intent.getStringExtra("run");
         if (run != null && !run.trim().isEmpty()) {
             showChat();
@@ -471,6 +506,233 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ==================== app lock =======================================================
+
+    /** Idle backgrounding ends the local unlock; a live agent run deliberately keeps it alive. */
+    private void armAppLock() {
+        if (store == null || !store.appLockEnabled()) return;
+        appUnlocked = false;
+        lockOnForeground = true;
+        cancelFingerprintPrompt();
+    }
+
+    /** A run may finish while another app is visible; lock before this app is opened again. */
+    private void armAppLockWhenRunStopsOffscreen() {
+        if (!appVisible) armAppLock();
+    }
+
+    private boolean requireAppUnlock() {
+        if (store != null && store.appLockEnabled() && !appUnlocked && !busy) {
+            showAppLockScreen();
+            return true;
+        }
+        return false;
+    }
+
+    private void showAppLockScreen() {
+        if (root == null || store == null || !store.appLockEnabled()) return;
+        if (!lockVisible) screenBeforeLock = screen;
+        lockVisible = true;
+        lockOnForeground = false;
+        screen = -1;
+        cancelFingerprintPrompt();
+
+        LinearLayout page = shell();
+        page.setPadding(dp(GUTTER), statusBarHeight() + dp(18), dp(GUTTER), navigationBarHeight() + dp(24));
+        View top = new View(this);
+        page.addView(top, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(SURFACE, LINE, 18));
+        card.setPadding(dp(20), dp(20), dp(20), dp(18));
+
+        TextView title = tv(22, FG, Typeface.BOLD);
+        title.setText("AI-ssistant terkunci");
+        title.setGravity(Gravity.CENTER_HORIZONTAL);
+        card.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        TextView detail = tv(13, MUTED, Typeface.NORMAL);
+        detail.setText("Masukkan password untuk membuka app.");
+        detail.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(-1, -2);
+        detailLp.setMargins(0, dp(6), 0, dp(18));
+        card.addView(detail, detailLp);
+
+        final EditText password = lockPasswordField("Password");
+        card.addView(password, new LinearLayout.LayoutParams(-1, dp(54)));
+        Button unlock = new Button(this);
+        unlock.setText("Buka");
+        unlock.setAllCaps(false);
+        unlock.setTextSize(15);
+        unlock.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        unlock.setTextColor(ON_ACCENT);
+        unlock.setBackground(ripple(ACCENT, ACCENT, 14));
+        unlock.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { unlockWithPassword(password); }
+        });
+        LinearLayout.LayoutParams unlockLp = new LinearLayout.LayoutParams(-1, dp(52));
+        unlockLp.setMargins(0, dp(12), 0, 0);
+        card.addView(unlock, unlockLp);
+
+        if (store.fingerprintUnlockEnabled() && canUseFingerprint()) {
+            Button fingerprint = new Button(this);
+            fingerprint.setText("Gunakan fingerprint");
+            fingerprint.setAllCaps(false);
+            fingerprint.setTextSize(14);
+            fingerprint.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            fingerprint.setTextColor(FG);
+            fingerprint.setBackground(ripple(TOOL_BG, LINE, 14));
+            fingerprint.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { authenticateFingerprint(); }
+            });
+            LinearLayout.LayoutParams fpLp = new LinearLayout.LayoutParams(-1, dp(50));
+            fpLp.setMargins(0, dp(8), 0, 0);
+            card.addView(fingerprint, fpLp);
+        }
+
+        password.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            @Override public boolean onEditorAction(TextView v, int actionId, android.view.KeyEvent event) {
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    unlockWithPassword(password);
+                    return true;
+                }
+                return false;
+            }
+        });
+        page.addView(card, new LinearLayout.LayoutParams(-1, -2));
+        View bottom = new View(this);
+        page.addView(bottom, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        root.removeAllViews();
+        root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.requestApplyInsets();
+        if (store.fingerprintUnlockEnabled() && canUseFingerprint()) {
+            ui.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (lockVisible) authenticateFingerprint();
+                }
+            }, 250);
+        }
+    }
+
+    private EditText lockPasswordField(String hint) {
+        EditText field = new EditText(this);
+        field.setHint(hint);
+        field.setHintTextColor(MUTED);
+        field.setTextColor(FG);
+        field.setTextSize(16);
+        field.setSingleLine(true);
+        field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        field.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+        field.setPadding(dp(14), 0, dp(14), 0);
+        field.setBackground(round(TOOL_BG, LINE, 12));
+        return field;
+    }
+
+    private boolean passwordMatches(String value) {
+        char[] secret = value == null ? new char[0] : value.toCharArray();
+        try {
+            return AppLock.verify(secret, store.appLockSalt(), store.appLockHash(),
+                    store.appLockKdf(), store.appLockIterations());
+        } finally {
+            AppLock.wipe(secret);
+        }
+    }
+
+    private void unlockWithPassword(EditText field) {
+        String value = field.getText().toString();
+        field.setText("");
+        if (!passwordMatches(value)) {
+            field.setError("Password salah");
+            field.requestFocus();
+            return;
+        }
+        unlockApp();
+    }
+
+    private void unlockApp() {
+        cancelFingerprintPrompt();
+        appUnlocked = true;
+        lockVisible = false;
+        lockOnForeground = false;
+        int destination = screenBeforeLock;
+        if (destination == 1) showHistory();
+        else if (destination == 2) showSettings();
+        else if (destination == 3) showModels();
+        else showChat();
+        Intent next = deferredIntent;
+        deferredIntent = null;
+        if (next != null) handleIntent(next);
+    }
+
+    private boolean canUseFingerprint() {
+        if (android.os.Build.VERSION.SDK_INT < 23) return false;
+        try {
+            Object service = getSystemService(FINGERPRINT_SERVICE);
+            if (!(service instanceof android.hardware.fingerprint.FingerprintManager)) return false;
+            android.hardware.fingerprint.FingerprintManager manager =
+                    (android.hardware.fingerprint.FingerprintManager) service;
+            return manager.isHardwareDetected() && manager.hasEnrolledFingerprints();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private void authenticateFingerprint() {
+        if (!lockVisible || !store.appLockEnabled() || !store.fingerprintUnlockEnabled()) return;
+        if (!canUseFingerprint()) { toast("Fingerprint belum tersedia di perangkat ini"); return; }
+        cancelFingerprintPrompt();
+        fingerprintCancellation = new android.os.CancellationSignal();
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            java.util.concurrent.Executor executor = new java.util.concurrent.Executor() {
+                @Override public void execute(Runnable command) { ui.post(command); }
+            };
+            android.hardware.biometrics.BiometricPrompt prompt =
+                    new android.hardware.biometrics.BiometricPrompt.Builder(this)
+                            .setTitle("Buka AI-ssistant")
+                            .setSubtitle("Verifikasi fingerprint")
+                            .setNegativeButton("Gunakan password", executor, new DialogInterface.OnClickListener() {
+                                @Override public void onClick(DialogInterface dialog, int which) { }
+                            })
+                            .build();
+            prompt.authenticate(fingerprintCancellation, executor,
+                    new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                        @Override public void onAuthenticationSucceeded(
+                                android.hardware.biometrics.BiometricPrompt.AuthenticationResult result) {
+                            unlockApp();
+                        }
+
+                        @Override public void onAuthenticationError(int code, CharSequence message) {
+                            fingerprintCancellation = null;
+                        }
+                    });
+            return;
+        }
+        try {
+            Object service = getSystemService(FINGERPRINT_SERVICE);
+            ((android.hardware.fingerprint.FingerprintManager) service).authenticate(null, fingerprintCancellation, 0,
+                    new android.hardware.fingerprint.FingerprintManager.AuthenticationCallback() {
+                        @Override public void onAuthenticationSucceeded(
+                                android.hardware.fingerprint.FingerprintManager.AuthenticationResult result) {
+                            ui.post(new Runnable() { @Override public void run() { unlockApp(); } });
+                        }
+
+                        @Override public void onAuthenticationError(int code, CharSequence message) {
+                            fingerprintCancellation = null;
+                        }
+                    }, ui);
+        } catch (Throwable t) {
+            fingerprintCancellation = null;
+            toast("Fingerprint tidak dapat digunakan");
+        }
+    }
+
+    private void cancelFingerprintPrompt() {
+        if (fingerprintCancellation == null) return;
+        try { fingerprintCancellation.cancel(); } catch (Throwable ignored) { }
+        fingerprintCancellation = null;
+    }
+
     // ==================== screens ====================
 
     private LinearLayout shell() {
@@ -481,6 +743,7 @@ public class MainActivity extends Activity {
     }
 
     private void showChat() {
+        if (requireAppUnlock()) return;
         screen = 0;
         root.removeAllViews();
         root.addView(chatScreen, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -496,6 +759,7 @@ public class MainActivity extends Activity {
     }
 
     private void showHistory() {
+        if (requireAppUnlock()) return;
         screen = 1;
         LinearLayout v = shell();
 
@@ -639,6 +903,7 @@ public class MainActivity extends Activity {
     }
 
     private void showSettings() {
+        if (requireAppUnlock()) return;
         screen = 2;
         LinearLayout v = shell();
 
@@ -740,6 +1005,73 @@ public class MainActivity extends Activity {
         autoHelpLp.setMargins(0, dp(2), 0, 0);
         panel.addView(autoHelp, autoHelpLp);
 
+        LinearLayout.LayoutParams securityHeaderLp = new LinearLayout.LayoutParams(-1, -2);
+        securityHeaderLp.setMargins(0, dp(22), 0, dp(6));
+        panel.addView(sectionLabel("APP LOCK"), securityHeaderLp);
+        TextView lockStatus = tv(12, MUTED, Typeface.NORMAL);
+        lockStatus.setText(store.appLockEnabled()
+                ? "Password aktif. App meminta unlock setelah Anda meninggalkannya saat idle."
+                : "Password belum aktif.");
+        panel.addView(lockStatus, new LinearLayout.LayoutParams(-1, -2));
+
+        final Switch appLock = new Switch(this);
+        appLock.setText("Minta password saat membuka app");
+        appLock.setTextColor(FG);
+        appLock.setTextSize(14);
+        appLock.setMinHeight(dp(48));
+        appLock.setChecked(store.appLockEnabled());
+        LinearLayout.LayoutParams appLockLp = new LinearLayout.LayoutParams(-1, -2);
+        appLockLp.setMargins(0, dp(8), 0, 0);
+        panel.addView(appLock, appLockLp);
+        appLock.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton button, boolean checked) {
+                if (checked == store.appLockEnabled()) return;
+                if (checked) passwordSetupDialog(); else disableAppLockDialog();
+            }
+        });
+
+        if (store.appLockEnabled()) {
+            Button changePassword = new Button(this);
+            changePassword.setText("Ganti password");
+            changePassword.setAllCaps(false);
+            changePassword.setTextSize(14);
+            changePassword.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            changePassword.setTextColor(FG);
+            changePassword.setBackground(ripple(TOOL_BG, LINE, 14));
+            changePassword.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { passwordSetupDialog(); }
+            });
+            LinearLayout.LayoutParams changeLp = new LinearLayout.LayoutParams(-1, dp(48));
+            changeLp.setMargins(0, dp(4), 0, 0);
+            panel.addView(changePassword, changeLp);
+
+            final boolean fingerprintReady = canUseFingerprint();
+            if (!fingerprintReady && store.fingerprintUnlockEnabled()) store.setFingerprintUnlockEnabled(false);
+            final Switch fingerprint = new Switch(this);
+            fingerprint.setText("Buka dengan fingerprint");
+            fingerprint.setTextColor(FG);
+            fingerprint.setTextSize(14);
+            fingerprint.setMinHeight(dp(48));
+            fingerprint.setChecked(fingerprintReady && store.fingerprintUnlockEnabled());
+            fingerprint.setEnabled(fingerprintReady);
+            fingerprint.setAlpha(fingerprintReady ? 1f : 0.55f);
+            LinearLayout.LayoutParams fingerprintLp = new LinearLayout.LayoutParams(-1, -2);
+            fingerprintLp.setMargins(0, dp(6), 0, 0);
+            panel.addView(fingerprint, fingerprintLp);
+            fingerprint.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                @Override public void onCheckedChanged(android.widget.CompoundButton button, boolean checked) {
+                    if (fingerprintReady) store.setFingerprintUnlockEnabled(checked);
+                }
+            });
+            TextView fingerprintHelp = tv(12, MUTED, Typeface.NORMAL);
+            fingerprintHelp.setText(fingerprintReady
+                    ? "Password tetap tersedia bila fingerprint gagal atau dibatalkan."
+                    : "Fingerprint belum siap. Daftarkan sidik jari di pengaturan perangkat terlebih dahulu.");
+            LinearLayout.LayoutParams fingerprintHelpLp = new LinearLayout.LayoutParams(-1, -2);
+            fingerprintHelpLp.setMargins(0, dp(2), 0, 0);
+            panel.addView(fingerprintHelp, fingerprintHelpLp);
+        }
+
         Button save = new Button(this);
         save.setText("Save");
         save.setAllCaps(false);
@@ -766,6 +1098,120 @@ public class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(v, new LinearLayout.LayoutParams(-1, 0, 1));
         root.requestApplyInsets();
+    }
+
+    private EditText dialogPasswordField(LinearLayout box, String label) {
+        TextView caption = tv(12, MUTED, Typeface.BOLD);
+        caption.setText(label);
+        LinearLayout.LayoutParams captionLp = new LinearLayout.LayoutParams(-1, -2);
+        captionLp.setMargins(0, dp(10), 0, dp(4));
+        box.addView(caption, captionLp);
+        EditText field = lockPasswordField(label);
+        box.addView(field, new LinearLayout.LayoutParams(-1, dp(52)));
+        return field;
+    }
+
+    /** Enabling is immediate; changing an existing password first proves the old one. */
+    private void passwordSetupDialog() {
+        final boolean changing = store.appLockEnabled();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(4), 0, dp(4), 0);
+        final EditText current = changing ? dialogPasswordField(box, "Password saat ini") : null;
+        final EditText next = dialogPasswordField(box, "Password baru (minimal " + AppLock.MIN_PASSWORD_LENGTH + " karakter)");
+        final EditText confirm = dialogPasswordField(box, "Ulangi password baru");
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(changing ? "Ganti password" : "Aktifkan app lock")
+                .setMessage(changing ? "Masukkan password lama sebelum menggantinya." : "Password diminta setiap app dibuka kembali saat tidak ada sesi agent aktif.")
+                .setView(box)
+                .setPositiveButton(changing ? "Ganti" : "Aktifkan", null)
+                .setNegativeButton("Batal", null)
+                .create();
+        dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            @Override public void onCancel(DialogInterface ignored) { showSettings(); }
+        });
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface ignored) {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        String oldValue = current == null ? "" : current.getText().toString();
+                        String nextValue = next.getText().toString();
+                        String confirmValue = confirm.getText().toString();
+                        if (changing && !passwordMatches(oldValue)) {
+                            current.setError("Password saat ini salah");
+                            current.requestFocus();
+                            return;
+                        }
+                        if (nextValue.length() < AppLock.MIN_PASSWORD_LENGTH) {
+                            next.setError("Minimal " + AppLock.MIN_PASSWORD_LENGTH + " karakter");
+                            next.requestFocus();
+                            return;
+                        }
+                        if (!nextValue.equals(confirmValue)) {
+                            confirm.setError("Password tidak sama");
+                            confirm.requestFocus();
+                            return;
+                        }
+                        char[] secret = nextValue.toCharArray();
+                        try {
+                            store.enableAppLock(AppLock.create(secret));
+                            appUnlocked = true;
+                            lockOnForeground = false;
+                            dialog.dismiss();
+                            showSettings();
+                            toast(changing ? "Password diganti" : "App lock aktif");
+                        } catch (Throwable t) {
+                            next.setError("Password tidak dapat disimpan");
+                        } finally {
+                            AppLock.wipe(secret);
+                            next.setText("");
+                            confirm.setText("");
+                            if (current != null) current.setText("");
+                        }
+                    }
+                });
+            }
+        });
+        dialog.show();
+    }
+
+    private void disableAppLockDialog() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(4), 0, dp(4), 0);
+        final EditText password = dialogPasswordField(box, "Password saat ini");
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Nonaktifkan app lock?")
+                .setMessage("Masukkan password untuk menonaktifkan password dan fingerprint.")
+                .setView(box)
+                .setPositiveButton("Nonaktifkan", null)
+                .setNegativeButton("Batal", null)
+                .create();
+        dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            @Override public void onCancel(DialogInterface ignored) { showSettings(); }
+        });
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface ignored) {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        String value = password.getText().toString();
+                        password.setText("");
+                        if (!passwordMatches(value)) {
+                            password.setError("Password salah");
+                            password.requestFocus();
+                            return;
+                        }
+                        store.disableAppLock();
+                        appUnlocked = true;
+                        lockOnForeground = false;
+                        dialog.dismiss();
+                        showSettings();
+                        toast("App lock nonaktif");
+                    }
+                });
+            }
+        });
+        dialog.show();
     }
 
     // ==================== chat screen ====================
@@ -2737,6 +3183,7 @@ public class MainActivity extends Activity {
         hygieneQuiet();
         notifyRunFinished("");
         busy = false;
+        armAppLockWhenRunStopsOffscreen();
         stop = false;
         stepNow = 0;
         persist();
@@ -3059,6 +3506,7 @@ public class MainActivity extends Activity {
                     @Override public void run() { continueRun(); }
                 }, 200);
             } else {
+                armAppLockWhenRunStopsOffscreen();
                 ui.post(new Runnable() {
                     @Override public void run() {
                         setBusyUi(false);
@@ -3565,6 +4013,7 @@ public class MainActivity extends Activity {
                     notifyRunFinished("");
                     if (stop) addBubble("note", "stopped.");
                     busy = false;
+                    armAppLockWhenRunStopsOffscreen();
                     stop = false;
                     stepNow = 0;
                     persist();
@@ -4031,6 +4480,7 @@ public class MainActivity extends Activity {
     // ==================== models & providers screen ====================
 
     private void showModels() {
+        if (requireAppUnlock()) return;
         screen = 3;
         LinearLayout v = shell();
 

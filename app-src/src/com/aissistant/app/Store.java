@@ -41,6 +41,45 @@ final class Store {
                 .apply();
     }
 
+    // ---- app lock -----------------------------------------------------------------------
+
+    boolean appLockEnabled() {
+        return sp.getBoolean("appLockEnabled", false)
+                && !sp.getString("appLockHash", "").isEmpty()
+                && !sp.getString("appLockSalt", "").isEmpty();
+    }
+    String appLockHash() { return sp.getString("appLockHash", ""); }
+    String appLockSalt() { return sp.getString("appLockSalt", ""); }
+    String appLockKdf() { return sp.getString("appLockKdf", ""); }
+    int appLockIterations() { return sp.getInt("appLockIterations", 0); }
+    boolean fingerprintUnlockEnabled() { return sp.getBoolean("fingerprintUnlockEnabled", false); }
+
+    void enableAppLock(AppLock.PasswordHash record) {
+        if (record == null) return;
+        sp.edit()
+                .putBoolean("appLockEnabled", true)
+                .putString("appLockHash", record.hash)
+                .putString("appLockSalt", record.salt)
+                .putString("appLockKdf", record.kdf)
+                .putInt("appLockIterations", record.iterations)
+                .apply();
+    }
+
+    void disableAppLock() {
+        sp.edit()
+                .putBoolean("appLockEnabled", false)
+                .putBoolean("fingerprintUnlockEnabled", false)
+                .remove("appLockHash")
+                .remove("appLockSalt")
+                .remove("appLockKdf")
+                .remove("appLockIterations")
+                .apply();
+    }
+
+    void setFingerprintUnlockEnabled(boolean enabled) {
+        sp.edit().putBoolean("fingerprintUnlockEnabled", enabled && appLockEnabled()).apply();
+    }
+
     // ---- providers & models -------------------------------------------------------------
 
     String providersJson() { return sp.getString("providers", ""); }

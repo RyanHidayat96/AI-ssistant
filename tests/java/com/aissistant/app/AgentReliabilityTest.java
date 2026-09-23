@@ -24,6 +24,7 @@ public final class AgentReliabilityTest {
     private AgentReliabilityTest() { }
 
     public static void main(String[] args) throws Exception {
+        testAppLockHashing();
         testToolValidation();
         testMemory();
         testRunGuard();
@@ -32,6 +33,19 @@ public final class AgentReliabilityTest {
         testStreamingResponses();
         testPersistentShellMarker();
         System.out.println("AgentReliabilityTest: PASS");
+    }
+
+    private static void testAppLockHashing() throws Exception {
+        check(AppLock.MIN_PASSWORD_LENGTH == 4, "app lock accepts four-character passwords");
+        char[] password = "1234".toCharArray();
+        AppLock.PasswordHash record = AppLock.create(password);
+        AppLock.wipe(password);
+        check(AppLock.verify("1234".toCharArray(), record.salt, record.hash,
+                        record.kdf, record.iterations),
+                "password hash verifies only its source password");
+        check(!AppLock.verify("wrong password".toCharArray(), record.salt, record.hash,
+                        record.kdf, record.iterations),
+                "wrong password does not unlock app");
     }
 
     private static void testToolValidation() throws Exception {
