@@ -17,8 +17,10 @@ final class OverlayHub {
     private static volatile boolean stopRequested = false;
     private static volatile boolean visible = false;
     private static volatile boolean busy = false;
-    /** The agent closed its panel before driving another app; do not recreate it mid-run. */
+    /** Clean capture window: do not recreate the panel until the current screenshot/dump finishes. */
     private static volatile boolean suppressedForDriving = false;
+    /** True while a root/UI command is targeting another app; any overlay created now must ignore touch. */
+    private static volatile boolean agentPassThrough = false;
     private static volatile int version = 0;
 
     private OverlayHub() { }
@@ -103,4 +105,6 @@ final class OverlayHub {
     static void suppressForDriving() { suppressedForDriving = true; }
     static void allowOverlayForRun() { suppressedForDriving = false; }
     static boolean overlaySuppressedForDriving() { return suppressedForDriving; }
+    static void setAgentPassThrough(boolean v) { agentPassThrough = v; }
+    static boolean agentPassThrough() { return agentPassThrough; }
 }

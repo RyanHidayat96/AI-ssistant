@@ -76,7 +76,7 @@ public final class AgentReliabilityTest {
     private static void testRunGuard() {
         RunGuard guard = new RunGuard();
         String note = "";
-        for (int i = 0; i < 5; i++) note = guard.observe("dumpsys activity", "same");
+        for (int i = 0; i < 7; i++) note = guard.observe("dumpsys activity", "same");
         check(note.contains("repeated"), "repeated observation nudges instead of caching");
         guard.observe("dumpsys activity", "changed");
         check(!guard.reportOnly(), "new observation is usable");

@@ -296,8 +296,9 @@ final class AgentPrompt {
           .append("Coordinates are fallback only.\n")
           .append("Before coordinate taps, confirm the foreground app, orientation, expected geometry, and that the target is visible.\n")
           .append("Account for dialogs, keyboards, permission prompts, scrolling, overlays, loading states, activity changes, and orientation changes.\n\n")
-          .append("When driving another app, the runtime removes this assistant's interactive overlay before launch, UI capture, and input. ")
-          .append("Do not spend steps trying to dismiss the assistant panel; its thin status border is non-touchable and not a target-app UI node.\n\n")
+          .append("When driving another app, ignore AI-ssistants overlay as self UI. ")
+          .append("The runtime keeps it visible for the user, removes its focus/touch from the target path, and masks it during pixel screenshots. ")
+          .append("Do not tap or reason from assistant overlay/border nodes; focus on the foreground target app.\n\n")
 
           .append("TEXT INPUT\n")
           .append("Android shell text injection may have quoting, whitespace, Unicode, IME, and shell-expansion limitations.\n")

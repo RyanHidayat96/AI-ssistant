@@ -49,11 +49,22 @@ public final class AgentBorder {
     }
 
     /** Enter a UI-critical phase before the command can read or touch another app. */
-    public static void prepareTargetScreen(Context ctx, String cmd) {
+    public static boolean prepareTargetScreen(Context ctx, String cmd) {
+        try {
+            String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
+            if (!drivesTargetApp(c)) return false;
+            OverlayView.prepareForAgent(ctx, observesTargetScreen(c));
+            return true;
+        } catch (Throwable ignored) { }
+        return false;
+    }
+
+    /** Restore overlay after one UI command. */
+    public static void finishTargetScreen(Context ctx, String cmd) {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             if (!drivesTargetApp(c)) return;
-            OverlayView.standDownForAgent();
+            OverlayView.finishAgentObservation(ctx);
         } catch (Throwable ignored) { }
     }
 
@@ -63,15 +74,18 @@ public final class AgentBorder {
                 || c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
                 || c.matches("(?s).*\\bcmd\\s+activity\\b.*")
                 || c.matches("(?s).*\\bscreencap\\b.*")
-                || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
+                || c.matches("(?s).*\\buiautomator\\s+dump\\b.*")
+                || c.matches("(?s).*\\bdumpsys\\s+window\\b.*");
+    }
+
+    private static boolean observesTargetScreen(String c) {
+        return c.matches("(?s).*\\bscreencap\\b.*");
     }
 
 
     private static long lastFocusCheck;
 
-    /** If our own overlay is the one holding focus while the agent drives another app, get out of the way
-     *  immediately: release the borrowed focus and drop our windows. The agent should never lose taps or
-     *  UI reads to its own panel. */
+    /** If our overlay holds focus while the agent drives another app, release it immediately. */
     public static void standDownIfOurs(Context ctx) {
         try {
             long now = System.currentTimeMillis();
@@ -79,9 +93,8 @@ public final class AgentBorder {
             lastFocusCheck = now;
             String out = RootShell.run("dumpsys window | grep -m1 mCurrentFocus", 6);
             if (out == null || !out.contains("com.aissistants.app")) return;
-            android.util.Log.i("AIssistants", "overlay held focus - standing down (release + hide)");
-            try { OverlayView.standDownForAgent(); } catch (Throwable ignored) { }
-            hide();
+            android.util.Log.i("AIssistants", "overlay held focus - release + pass-through");
+            try { OverlayView.prepareForAgent(ctx, false); } catch (Throwable ignored) { }
         } catch (Throwable ignored) { }
     }
 
@@ -125,38 +138,50 @@ public final class AgentBorder {
         } catch (Throwable t) { android.util.Log.w("AIssistants", "border show FAILED: " + t); }
     }
 
-    /** the blue frame itself: a gradient stroke inset from the screen edge, softly pulsing */
+    /** the blue frame itself: a travelling wave with a solid -> transparent fade around the edge */
     private static final class Edge extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF r = new RectF();
-        private float inset, radius, glow = 1f;
+        private final android.graphics.Path frame = new android.graphics.Path();
+        private final android.graphics.Path seg = new android.graphics.Path();
+        private final android.graphics.PathMeasure pm = new android.graphics.PathMeasure();
+        private final long t0 = System.currentTimeMillis();
+        private float stroke, radius;
 
         Edge(Context c) {
             super(c);
             float d = c.getResources().getDisplayMetrics().density;
-            inset = 2.5f * d; radius = 22f * d;   // flush: outer edge of the stroke touches the screen
+            stroke = 7f * d;
+            radius = 22f * d;
             p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(5f * d);
             p.setStrokeCap(Paint.Cap.ROUND);
             setLayerType(View.LAYER_TYPE_HARDWARE, null);
         }
 
         @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
-            r.set(inset, inset, w - inset, h - inset);
-            p.setShader(new LinearGradient(0, 0, w, h,
-                    new int[]{0xFF3B82F6, 0xFF22D3EE, 0xFF6366F1}, null, Shader.TileMode.CLAMP));
+            float in = stroke / 2f;                     // outer edge of the stroke sits exactly on the screen edge
+            android.graphics.RectF r = new android.graphics.RectF(in, in, w - in, h - in);
+            frame.reset();
+            frame.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW);
+            pm.setPath(frame, false);
         }
 
         @Override protected void onDraw(Canvas c) {
-            p.setAlpha((int) (150 * glow));
-            c.drawRoundRect(r, radius, radius, p);
-            p.setStrokeWidth(p.getStrokeWidth() * 2.5f);
-            p.setAlpha((int) (40 * glow));
-            c.drawRoundRect(r, radius, radius, p);
-            p.setStrokeWidth(p.getStrokeWidth() / 2.5f);
+            float len = pm.getLength();
+            if (len <= 0) { postInvalidateDelayed(60); return; }
+            double phase = (System.currentTimeMillis() - t0) / 1000.0 * 0.55;   // slow travel
+            final int N = 150;
+            for (int i = 0; i < N; i++) {
+                double u = (double) i / N;                                        // 0..1 around the frame
+                double wave = 0.5 + 0.5 * Math.sin(u * Math.PI * 2 * 3 - phase);   // 3 soft lobes
+                double fade = 0.12 + 0.88 * (0.5 + 0.5 * Math.cos(u * Math.PI * 2)); // pekat -> transparan -> pekat
+                int alpha = (int) (240 * (0.35 + 0.65 * wave) * fade);
+                p.setAlpha(Math.max(6, alpha));
+                p.setStrokeWidth(stroke * (0.55f + 0.75f * (float) wave));
+                seg.reset();
+                if (pm.getSegment(len * i / N, len * (i + 1) / N + stroke * 0.5f, seg, true)) c.drawPath(seg, p);
+            }
+            postInvalidateDelayed(33);                                            // keep it moving
         }
-
-        void setGlow(float g) { glow = g; }
     }
 
     /** slow breathe in/out so a glance tells whether the agent is still working */
@@ -176,7 +201,6 @@ public final class AgentBorder {
             try {
                 double ph = (System.currentTimeMillis() - t0) / 900.0;
                 float g = (float) (0.65 + 0.35 * Math.sin(ph));
-                ((Edge) v).setGlow(g);
                 v.invalidate();
             } catch (Throwable ignored) { }
             H.postDelayed(this, 40);

@@ -1203,6 +1203,11 @@ public class MainActivity extends Activity {
             card.setOrientation(LinearLayout.VERTICAL);
             card.setBackground(round(TOOL_BG, LINE, 14));
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
+            TextView label = tv(11, MUTED, Typeface.BOLD);
+            label.setText(text.startsWith("$ ") ? "Perintah" : "Output");
+            LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+            llp.setMargins(0, 0, 0, dp(6));
+            card.addView(label, llp);
             TextView body = tv(12, FG, Typeface.NORMAL);
             body.setTypeface(Typeface.MONOSPACE);
             body.setTextIsSelectable(true);
@@ -1219,14 +1224,23 @@ public class MainActivity extends Activity {
             card.addView(body);
             row.addView(card, new LinearLayout.LayoutParams(-2, -2));
         } else {
-            TextView b = tv(14, user ? ON_ACCENT : FG, Typeface.NORMAL);
+            boolean shell = user && text.trim().startsWith("$ ");
+            TextView b = tv(shell ? 13 : 14, shell ? FG : (user ? ON_ACCENT : FG), Typeface.NORMAL);
             String shown = text.length() > 6000 ? text.substring(0, 6000) + "\n\u2026 (truncated)" : text;
             b.setText(user ? shown : markdownText(shown));
             b.setTextIsSelectable(true);
             b.setLineSpacing(dp(2), 1f);
-            b.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 18));
-            b.setPadding(dp(14), dp(10), dp(14), dp(10));
-            b.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.84f));
+            if (shell) {
+                b.setTypeface(Typeface.MONOSPACE);
+                b.setBackground(round(TOOL_BG, LINE, 16));
+                b.setPadding(dp(12), dp(9), dp(12), dp(9));
+                b.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.90f));
+                b.setContentDescription("Perintah manual: " + shown);
+            } else {
+                b.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 18));
+                b.setPadding(dp(14), dp(10), dp(14), dp(10));
+                b.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.84f));
+            }
             row.addView(b, new LinearLayout.LayoutParams(-2, -2));
         }
 
@@ -1355,6 +1369,16 @@ public class MainActivity extends Activity {
                     last = tx.length() > 80 ? tx.substring(0, 80) + "\u2026" : tx;
                 }
             }
+            if (cmds == 0 && start > 0) {
+                JSONObject prev = b.optJSONObject(start - 1);
+                if (prev != null && "user".equals(prev.optString("role", ""))) {
+                    String tx = prev.optString("text", "").trim();
+                    if (tx.startsWith("$ ")) {
+                        cmds = 1;
+                        last = tx.length() > 80 ? tx.substring(0, 80) + "\u2026" : tx;
+                    }
+                }
+            }
         }
         if (cmds == 0) cmds = count;
 
@@ -1366,8 +1390,9 @@ public class MainActivity extends Activity {
         TextView t = tv(12, MUTED, Typeface.NORMAL);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        t.setText("\u2699 " + cmds + (cmds == 1 ? " command" : " commands")
-                + (open ? " \u00b7 hide" : (last.isEmpty() ? " \u00b7 show" : " \u00b7 " + last)));
+        t.setText("\u2699 " + cmds + " perintah"
+                + (last.isEmpty() ? "" : " \u00b7 " + last)
+                + (open ? " \u00b7 sembunyikan" : " \u00b7 lihat output"));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
         card.addView(t, tlp);
         TextView chev = tv(12, MUTED, Typeface.NORMAL);
@@ -1379,8 +1404,7 @@ public class MainActivity extends Activity {
                 renderTranscript();
             }
         });
-        setButtonA11y(card, (open ? "Hide " : "Show ") + cmds
-                + (cmds == 1 ? " command" : " commands"));
+        setButtonA11y(card, (open ? "Sembunyikan " : "Tampilkan ") + cmds + " perintah");
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, dp(12), 0, 0);
         card.setLayoutParams(lp);
@@ -1391,11 +1415,11 @@ public class MainActivity extends Activity {
     /** collapse control at the END of an expanded group - no need to scroll back to the top */
     private void addToolGroupFooter(final int count, final String key) {
         TextView f = tv(12, MUTED, Typeface.NORMAL);
-        f.setText("\u25B4 Tutup \u00b7 " + count + (count == 1 ? " command" : " commands"));
+        f.setText("\u25B4 Tutup \u00b7 " + count + " perintah");
         f.setGravity(Gravity.CENTER);
         f.setBackground(ripple(TOOL_BG, LINE, 12));
         f.setPadding(dp(12), dp(10), dp(12), dp(10));
-        setButtonA11y(f, "Hide " + count + (count == 1 ? " command" : " commands"));
+        setButtonA11y(f, "Sembunyikan " + count + " perintah");
         f.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 expandedGroups.remove(key);
@@ -1483,8 +1507,8 @@ public class MainActivity extends Activity {
         if (hit == null) { groupChip.setVisibility(View.GONE); return; }
         // collapse-only chip: it appears while an expanded group sits under the viewport
         if (!expandedGroups.contains(hit)) { groupChip.setVisibility(View.GONE); return; }
-        groupChip.setText("\u25B4 Tutup \u00b7 " + hitCount + " cmd");
-        setButtonA11y(groupChip, "Hide " + hitCount + (hitCount == 1 ? " command" : " commands"));
+        groupChip.setText("\u25B4 Tutup \u00b7 " + hitCount + " perintah");
+        setButtonA11y(groupChip, "Sembunyikan " + hitCount + " perintah");
         groupChip.setTag(hit);
         groupChip.setVisibility(View.VISIBLE);
     }
@@ -1497,7 +1521,7 @@ public class MainActivity extends Activity {
         jumpChip.setMinHeight(dp(48));
         jumpChip.setBackground(ripple(ACCENT, ACCENT, 24));
         jumpChip.setPadding(dp(16), 0, dp(16), 0);
-        jumpChip.setText("\u2193 pembaruan baru");
+        jumpChip.setText("\u2193 pesan baru");
         setButtonA11y(jumpChip, "Lompat ke pesan terbaru");
         jumpChip.setVisibility(View.GONE);
         FrameLayout.LayoutParams jlp = new FrameLayout.LayoutParams(-2, dp(48),
@@ -1598,15 +1622,15 @@ public class MainActivity extends Activity {
             return;
         }
         jumpChip.setText(jumpCount > 0
-                ? "\u2193 " + jumpCount + " pembaruan baru"
+                ? "\u2193 " + jumpCount + " pesan baru"
                 : "\u2193 ke bawah");
         setButtonA11y(jumpChip, jumpCount > 0
-                ? "Lompat ke pesan terbaru, " + jumpCount + " pembaruan baru"
+                ? "Lompat ke pesan terbaru, " + jumpCount + " pesan baru"
                 : "Lompat ke akhir percakapan");
         jumpChip.setVisibility(View.VISIBLE);
         if (jumpCount > 0 && !jumpAnnounced) {
             jumpAnnounced = true;
-            jumpChip.announceForAccessibility(jumpCount + " pembaruan baru. Ketuk untuk pesan terbaru.");
+            jumpChip.announceForAccessibility(jumpCount + " pesan baru. Ketuk untuk pesan terbaru.");
         }
     }
 
@@ -1619,9 +1643,9 @@ public class MainActivity extends Activity {
         row.setLayoutParams(rlp);
         TextView b = tv(13, MUTED, Typeface.NORMAL);
         String txt;
-        if (stop) txt = "Stopping\u2026";
-        else if (stepNow > 0) txt = "Working\u2026  step " + stepNow;
-        else txt = "Working\u2026";
+        if (stop) txt = "Menghentikan\u2026";
+        else if (stepNow > 0) txt = "Bekerja\u2026 langkah " + stepNow;
+        else txt = "Bekerja\u2026";
         b.setText(txt);
         b.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         b.setBackground(round(SURFACE, LINE, 18));
@@ -3116,10 +3140,6 @@ public class MainActivity extends Activity {
 
     /** `echoCommand` is false when the user-visible bubble already contains the exact command. */
     private String executeCommand(String cmd, boolean echoCommand) {
-        // A full floating panel can consume taps inside its bounds even when non-focusable.
-        // Remove it before UI-driven work; the non-touchable blue border remains as feedback.
-        try { AgentBorder.prepareTargetScreen(this, cmd); AgentBorder.ping(this, cmd); }
-        catch (Throwable ignored) { }
         String cat = permissionCategory(cmd);
         boolean gated = cat != null;
         if (gated && autoApprove) {
@@ -3177,7 +3197,18 @@ public class MainActivity extends Activity {
         // every command starts inside THIS session's workspace; $WD is exported for the model
         String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + toolsDir() + "; " + cmd;
         OverlayView.releaseFocus();
-        String out = withRecovery(foldLong(RootShell.run(exec, store.timeoutSec())), cmd);
+        boolean agentScreenGuard = false;
+        String raw;
+        try {
+            agentScreenGuard = AgentBorder.prepareTargetScreen(this, cmd);
+            AgentBorder.ping(this, cmd);
+            raw = RootShell.run(exec, store.timeoutSec());
+        } finally {
+            if (agentScreenGuard) {
+                try { AgentBorder.finishTargetScreen(this, cmd); } catch (Throwable ignored) { }
+            }
+        }
+        String out = withRecovery(foldLong(raw), cmd);
         if (touchesForeignTmp(cmd)) {
             out = out + "\n[workspace] part of that command pointed at /data/local/tmp OUTSIDE this session's workspace ("
                     + wd + "). Those files were made by a DIFFERENT task: not your target, not evidence, not yours to "

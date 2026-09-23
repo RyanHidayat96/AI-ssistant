@@ -57,6 +57,7 @@ final class OverlayView {
     private int panelW;          // panel width in px (draggable)
     private int transcriptH;     // chat area height in px (draggable)
     private android.view.View grip;
+    private boolean agentPassThrough;
 
     private OverlayView(Context ctx) {
         this.ctx = ctx;
@@ -66,6 +67,12 @@ final class OverlayView {
         transcriptH = sp.getInt("ovH", 0);
         if (panelW <= 0) panelW = defaultWidth();
         if (transcriptH <= 0) transcriptH = dp(230);
+        agentPassThrough = OverlayHub.agentPassThrough();
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+                | WindowManager.LayoutParams.FLAG_SECURE;
+        if (agentPassThrough) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         this.lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -74,9 +81,7 @@ final class OverlayView {
                 // input focus those checks see the panel instead of the app being driven, and the
                 // agent "loses" the app. Focus is lent to the panel only while the user types
                 // (useIme(true)), and outside taps still reach the app via NOT_TOUCH_MODAL.
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                flags,
                 PixelFormat.TRANSLUCENT);
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         lp.gravity = Gravity.TOP | Gravity.START;
@@ -121,38 +126,66 @@ final class OverlayView {
     }
 
     /**
-     * The agent is about to observe or control a different app. Remove the full interactive
-     * panel, not merely its input focus: FLAG_NOT_TOUCH_MODAL still lets the panel consume taps
-     * inside its own bounds. Suppression prevents lifecycle/service callbacks from recreating it
-     * between a launch and the next UI action. The notification and non-touchable AgentBorder
-     * remain available as progress indicators.
+     * Legacy name kept for older call sites. New behavior keeps the panel visible for the user,
+     * but removes focus/touch from the agent's path.
      */
     static void standDownForAgent() {
-        OverlayHub.suppressForDriving();
-        final Runnable remove = new Runnable() {
+        prepareForAgent(null, false);
+    }
+
+    /** Agent is about to drive/read another app. Keep overlay visible, but make it invisible to focus/touch. */
+    static void prepareForAgent(final Context ctx, final boolean hideForCapture) {
+        OverlayHub.setAgentPassThrough(true);
+        if (hideForCapture) OverlayHub.suppressForDriving();
+        final Runnable prep = new Runnable() {
             @Override public void run() {
                 try {
                     OverlayView ov = current;
-                    current = null;
-                    if (ov != null) ov.detach();
+                    if (ov == null) return;
+                    ov.useIme(false);
+                    ov.setAgentPassThrough(true);
+                    if (hideForCapture) ov.detach();
                 } catch (Throwable t) {
-                    android.util.Log.e("AIssistants", "overlay agent stand-down failed: " + t);
+                    android.util.Log.e("AIssistants", "overlay prepare for agent failed: " + t);
                 }
             }
         };
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            remove.run();
+            prep.run();
             return;
         }
         final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override public void run() {
-                try { remove.run(); }
+                try { prep.run(); }
                 finally { done.countDown(); }
             }
         });
         try { done.await(350, java.util.concurrent.TimeUnit.MILLISECONDS); }
         catch (Throwable ignored) { }
+    }
+
+    /** Restore panel interactivity after one agent command. Reattach if it was hidden for clean capture. */
+    static void finishAgentObservation(final Context ctx) {
+        OverlayHub.setAgentPassThrough(false);
+        OverlayHub.allowOverlayForRun();
+        final Runnable finish = new Runnable() {
+            @Override public void run() {
+                try {
+                    OverlayView ov = current;
+                    if (ov == null) return;
+                    ov.setAgentPassThrough(false);
+                    if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistants", "overlay finish agent observation failed: " + t);
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            finish.run();
+            return;
+        }
+        new Handler(Looper.getMainLooper()).post(finish);
     }
 
     static boolean visible() { return current != null && current.panel != null; }
@@ -430,8 +463,13 @@ final class OverlayView {
         try {
             if (panel == null) return;
             int before = lp.flags;
-            if (on) lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-            else lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            if (on) {
+                agentPassThrough = false;
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            } else {
+                lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            }
             if (lp.flags != before) wm.updateViewLayout(panel, lp);
             if (!on) {
                 boolean hadFocus = input != null && input.hasFocus();
@@ -450,6 +488,23 @@ final class OverlayView {
             if (on || lp.flags != before) android.util.Log.i("AIssistants", "overlay focusable=" + on);
         } catch (Throwable t) {
             android.util.Log.e("AIssistants", "overlay focus toggle: " + t);
+        }
+    }
+
+    private void setAgentPassThrough(boolean on) {
+        try {
+            agentPassThrough = on;
+            int before = lp.flags;
+            if (on) {
+                lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+                lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            } else {
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            }
+            if (panel != null && lp.flags != before) wm.updateViewLayout(panel, lp);
+            if (on || lp.flags != before) android.util.Log.i("AIssistants", "overlay passThrough=" + on);
+        } catch (Throwable t) {
+            android.util.Log.e("AIssistants", "overlay pass-through toggle: " + t);
         }
     }
 
@@ -630,15 +685,10 @@ final class OverlayView {
             int from = Math.max(0, lines.size() - 250);      // keep the panel light on huge chats
             body.removeAllViews();
             if (lines.isEmpty()) {
-                body.addView(line("menunggu perintah\u2026", MUTED));
+                body.addView(noteLine("menunggu perintah\u2026"));
             } else {
                 for (int i = from; i < lines.size(); i++) {
-                    String s = lines.get(i);
-                    int color = FG;
-                    if (s.startsWith("> ")) color = ACCENT;
-                    else if (s.startsWith("$ ")) color = Color.rgb(120, 200, 160);
-                    else if (s.startsWith("\u00b7 ")) color = MUTED;
-                    body.addView(line(s, color));
+                    body.addView(messageView(lines.get(i)));
                 }
             }
             if (wasAtBottom && scroll != null) {
@@ -661,12 +711,72 @@ final class OverlayView {
         }
     }
 
-    private TextView line(String s, int color) {
+    private View messageView(String raw) {
+        String s = raw == null ? "" : raw.trim();
+        if (s.startsWith("> ")) return chatBubble(s.substring(2), true);
+        if (s.startsWith("$ ")) return toolCard("Perintah", s, true);
+        if (s.startsWith("| ")) return toolCard("Output", s.substring(2), false);
+        if (s.startsWith("\u00b7 ")) return noteLine(s.substring(2));
+        if (s.startsWith("(") || s.startsWith("gagal ")) return noteLine(s);
+        return chatBubble(s, false);
+    }
+
+    private View chatBubble(String s, boolean user) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setGravity(user ? Gravity.END : Gravity.START);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+        rlp.setMargins(0, dp(5), 0, 0);
+        row.setLayoutParams(rlp);
+
+        TextView t = line(s, user ? ON_ACCENT : FG, user ? Typeface.NORMAL : Typeface.NORMAL);
+        t.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 13));
+        t.setPadding(dp(9), dp(6), dp(9), dp(6));
+        t.setMaxWidth(Math.max(dp(160), widthPx() - dp(36)));
+        row.addView(t, new LinearLayout.LayoutParams(-2, -2));
+        return row;
+    }
+
+    private View toolCard(String label, String text, boolean command) {
+        LinearLayout card = new LinearLayout(ctx);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(TOOL_BG, LINE, 10));
+        card.setPadding(dp(8), dp(6), dp(8), dp(6));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
+        clp.setMargins(0, dp(5), 0, 0);
+        card.setLayoutParams(clp);
+
+        TextView l = line(label, MUTED, Typeface.BOLD);
+        l.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        l.setMaxLines(1);
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
+        llp.setMargins(0, 0, 0, dp(3));
+        card.addView(l, llp);
+
+        TextView t = line(text, command ? Color.rgb(166, 220, 190) : FG, Typeface.NORMAL);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setMaxLines(command ? 3 : 5);
+        card.addView(t, new LinearLayout.LayoutParams(-1, -2));
+        return card;
+    }
+
+    private TextView noteLine(String s) {
+        TextView t = line(s, MUTED, Typeface.NORMAL);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(6), dp(3), dp(6), dp(3));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        lp.setMargins(0, dp(5), 0, 0);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private TextView line(String s, int color, int style) {
         TextView t = new TextView(ctx);
         t.setText(s);
         t.setTextSize(11);
         t.setTextColor(color);
-        t.setTypeface(Typeface.MONOSPACE);
+        t.setTypeface(Typeface.DEFAULT, style);
         t.setMaxLines(6);
         t.setEllipsize(TextUtils.TruncateAt.END);
         t.setPadding(0, dp(1), 0, dp(1));
