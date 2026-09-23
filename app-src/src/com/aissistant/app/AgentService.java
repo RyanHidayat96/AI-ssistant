@@ -32,7 +32,7 @@ public class AgentService extends Service {
                     nm.createNotificationChannel(c);
                 }
             }
-            startForeground(ID, build(this, "Working on the device \u00b7 driving apps, running root commands"));
+            startForeground(ID, build(this, getString(R.string.status_working_device)));
         } catch (Throwable ignored) { }
         // the run keeps going while the agent drives OTHER apps - only then does the panel belong
         // on screen; while the user is looking at the chat it would just cover it
@@ -90,7 +90,7 @@ public class AgentService extends Service {
             String action = label == null || label.trim().isEmpty() ? ctx.getString(R.string.notification_agent_action) : label.trim();
             String line = notificationLine(command);
             String body = ctx.getString(R.string.notification_permission_waiting, action);
-            if (!line.isEmpty()) body += "\n$ " + line;
+            if (!line.isEmpty()) body += "\n" + ctx.getString(R.string.shell_command, line);
             Intent open = new Intent(ctx, MainActivity.class);
             open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
             android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, ID_PERMISSION, open,
@@ -98,7 +98,7 @@ public class AgentService extends Service {
             Notification.Builder b = Build.VERSION.SDK_INT >= 26
                     ? new Notification.Builder(ctx, CH_PERMISSION)
                     : new Notification.Builder(ctx);
-            b.setContentTitle("AI-ssistant · perlu izin")
+            b.setContentTitle(ctx.getString(R.string.notification_permission_title))
                     .setContentText(ctx.getString(R.string.notification_permission_tap, action))
                     .setStyle(new Notification.BigTextStyle().bigText(body))
                     .setSmallIcon(android.R.drawable.ic_dialog_alert)
@@ -151,7 +151,7 @@ public class AgentService extends Service {
                     : new Notification.Builder(ctx);
             String body = summary == null || summary.trim().isEmpty()
                     ? ctx.getString(R.string.notification_done_default) : summary.trim();
-            b.setContentTitle(title == null || title.isEmpty() ? "AI-ssistant \u00b7 selesai" : title)
+            b.setContentTitle(title == null || title.isEmpty() ? ctx.getString(R.string.notification_done_title) : title)
                     .setContentText(body)
                     .setStyle(new Notification.BigTextStyle().bigText(body))
                     .setSmallIcon(android.R.drawable.checkbox_on_background)

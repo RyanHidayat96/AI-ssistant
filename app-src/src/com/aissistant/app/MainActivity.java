@@ -493,7 +493,7 @@ public class MainActivity extends Activity {
 
     /** An exported launcher must never silently turn another app's text into a privileged run. */
     private void confirmAutomationPrompt(final String prompt) {
-        final String shown = prompt.length() > 2000 ? prompt.substring(0, 2000) + "\n\u2026 (truncated)" : prompt;
+        final String shown = prompt.length() > 2000 ? prompt.substring(0, 2000) + "\n" + uiText(R.string.chat_truncated) : prompt;
         new AlertDialog.Builder(this)
                 .setTitle(uiText(R.string.automation_external_prompt_title))
                 .setMessage(uiText(R.string.automation_external_prompt_message, shown))
@@ -965,16 +965,16 @@ public class MainActivity extends Activity {
 
         LinearLayout.LayoutParams thlp = new LinearLayout.LayoutParams(-1, -2);
         thlp.setMargins(0, dp(16), 0, dp(6));
-        panel.addView(sectionLabel("THINKING \u00b7 AUTO PICKS PER TASK"), thlp);
+        panel.addView(sectionLabel(uiText(R.string.settings_section_thinking)), thlp);
         final int[] thinking = { store.thinking() };
-        final String[] tnames = { "Auto", "Off", "Low", "High" };
+        final int[] thinkingLabels = { R.string.thinking_auto, R.string.thinking_off, R.string.thinking_low, R.string.thinking_high };
         final Button[] tbtns = new Button[4];
         LinearLayout trow = new LinearLayout(this);
         trow.setOrientation(LinearLayout.HORIZONTAL);
         for (int i = 0; i < 4; i++) {
             final int fi = i;
             Button tb = new Button(this);
-            tb.setText(tnames[i]);
+            tb.setText(uiText(thinkingLabels[i]));
             tb.setAllCaps(false);
             tb.setTextSize(13);
             tb.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1123,7 +1123,7 @@ public class MainActivity extends Activity {
         final EditText next = dialogPasswordField(box, "Password baru (minimal " + AppLock.MIN_PASSWORD_LENGTH + " karakter)");
         final EditText confirm = dialogPasswordField(box, uiText(R.string.lock_repeat_password));
         final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(changing ? uiText(R.string.settings_change_password) : "Aktifkan app lock")
+                .setTitle(changing ? uiText(R.string.settings_change_password) : uiText(R.string.lock_enable_title))
                 .setMessage(changing ? uiText(R.string.lock_change_message) : uiText(R.string.lock_enable_message))
                 .setView(box)
                 .setPositiveButton(changing ? uiText(R.string.common_change) : uiText(R.string.common_enable), null)
@@ -1392,14 +1392,14 @@ public class MainActivity extends Activity {
         });
         field.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
 
-        micBtn = composerIcon(R.drawable.ic_mic_24, MUTED, "Dictate a prompt with your voice", new View.OnClickListener() {
+        micBtn = composerIcon(R.drawable.ic_mic_24, MUTED, uiText(R.string.a11y_mic_start), new View.OnClickListener() {
             @Override public void onClick(View x) { toggleVoiceInput(); }
         });
         LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(dp(44), dp(48));
         vlp.setMargins(0, 0, dp(2), 0);
         field.addView(micBtn, vlp);
 
-        sendBtn = composerIcon(R.drawable.ic_arrow_upward_24, MUTED, "Send message", new View.OnClickListener() {
+        sendBtn = composerIcon(R.drawable.ic_arrow_upward_24, MUTED, uiText(R.string.a11y_send_message), new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (busy) {
                     if (input != null && input.getText().toString().trim().length() > 0) midRunSend();
@@ -1427,8 +1427,8 @@ public class MainActivity extends Activity {
     private void menu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 3, 2, uiText(R.string.common_settings));
-        pm.getMenu().add(0, 4, 3, "Clear this chat");
-        pm.getMenu().add(0, 7, 6, "Overlay mengambang");
+        pm.getMenu().add(0, 4, 3, uiText(R.string.menu_clear_chat));
+        pm.getMenu().add(0, 7, 6, uiText(R.string.menu_floating_overlay));
         pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
             @Override public boolean onMenuItemClick(android.view.MenuItem item) {
                 if (item.getItemId() == 3) showSettings();
@@ -1565,7 +1565,7 @@ public class MainActivity extends Activity {
         t.setGravity(Gravity.CENTER);
         t.setPadding(dp(14), dp(10), dp(14), dp(10));
         t.setBackground(ripple(SURFACE, LINE, 16));
-        setButtonA11y(t, "Load " + n + " older messages");
+        setButtonA11y(t, uiText(R.string.a11y_load_older, n));
         t.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { loadOlder(); }
         });
@@ -1629,7 +1629,7 @@ public class MainActivity extends Activity {
             body.setTypeface(Typeface.MONOSPACE);
             body.setTextIsSelectable(true);
             body.setLineSpacing(dp(2), 1f);
-            String shown = text.length() > 4000 ? text.substring(0, 4000) + "\n\u2026 (truncated)" : text;
+            String shown = text.length() > 4000 ? text.substring(0, 4000) + "\n" + uiText(R.string.chat_truncated) : text;
             if (command) {
                 SpannableString ss = new SpannableString(shown);
                 ss.setSpan(new ForegroundColorSpan(ACCENT), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -1643,7 +1643,7 @@ public class MainActivity extends Activity {
         } else {
             boolean shell = user && text.trim().startsWith("$ ");
             TextView b = tv(shell ? 13 : 15, shell ? COMMAND : FG, Typeface.NORMAL);
-            String shown = text.length() > 6000 ? text.substring(0, 6000) + "\n\u2026 (truncated)" : text;
+            String shown = text.length() > 6000 ? text.substring(0, 6000) + "\n" + uiText(R.string.chat_truncated) : text;
             b.setText(user ? shown : markdownText(shown));
             b.setTextIsSelectable(true);
             b.setLineSpacing(dp(2), 1f);
@@ -1652,7 +1652,7 @@ public class MainActivity extends Activity {
                 b.setBackground(round(TOOL_BG, LINE, 16));
                 b.setPadding(dp(12), dp(9), dp(12), dp(9));
                 b.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.90f));
-                b.setContentDescription("Perintah manual: " + shown);
+                b.setContentDescription(uiText(R.string.a11y_manual_command, shown));
             } else {
                 b.setBackground(round(SURFACE, LINE, 18));
                 b.setPadding(dp(14), dp(10), dp(14), dp(10));
@@ -1760,7 +1760,7 @@ public class MainActivity extends Activity {
         c.setText(uiText(R.string.chat_continue));
         c.setGravity(Gravity.CENTER);
         c.setBackground(ripple(ACCENT, ACCENT, 14));
-        setButtonA11y(c, "Continue this task");
+        setButtonA11y(c, uiText(R.string.a11y_continue_task));
         c.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
@@ -1808,10 +1808,10 @@ public class MainActivity extends Activity {
         TextView t = tv(12, MUTED, Typeface.NORMAL);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        String action = open ? "sembunyikan" : "lihat output";
-        String groupText = "\u2699 " + cmds + " perintah"
-                + (last.isEmpty() ? "" : " \u00b7 " + last)
-                + " \u00b7 " + action;
+        String action = uiText(open ? R.string.chat_action_hide : R.string.chat_action_show_output);
+        String groupText = uiText(R.string.chat_command_group_base, cmds)
+                + (last.isEmpty() ? "" : uiText(R.string.chat_command_group_last, last))
+                + uiText(R.string.chat_command_group_action, action);
         SpannableString title = new SpannableString(groupText);
         if (!last.isEmpty()) {
             int ls = groupText.indexOf(last);
@@ -1833,7 +1833,7 @@ public class MainActivity extends Activity {
                 renderTranscript();
             }
         });
-        setButtonA11y(card, (open ? "Sembunyikan " : "Tampilkan ") + cmds + " perintah");
+        setButtonA11y(card, uiText(open ? R.string.a11y_hide_commands : R.string.a11y_show_commands, cmds));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, dp(12), 0, 0);
         card.setLayoutParams(lp);
@@ -1848,7 +1848,7 @@ public class MainActivity extends Activity {
         f.setGravity(Gravity.CENTER);
         f.setBackground(ripple(TOOL_BG, LINE, 12));
         f.setPadding(dp(12), dp(10), dp(12), dp(10));
-        setButtonA11y(f, "Sembunyikan " + count + " perintah");
+        setButtonA11y(f, uiText(R.string.a11y_hide_commands, count));
         f.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 expandedGroups.remove(key);
@@ -1867,7 +1867,7 @@ public class MainActivity extends Activity {
         groupChip = tv(12, ON_ACCENT, Typeface.BOLD);
         groupChip.setBackground(ripple(ACCENT, ACCENT, 20));
         groupChip.setPadding(dp(16), dp(12), dp(16), dp(12));
-        setButtonA11y(groupChip, "Hide expanded commands");
+        setButtonA11y(groupChip, uiText(R.string.a11y_hide_commands, 0));
         groupChip.setVisibility(View.GONE);
         FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL | Gravity.END);
         flp.setMargins(0, 0, dp(10), 0);
@@ -1937,7 +1937,7 @@ public class MainActivity extends Activity {
         // collapse-only chip: it appears while an expanded group sits under the viewport
         if (!expandedGroups.contains(hit)) { groupChip.setVisibility(View.GONE); return; }
         groupChip.setText(uiText(R.string.chat_close_commands, hitCount));
-        setButtonA11y(groupChip, "Sembunyikan " + hitCount + " perintah");
+        setButtonA11y(groupChip, uiText(R.string.a11y_hide_commands, hitCount));
         groupChip.setTag(hit);
         groupChip.setVisibility(View.VISIBLE);
     }
@@ -1951,7 +1951,7 @@ public class MainActivity extends Activity {
         jumpChip.setBackground(ripple(ACCENT, ACCENT, 24));
         jumpChip.setPadding(dp(16), 0, dp(16), 0);
         jumpChip.setText(uiText(R.string.chat_new_message));
-        setButtonA11y(jumpChip, "Lompat ke pesan terbaru");
+        setButtonA11y(jumpChip, uiText(R.string.a11y_jump_end));
         jumpChip.setVisibility(View.GONE);
         FrameLayout.LayoutParams jlp = new FrameLayout.LayoutParams(-2, dp(48),
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -2051,15 +2051,15 @@ public class MainActivity extends Activity {
             return;
         }
         jumpChip.setText(jumpCount > 0
-                ? "\u2193 " + jumpCount + " pesan baru"
-                : "\u2193 ke bawah");
+                ? uiText(R.string.chat_new_messages, jumpCount)
+                : "\u2193 " + uiText(R.string.chat_jump_down));
         setButtonA11y(jumpChip, jumpCount > 0
-                ? "Lompat ke pesan terbaru, " + jumpCount + " pesan baru"
-                : "Lompat ke akhir percakapan");
+                ? uiText(R.string.a11y_jump_latest, jumpCount)
+                : uiText(R.string.a11y_jump_end));
         jumpChip.setVisibility(View.VISIBLE);
         if (jumpCount > 0 && !jumpAnnounced) {
             jumpAnnounced = true;
-            jumpChip.announceForAccessibility(jumpCount + " pesan baru. Ketuk untuk pesan terbaru.");
+            jumpChip.announceForAccessibility(uiText(R.string.a11y_new_messages_announcement, jumpCount));
         }
     }
 
@@ -2072,9 +2072,9 @@ public class MainActivity extends Activity {
         row.setLayoutParams(rlp);
         TextView b = tv(13, MUTED, Typeface.NORMAL);
         String txt;
-        if (stop) txt = "Menghentikan\u2026";
-        else if (stepNow > 0) txt = "Bekerja\u2026 langkah " + stepNow;
-        else txt = "Bekerja\u2026";
+        if (stop) txt = uiText(R.string.busy_stopping);
+        else if (stepNow > 0) txt = uiText(R.string.busy_working_step, stepNow);
+        else txt = uiText(R.string.busy_working);
         b.setText(txt);
         b.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         b.setBackground(round(SURFACE, LINE, 18));
@@ -2097,8 +2097,8 @@ public class MainActivity extends Activity {
         t.setText(hasActiveModel() ? uiText(R.string.chat_empty_title) : uiText(R.string.chat_setup_title));
         TextView s = tv(13, MUTED, Typeface.NORMAL);
         s.setText(hasActiveModel()
-                ? "Describe a goal. Risky root actions are reviewed by default."
-                : "Add a provider and model before chatting. API keys and image attachments are sent only to the provider you select.");
+                ? uiText(R.string.chat_empty_description)
+                : uiText(R.string.chat_setup_description));
         s.setLineSpacing(dp(2), 1f);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
         slp.setMargins(0, dp(6), 0, dp(18));
@@ -2106,20 +2106,15 @@ public class MainActivity extends Activity {
         v.addView(s, slp);
 
         String[][] tips = hasActiveModel() ? new String[][] {
-                {"System check", "build, kernel, SELinux, mounts, root manager",
-                        "full system + kernel inventory: build, SELinux, kernel version, mounts, loaded modules, root manager"},
-                {"Installed apps", "every package with uid + data size, root tools flagged",
-                        "list every installed package with its uid and data dir size; flag the ones that look like root or hooking tools"},
-                {"Processes", "top CPU/RAM users and which run as root",
-                        "show top processes by CPU and memory, and which have root"},
-                {"Logcat triage", "last 200 lines, crashes explained",
-                        "tail the last 200 logcat lines and explain anything that looks like a crash"},
-                {"Storage", "per-partition usage, where space went",
-                        "show disk usage per partition in human units and where the space went"}
+                {uiText(R.string.suggest_system_title), uiText(R.string.suggest_system_description), uiText(R.string.suggest_system_prompt)},
+                {uiText(R.string.suggest_apps_title), uiText(R.string.suggest_apps_description), uiText(R.string.suggest_apps_prompt)},
+                {uiText(R.string.suggest_processes_title), uiText(R.string.suggest_processes_description), uiText(R.string.suggest_processes_prompt)},
+                {uiText(R.string.suggest_logcat_title), uiText(R.string.suggest_logcat_description), uiText(R.string.suggest_logcat_prompt)},
+                {uiText(R.string.suggest_storage_title), uiText(R.string.suggest_storage_description), uiText(R.string.suggest_storage_prompt)}
         } : new String[][] {
-                {uiText(R.string.models_add_provider), "choose where model requests and API keys are sent", "__MODELS__"},
-                {uiText(R.string.models_add_model), "select a model under that provider", "__MODELS__"},
-                {"Test root access", "confirm KernelSU or Magisk access before a task", "__ROOT__"}
+                {uiText(R.string.models_add_provider), uiText(R.string.suggest_provider_description), "__MODELS__"},
+                {uiText(R.string.models_add_model), uiText(R.string.suggest_model_description), "__MODELS__"},
+                {uiText(R.string.suggest_root_title), uiText(R.string.suggest_root_description), "__ROOT__"}
         };
         for (String[] tip : tips) v.addView(suggestion(tip[0], tip[1], tip[2]));
 
@@ -2339,12 +2334,12 @@ public class MainActivity extends Activity {
 
     private void refreshStatus() {
         updateSubtitle();
-        setPill("CHECKING\u2026", WARN);
+        setPill(uiText(R.string.root_checking), WARN);
         new Thread(new Runnable() {
             @Override public void run() {
                 final boolean ok = RootShell.available();
                 ui.post(new Runnable() {
-                    @Override public void run() { setPill(ok ? "ROOT \u2713" : "NO ROOT", ok ? OK : DANGER); }
+                    @Override public void run() { setPill(ok ? uiText(R.string.root_available) : uiText(R.string.root_unavailable), ok ? OK : DANGER); }
                 });
             }
         }).start();
@@ -2355,22 +2350,22 @@ public class MainActivity extends Activity {
         pill.setTextColor(color);
         pill.setBackground(round(Color.TRANSPARENT, color, 14));
         String label;
-        if ("ROOT \u2713".equals(text)) label = "Root access is enabled. Tap to test again.";
-        else if (text.startsWith("CHECKING")) label = "Checking root access.";
-        else label = "Root access is unavailable. Tap to request root access.";
+        if (uiText(R.string.root_available).equals(text)) label = uiText(R.string.a11y_root_enabled);
+        else if (uiText(R.string.root_checking).equals(text)) label = uiText(R.string.a11y_root_checking);
+        else label = uiText(R.string.a11y_root_unavailable);
         setButtonA11y(pill, label);
     }
 
     private void requestRoot() {
         if (busy) { toast(uiText(R.string.toast_root_testing)); return; }
-        addBubble("note", "requesting root\u2026 approve the KernelSU/Magisk prompt if it appears");
+        addBubble("note", uiText(R.string.chat_requesting_root));
         new Thread(new Runnable() {
             @Override public void run() {
                 final String out = RootShell.requestRoot(60);
                 addBubble("tool", out);
                 final boolean ok = out.contains("uid=0");
                 ui.post(new Runnable() {
-                    @Override public void run() { setPill(ok ? "ROOT \u2713" : "NO ROOT", ok ? OK : DANGER); }
+                    @Override public void run() { setPill(ok ? uiText(R.string.root_available) : uiText(R.string.root_unavailable), ok ? OK : DANGER); }
                 });
             }
         }).start();
@@ -2482,7 +2477,7 @@ public class MainActivity extends Activity {
             if (t.isEmpty()) continue;
             return t.length() > 40 ? t.substring(0, 40) + "\u2026" : t;
         }
-        return "Recovered chat";
+        return uiText(R.string.history_recovered_chat);
     }
 
     private JSONObject newSessionObj() {
@@ -2519,15 +2514,15 @@ public class MainActivity extends Activity {
             if (t.isEmpty()) continue;
             return t.length() > 80 ? t.substring(0, 80) + "\u2026" : t;
         }
-        return "empty";
+        return uiText(R.string.history_empty_preview);
     }
 
     private String metaOf(JSONObject s) {
         JSONArray b = bubblesOf(s);
         int n = 0;
         for (int i = 0; i < b.length(); i++) if (b.optJSONObject(i) != null) n++;
-        String m = n + " bubbles \u00b7 " + relTime(s.optLong("updated", 0));
-        if (cur != null && s.optString("id").equals(cur.optString("id"))) m = "current \u00b7 " + m;
+        String m = uiText(R.string.history_metadata, n, relTime(s.optLong("updated", 0)));
+        if (cur != null && s.optString("id").equals(cur.optString("id"))) m = uiText(R.string.history_current_prefix, m);
         return m;
     }
 
@@ -2737,7 +2732,7 @@ public class MainActivity extends Activity {
             if (r != null) r.set(PERM_DENY);
             l.countDown();
         }
-        addBubble("note", "stopping\u2026");
+        addBubble("note", uiText(R.string.chat_stopping));
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
         });
@@ -2804,7 +2799,7 @@ public class MainActivity extends Activity {
             sendBtn.setBackground(circle(hasText ? ACCENT : LINE));
         }
         sendBtn.setAlpha(showStop || hasText ? 1f : 0.78f);
-        setButtonA11y(sendBtn, showStop ? "Stop current run" : "Send message");
+        setButtonA11y(sendBtn, showStop ? uiText(R.string.a11y_stop_run) : uiText(R.string.a11y_send_message));
     }
 
     /** text typed while a run is in flight: feed it to the agent instead of stopping the run */
@@ -2818,7 +2813,7 @@ public class MainActivity extends Activity {
         lastPrompt = text;
         synchronized (injectedQueue) { injectedQueue.add(text); }
         addBubble("user", text);
-        addBubble("note", "masukan dikirim ke agent \u00b7 dipakai di langkah berikutnya");
+        addBubble("note", uiText(R.string.chat_input_sent));
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
         });
@@ -2918,8 +2913,7 @@ public class MainActivity extends Activity {
         }
         if (!hasActiveModel()) {
             addBubble("user", text);
-            addBubble("note", "No model selected. Open \u22EE \u2192 Models & providers, add a provider + model, "
-                    + "then tap the model to make it active. Meanwhile you can still run anything with `$ <command>`.");
+            addBubble("note", uiText(R.string.runtime_no_model));
             return;
         }
         String attach = pendingPath;
@@ -3093,13 +3087,15 @@ public class MainActivity extends Activity {
             if (head.length() > 180) head = head.substring(0, 180) + "\u2026";
             StringBuilder b = new StringBuilder();
             if (!head.isEmpty()) b.append(head);
-            if (secs > 0) b.append(b.length() > 0 ? "  \u00b7  " : "").append(secs).append("s");
+            if (secs > 0) b.append(b.length() > 0 ? "  \u00b7  " : "").append(uiText(R.string.notification_elapsed_seconds, secs));
             if (outcome != null && !outcome.isEmpty()) b.append(b.length() > 0 ? "  \u00b7  " : "").append(outcome);
             String titleName = titleOf(cur);
             boolean needsUser = reportsEvidenceBlocker(lastAssistantSaid);
-            AgentService.done(this, "AI-ssistant \u00b7 " + (needsUser ? "butuh tindakan" : "selesai")
-                    + (titleName.isEmpty() ? "" : " \u00b7 " + titleName),
-                    b.length() == 0 ? (needsUser ? "Agent butuh requirement dari Anda untuk lanjut." : "Agent sudah selesai bekerja.") : b.toString());
+            AgentService.done(this, uiText(R.string.notification_task_title,
+                    uiText(needsUser ? R.string.notification_task_action_needed : R.string.notification_task_completed))
+                    + (titleName.isEmpty() ? "" : uiText(R.string.notification_task_chat_suffix, titleName)),
+                    b.length() == 0 ? uiText(needsUser ? R.string.notification_task_blocked_detail
+                            : R.string.notification_done_default) : b.toString());
         } catch (Throwable t) {
             android.util.Log.e("AIssistant", "notifyRunFinished: " + t);
         }
@@ -3117,7 +3113,7 @@ public class MainActivity extends Activity {
             if (Hygiene.cleanFoundSomething(out)) {
                 final String line = out.replace("\n", " \u00b7 ");
                 ui.post(new Runnable() { @Override public void run() {
-                    addBubble("note", "hygiene \u00b7 " + line);
+                    addBubble("note", uiText(R.string.hygiene_status, line));
                 } });
             }
             android.util.Log.i("AIssistant", "hygiene: " + out.replace("\n", " | "));
@@ -3129,7 +3125,7 @@ public class MainActivity extends Activity {
     /** menu action: show what an anti-tamper SDK would see, then clean it up */
     private void showHygiene() {
         if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
-        addBubble("user", "device hygiene");
+        addBubble("user", uiText(R.string.hygiene_user_request));
         worker = new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -3137,14 +3133,14 @@ public class MainActivity extends Activity {
                     final String verdict = Hygiene.verdict(report);
                     final String cleaned = Hygiene.clean();
                     ui.post(new Runnable() { @Override public void run() {
-                        addBubble("assistant", "Cek integritas OS\n\n" + report + "\n\nVerdict: " + verdict);
-                        addBubble("note", "pembersihan \u00b7 " + cleaned.replace("\n", " \u00b7 "));
+                        addBubble("assistant", uiText(R.string.hygiene_report, report, verdict));
+                        addBubble("note", uiText(R.string.hygiene_cleaning, cleaned.replace("\n", " - ")));
                         persist();
                         renderTranscript();
                     } });
                 } catch (Throwable t) {
                     ui.post(new Runnable() { @Override public void run() {
-                        addBubble("note", "hygiene gagal: " + t);
+                        addBubble("note", uiText(R.string.hygiene_failed, t));
                     } });
                 }
             }
@@ -3619,15 +3615,13 @@ public class MainActivity extends Activity {
                     + repeatGuardTotal + " for: " + firstLine(cmd));
             if (hits == 0) {
                 audit("guard", "REPEAT", cmd);
-                addBubble("note", "guard: command sama sudah jalan " + REPEAT_CACHE_AFTER
-                        + "x \u00b7 output lama dipakai \u00b7 " + firstLine(cmd));
+                addBubble("note", uiText(R.string.runtime_repeat_cached, REPEAT_CACHE_AFTER, firstLine(cmd)));
             }
             String prev = runOutputs.get(cmd);
             String cached = prev == null ? "(no output)" : clip(prev);
             if (repeatGuardTotal >= REPEAT_RUNAWAY_LIMIT) {
                 loopBroken = true;
-                addBubble("note", "guard: runaway loop " + repeatGuardTotal
-                        + "x \u00b7 run dihentikan \u00b7 " + firstLine(cmd));
+                addBubble("note", uiText(R.string.runtime_runaway, repeatGuardTotal, firstLine(cmd)));
                 return "[RUNAWAY LOOP STOPPED: too many duplicate commands in this run. "
                         + "Use cached output below, write a conclusion, and do not call this tool path again.\n"
                         + "CACHED OUTPUT:\n" + cached + "]";
@@ -3806,9 +3800,9 @@ public class MainActivity extends Activity {
         return sb.toString();
     }
 
-    private static String clip(String s) {
+    private String clip(String s) {
         if (s == null) return "";
-        return s.length() > 2000 ? s.substring(0, 2000) + "\n\u2026 (truncated)" : s;
+        return s.length() > 2000 ? s.substring(0, 2000) + "\n" + uiText(R.string.chat_truncated) : s;
     }
 
     /** which gate category this command belongs to (null = run it silently) */
@@ -3839,8 +3833,8 @@ public class MainActivity extends Activity {
         autoBtn.setTextColor(autoApprove ? ON_ACCENT : MUTED);
         autoBtn.setBackground(round(autoApprove ? ACCENT : SURFACE, autoApprove ? ACCENT : LINE, 14));
         setButtonA11y(autoBtn, autoApprove
-                ? "Auto-approve risky actions is on. Tap to require review."
-                : "Review risky actions is on. Tap to enable auto-approve.");
+                ? uiText(R.string.a11y_auto_approve_on)
+                : uiText(R.string.a11y_auto_approve_off));
     }
 
     private void confirmAutoApproval() {
@@ -3889,7 +3883,8 @@ public class MainActivity extends Activity {
                 mlp.setMargins(0, dp(6), 0, 0);
                 box.addView(msg, mlp);
 
-                final String[] labels = { "Izinkan sekali", "Izinkan di percakapan ini", "Izinkan selalu (" + CAT_KEYS[ci] + ")", "Tolak" };
+                final String[] labels = { uiText(R.string.review_allow_once), uiText(R.string.review_allow_chat),
+                        uiText(R.string.review_allow_always, CAT_KEYS[ci]), uiText(R.string.review_deny) };
                 final AlertDialog[] holder = new AlertDialog[1];
                 for (int i = 0; i < labels.length; i++) {
                     final int choice = i;
@@ -4149,17 +4144,17 @@ public class MainActivity extends Activity {
         if (t <= 0) return "";
         Date d = new Date(t);
         boolean today = System.currentTimeMillis() - t < 86400000L;
-        SimpleDateFormat f = new SimpleDateFormat(today ? "HH:mm" : "dd MMM HH:mm", Locale.ENGLISH);
+        SimpleDateFormat f = new SimpleDateFormat(today ? "HH:mm" : "dd MMM HH:mm", Locale.getDefault());
         return f.format(d);
     }
 
     private String relTime(long t) {
-        if (t <= 0) return "just now";
+        if (t <= 0) return uiText(R.string.time_just_now);
         long d = System.currentTimeMillis() - t;
-        if (d < 60000L) return "just now";
-        if (d < 3600000L) return (d / 60000L) + "m ago";
-        if (d < 86400000L) return (d / 3600000L) + "h ago";
-        return new SimpleDateFormat("dd MMM", Locale.ENGLISH).format(new Date(t));
+        if (d < 60000L) return uiText(R.string.time_just_now);
+        if (d < 3600000L) return uiText(R.string.time_minutes_ago, d / 60000L);
+        if (d < 86400000L) return uiText(R.string.time_hours_ago, d / 3600000L);
+        return new SimpleDateFormat("dd MMM", Locale.getDefault()).format(new Date(t));
     }
 
     /** auto mode: fast for UI/operational tasks, deeper thinking for debugging and analysis */
@@ -4281,7 +4276,7 @@ public class MainActivity extends Activity {
         if (micBtn == null) return;
         micBtn.setImageTintList(ColorStateList.valueOf(on ? ON_ACCENT : MUTED));
         micBtn.setBackground(on ? circle(ACCENT) : ripple(Color.TRANSPARENT, 0, 24));
-        setButtonA11y(micBtn, on ? "Stop dictating" : "Dictate a prompt with your voice");
+        setButtonA11y(micBtn, on ? uiText(R.string.a11y_mic_stop) : uiText(R.string.a11y_mic_start));
     }
 
     private void stopVoiceInput(boolean userTap) {
@@ -4424,12 +4419,12 @@ public class MainActivity extends Activity {
 
     private String iconLabel(String glyph) {
         if ("\u2190".equals(glyph)) return uiText(R.string.common_close);
-        if ("\u2630".equals(glyph)) return "Open chats";
-        if ("\u22EE".equals(glyph)) return "More options";
+        if ("\u2630".equals(glyph)) return uiText(R.string.a11y_open_chats);
+        if ("\u22EE".equals(glyph)) return uiText(R.string.a11y_more_options);
         if ("\u002B".equals(glyph)) return uiText(R.string.common_add);
         if ("\u2715".equals(glyph)) return uiText(R.string.common_delete);
-        if ("\u270E".equals(glyph)) return "Edit";
-        return "Action";
+        if ("\u270E".equals(glyph)) return uiText(R.string.a11y_edit);
+        return uiText(R.string.a11y_action);
     }
 
     /** TextView controls need Button semantics for TalkBack, keyboard navigation, and automation. */
@@ -4582,7 +4577,7 @@ public class MainActivity extends Activity {
     private void addDialog() {
         final String[] opts = { uiText(R.string.models_add_menu_provider), uiText(R.string.models_add_menu_model) };
         new AlertDialog.Builder(this)
-                .setTitle("Add\u2026")
+                .setTitle(uiText(R.string.models_add_menu_title))
                 .setItems(opts, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         if (w == 0) providerDialog(null); else modelDialog(null);
@@ -5021,7 +5016,7 @@ public class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle(uiText(R.string.models_delete_provider_title))
-                .setMessage(p.optString("name", "") + (n > 0 ? " \u00b7 also deletes " + n + " model(s)" : ""))
+                .setMessage(p.optString("name", "") + (n > 0 ? uiText(R.string.models_delete_provider_models, n) : ""))
                 .setPositiveButton(uiText(R.string.common_delete), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         JSONArray ps = providers();
@@ -5346,7 +5341,7 @@ public class MainActivity extends Activity {
         ui.postDelayed(new Runnable() { @Override public void run() { refill.run(); } }, 600);
 
         final AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("Mention an app")
+                .setTitle(uiText(R.string.mention_title))
                 .setView(box)
                 .setNegativeButton(uiText(R.string.common_cancel), null)
                 .create();
