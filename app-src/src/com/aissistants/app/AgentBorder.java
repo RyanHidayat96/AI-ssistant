@@ -29,17 +29,20 @@ import android.view.WindowInsets;
  */
 public final class AgentBorder {
 
-    private static final long HOLD_MS = 4000L;   // keep it visible this long after the last driving command
     private static final Handler H = new Handler(Looper.getMainLooper());
 
     private static View view;
     private static WindowManager wm;
-    private static Runnable hideTask;
     private static Pulse pulse;
+    /** True from the first target-app command until the owning agent run reaches its terminal cleanup. */
+    private static volatile boolean targetSession;
 
     private AgentBorder() { }
 
-    /** call with every command the agent runs; only UI-driving commands light the edge */
+    /**
+     * Call with every command the agent runs. The first UI-driving command latches the edge for
+     * the rest of that run; {@link #hide()} is the only terminal cleanup path.
+     */
     public static void ping(Context ctx, String cmd) {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
@@ -47,10 +50,8 @@ public final class AgentBorder {
             if (!drives) return;
             android.util.Log.i("AIssistants", "border ping hit: " + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
+            targetSession = true;
             H.post(new Runnable() { @Override public void run() { show(ac); } });
-            if (hideTask != null) H.removeCallbacks(hideTask);
-            hideTask = new Runnable() { @Override public void run() { hide(); } };
-            H.postDelayed(hideTask, HOLD_MS);
         } catch (Throwable ignored) { }
     }
 
@@ -105,7 +106,11 @@ public final class AgentBorder {
     }
 
     public static void hide() {
-        H.post(new Runnable() { @Override public void run() { drop(); } });
+        targetSession = false;
+        H.post(new Runnable() { @Override public void run() {
+            // A newer run may already have started while this older run was winding down.
+            if (!targetSession) drop();
+        } });
     }
 
     private static void drop() {
@@ -118,6 +123,8 @@ public final class AgentBorder {
 
     private static void show(Context ctx) {
         try {
+            // The run can finish between ping() posting this work and the main thread handling it.
+            if (!targetSession) return;
             if (view != null) { if (pulse != null) pulse.bump(); return; }
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return;
@@ -151,7 +158,6 @@ public final class AgentBorder {
      */
     private static final class Edge extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint contour = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final long t0 = System.currentTimeMillis();
         private final float density;
         private final RectF displayBounds = new RectF();
@@ -164,9 +170,8 @@ public final class AgentBorder {
         private float blX, blY, blR;
 
         /*
-         * Distance field measured inward from nearest display edge.  `along` is a normalized
-         * clockwise position around the real rectangle perimeter, so a single low-amplitude tide
-         * travels across all four sides and corners without seams or jumping phase.
+         * Distance field measured inward from nearest display edge. One radial pulse changes the
+         * fade depth across every edge together: it travels into the screen, then back out.
          */
         private static final String AMBIENT_EDGE_SHADER =
                 "uniform float2 u_resolution;\n"
@@ -193,31 +198,14 @@ public final class AgentBorder {
                         + "  float roundBR = mix(1000000.0, u_br.z - length(fragCoord - u_br.xy), activeBR);\n"
                         + "  float roundBL = mix(1000000.0, u_bl.z - length(fragCoord - u_bl.xy), activeBL);\n"
                         + "  edge = min(edge, min(min(roundTL, roundTR), min(roundBR, roundBL)));\n"
-                        + "  float perimeter = 2.0 * (w + h);\n"
-                        + "  float along;\n"
-                        + "  if (t <= l && t <= r && t <= b) {\n"
-                        + "    along = fragCoord.x / perimeter;\n"
-                        + "  } else if (r <= l && r <= t && r <= b) {\n"
-                        + "    along = (w + fragCoord.y) / perimeter;\n"
-                        + "  } else if (b <= l && b <= r && b <= t) {\n"
-                        + "    along = (w + h + (w - fragCoord.x)) / perimeter;\n"
-                        + "  } else {\n"
-                        + "    along = (w + h + w + (h - fragCoord.y)) / perimeter;\n"
-                        + "  }\n"
-                        + "  float tide = 0.5 + 0.5 * sin(along * 6.2831853 - u_time * 0.26);\n"
-                        + "  float crest = smoothstep(0.80, 0.985, tide);\n"
-                        + "  float solid = 1.15 * u_density;\n"
-                        + "  float fadeEnd = (11.5 + 1.25 * tide) * u_density;\n"
+                        + "  float pulse = 0.5 + 0.5 * sin(u_time * 1.10);\n"
+                        + "  float solid = 1.80 * u_density;\n"
+                        + "  float fadeEnd = (18.0 + 8.0 * pulse) * u_density;\n"
                         + "  float fade = 1.0 - smoothstep(solid, fadeEnd, edge);\n"
-                        + "  float rim = 1.0 - smoothstep(0.0, 0.82 * u_density, edge);\n"
-                        + "  float tideLine = smoothstep(fadeEnd - 3.1 * u_density, fadeEnd - 1.9 * u_density, edge)\n"
-                        + "      * (1.0 - smoothstep(fadeEnd - 0.55 * u_density, fadeEnd, edge));\n"
-                        + "  half3 indigo = half3(0.24, 0.35, 0.84);\n"
-                        + "  half3 blue = half3(0.28, 0.57, 0.98);\n"
-                        + "  half3 color = mix(indigo, blue, 0.12 + 0.28 * tide);\n"
-                        + "  float alpha = fade * (0.20 + 0.05 * tide) + rim * 0.10\n"
-                        + "      + tideLine * (0.035 + 0.12 * crest);\n"
-                        + "  return half4(color, half(clamp(alpha, 0.0, 0.37)));\n"
+                        + "  float opacityFalloff = fade * fade;\n"
+                        + "  half3 blue = half3(0.086, 0.365, 1.00);\n"
+                        + "  half alpha = half(clamp(opacityFalloff * (0.78 + 0.12 * pulse), 0.0, 0.90));\n"
+                        + "  return half4(blue * alpha, alpha);\n"
                         + "}\n";
 
         Edge(Context c) {
@@ -225,11 +213,6 @@ public final class AgentBorder {
             density = c.getResources().getDisplayMetrics().density;
             p.setStyle(Paint.Style.FILL);
             p.setDither(true);
-            contour.setStyle(Paint.Style.STROKE);
-            contour.setStrokeWidth(.78f * density);
-            contour.setStrokeJoin(Paint.Join.ROUND);
-            contour.setStrokeCap(Paint.Cap.BUTT);
-            contour.setColor(Color.argb(36, 100, 144, 255));
             setLayerType(View.LAYER_TYPE_HARDWARE, null);
             if (Build.VERSION.SDK_INT >= 33) initRuntimeShader();
         }
@@ -333,10 +316,7 @@ public final class AgentBorder {
             }
             if (runtime != null) drawRuntime(c);
             else if (fallback != null) fallback.draw(c, p, (System.currentTimeMillis() - t0) / 1000f);
-            if (clipped >= 0) {
-                c.restoreToCount(clipped);
-                c.drawPath(physicalScreen, contour);       // exact physical rim: rounded corners + cutout contour
-            }
+            if (clipped >= 0) c.restoreToCount(clipped);
         }
 
         @SuppressWarnings("NewApi")
@@ -351,18 +331,18 @@ public final class AgentBorder {
             private final float inset;
 
             Fallback(float density, int w, int h) {
-                inset = 13f * density;
-                int outer = Color.argb(72, 62, 93, 220);
-                int middle = Color.argb(24, 57, 111, 230);
-                int clear = Color.argb(0, 57, 111, 230);
+                inset = 26f * density;
+                int outer = Color.argb(230, 22, 93, 255);
+                int middle = Color.argb(36, 22, 93, 255);
+                int clear = Color.argb(0, 22, 93, 255);
                 top = new LinearGradient(0, 0, 0, inset,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
                 right = new LinearGradient(w, 0, w - inset, 0,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
                 bottom = new LinearGradient(0, h, 0, h - inset,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
                 left = new LinearGradient(0, 0, inset, 0,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
             }
 
             void draw(Canvas c, Paint p, float seconds) {

@@ -3567,6 +3567,11 @@ public class MainActivity extends Activity {
                 } catch (Throwable t) {
                     addBubble("note", "\u26a0 " + t);
                 } finally {
+                    // Manual/external commands can drive another app too. Finish their visual
+                    // session through the same path as an agent-loop run, so the border lasts
+                    // for the command and is removed exactly when this run terminates.
+                    hygieneQuiet();
+                    notifyRunFinished("");
                     if (stop) addBubble("note", "stopped.");
                     busy = false;
                     stop = false;
