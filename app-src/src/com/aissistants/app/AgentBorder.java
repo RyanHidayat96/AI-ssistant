@@ -5,14 +5,20 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.RuntimeShader;
 import android.graphics.Shader;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.Choreographer;
+import android.view.RoundedCorner;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.WindowInsets;
 
 /**
  * Animated edge while the agent drives another app.
@@ -138,128 +144,257 @@ public final class AgentBorder {
         } catch (Throwable t) { android.util.Log.w("AIssistants", "border show FAILED: " + t); }
     }
 
-    /** Ambient edge: solid at screen edge, transparent toward the app, with a slow inner wave. */
+    /**
+     * One continuous ambient edge.  Android 13+ draws it with one GPU distance-field shader;
+     * older devices get a calm static gradient fallback.  Keeping this as one surface means the
+     * moving inner tide keeps its phase through every corner instead of looking like four strips.
+     */
     private static final class Edge extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
+        private final Paint contour = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final long t0 = System.currentTimeMillis();
-        private float base, wave;
+        private final float density;
+        private final RectF displayBounds = new RectF();
+        private Path physicalScreen;
+        private RuntimeShader runtime;
+        private Fallback fallback;
+        private float tlX, tlY, tlR;
+        private float trX, trY, trR;
+        private float brX, brY, brR;
+        private float blX, blY, blR;
+
+        /*
+         * Distance field measured inward from nearest display edge.  `along` is a normalized
+         * clockwise position around the real rectangle perimeter, so a single low-amplitude tide
+         * travels across all four sides and corners without seams or jumping phase.
+         */
+        private static final String AMBIENT_EDGE_SHADER =
+                "uniform float2 u_resolution;\n"
+                        + "uniform float u_density;\n"
+                        + "uniform float u_time;\n"
+                        + "uniform float3 u_tl;\n"
+                        + "uniform float3 u_tr;\n"
+                        + "uniform float3 u_br;\n"
+                        + "uniform float3 u_bl;\n"
+                        + "half4 main(float2 fragCoord) {\n"
+                        + "  float w = u_resolution.x;\n"
+                        + "  float h = u_resolution.y;\n"
+                        + "  float l = fragCoord.x;\n"
+                        + "  float r = w - fragCoord.x;\n"
+                        + "  float t = fragCoord.y;\n"
+                        + "  float b = h - fragCoord.y;\n"
+                        + "  float edge = min(min(l, r), min(t, b));\n"
+                        + "  float activeTL = step(0.5, u_tl.z) * step(fragCoord.x, u_tl.x) * step(fragCoord.y, u_tl.y);\n"
+                        + "  float activeTR = step(0.5, u_tr.z) * step(u_tr.x, fragCoord.x) * step(fragCoord.y, u_tr.y);\n"
+                        + "  float activeBR = step(0.5, u_br.z) * step(u_br.x, fragCoord.x) * step(u_br.y, fragCoord.y);\n"
+                        + "  float activeBL = step(0.5, u_bl.z) * step(fragCoord.x, u_bl.x) * step(u_bl.y, fragCoord.y);\n"
+                        + "  float roundTL = mix(1000000.0, u_tl.z - length(fragCoord - u_tl.xy), activeTL);\n"
+                        + "  float roundTR = mix(1000000.0, u_tr.z - length(fragCoord - u_tr.xy), activeTR);\n"
+                        + "  float roundBR = mix(1000000.0, u_br.z - length(fragCoord - u_br.xy), activeBR);\n"
+                        + "  float roundBL = mix(1000000.0, u_bl.z - length(fragCoord - u_bl.xy), activeBL);\n"
+                        + "  edge = min(edge, min(min(roundTL, roundTR), min(roundBR, roundBL)));\n"
+                        + "  float perimeter = 2.0 * (w + h);\n"
+                        + "  float along;\n"
+                        + "  if (t <= l && t <= r && t <= b) {\n"
+                        + "    along = fragCoord.x / perimeter;\n"
+                        + "  } else if (r <= l && r <= t && r <= b) {\n"
+                        + "    along = (w + fragCoord.y) / perimeter;\n"
+                        + "  } else if (b <= l && b <= r && b <= t) {\n"
+                        + "    along = (w + h + (w - fragCoord.x)) / perimeter;\n"
+                        + "  } else {\n"
+                        + "    along = (w + h + w + (h - fragCoord.y)) / perimeter;\n"
+                        + "  }\n"
+                        + "  float tide = 0.5 + 0.5 * sin(along * 6.2831853 - u_time * 0.26);\n"
+                        + "  float crest = smoothstep(0.80, 0.985, tide);\n"
+                        + "  float solid = 1.15 * u_density;\n"
+                        + "  float fadeEnd = (11.5 + 1.25 * tide) * u_density;\n"
+                        + "  float fade = 1.0 - smoothstep(solid, fadeEnd, edge);\n"
+                        + "  float rim = 1.0 - smoothstep(0.0, 0.82 * u_density, edge);\n"
+                        + "  float tideLine = smoothstep(fadeEnd - 3.1 * u_density, fadeEnd - 1.9 * u_density, edge)\n"
+                        + "      * (1.0 - smoothstep(fadeEnd - 0.55 * u_density, fadeEnd, edge));\n"
+                        + "  half3 indigo = half3(0.24, 0.35, 0.84);\n"
+                        + "  half3 blue = half3(0.28, 0.57, 0.98);\n"
+                        + "  half3 color = mix(indigo, blue, 0.12 + 0.28 * tide);\n"
+                        + "  float alpha = fade * (0.20 + 0.05 * tide) + rim * 0.10\n"
+                        + "      + tideLine * (0.035 + 0.12 * crest);\n"
+                        + "  return half4(color, half(clamp(alpha, 0.0, 0.37)));\n"
+                        + "}\n";
 
         Edge(Context c) {
             super(c);
-            float d = c.getResources().getDisplayMetrics().density;
-            base = 18f * d;
-            wave = 7f * d;
+            density = c.getResources().getDisplayMetrics().density;
             p.setStyle(Paint.Style.FILL);
             p.setDither(true);
+            contour.setStyle(Paint.Style.STROKE);
+            contour.setStrokeWidth(.78f * density);
+            contour.setStrokeJoin(Paint.Join.ROUND);
+            contour.setStrokeCap(Paint.Cap.BUTT);
+            contour.setColor(Color.argb(36, 100, 144, 255));
             setLayerType(View.LAYER_TYPE_HARDWARE, null);
+            if (Build.VERSION.SDK_INT >= 33) initRuntimeShader();
+        }
+
+        @SuppressWarnings("NewApi")
+        private void initRuntimeShader() {
+            try {
+                runtime = new RuntimeShader(AMBIENT_EDGE_SHADER);
+                p.setShader(runtime);
+            } catch (Throwable ignored) {
+                runtime = null;
+                p.setShader(null);
+            }
+        }
+
+        @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
+            super.onSizeChanged(w, h, oldW, oldH);
+            if (w <= 0 || h <= 0) return;
+            rebuildScreenShape(getRootWindowInsets());
+        }
+
+        @Override protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            requestApplyInsets();
+            post(new Runnable() { @Override public void run() { rebuildScreenShape(getRootWindowInsets()); } });
+        }
+
+        @Override public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+            rebuildScreenShape(insets);
+            return super.onApplyWindowInsets(insets);
+        }
+
+        /** Build exact display contour once per resize/insets event, never during animation frames. */
+        private void rebuildScreenShape(WindowInsets insets) {
+            int w = getWidth();
+            int h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            readRoundedCorners(insets, w, h);
+            displayBounds.set(0, 0, w, h);
+            Path shape = new Path();
+            shape.addRoundRect(displayBounds, new float[] {
+                    tlR, tlR, trR, trR, brR, brR, blR, blR
+            }, Path.Direction.CW);
+            // Camera dots/notches are hardware occlusions, not a route for the activity cue.
+            // Keep the rim continuous across them; the display compositor naturally hides pixels
+            // where a device has no usable panel.
+            physicalScreen = shape;
+            if (runtime != null) {
+                setRuntimeSize(w, h);
+                setRuntimeCorners();
+            } else {
+                fallback = new Fallback(density, w, h);
+            }
+            invalidate();
+        }
+
+        /** API 31 returns each physical corner radius and its true center for this window. */
+        private void readRoundedCorners(WindowInsets insets, int w, int h) {
+            tlX = 0; tlY = 0; tlR = 0;
+            trX = w; trY = 0; trR = 0;
+            brX = w; brY = h; brR = 0;
+            blX = 0; blY = h; blR = 0;
+            if (insets == null || Build.VERSION.SDK_INT < 31) return;
+            applyCorner(insets.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT), 0);
+            applyCorner(insets.getRoundedCorner(RoundedCorner.POSITION_TOP_RIGHT), 1);
+            applyCorner(insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT), 2);
+            applyCorner(insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT), 3);
+        }
+
+        @SuppressWarnings("NewApi")
+        private void applyCorner(RoundedCorner corner, int position) {
+            if (corner == null || corner.getRadius() <= 0) return;
+            float x = corner.getCenter().x;
+            float y = corner.getCenter().y;
+            float r = corner.getRadius();
+            if (position == 0) { tlX = x; tlY = y; tlR = r; }
+            else if (position == 1) { trX = x; trY = y; trR = r; }
+            else if (position == 2) { brX = x; brY = y; brR = r; }
+            else { blX = x; blY = y; blR = r; }
+        }
+
+        @SuppressWarnings("NewApi")
+        private void setRuntimeSize(int w, int h) {
+            runtime.setFloatUniform("u_resolution", (float) w, (float) h);
+            runtime.setFloatUniform("u_density", density);
+        }
+
+        @SuppressWarnings("NewApi")
+        private void setRuntimeCorners() {
+            runtime.setFloatUniform("u_tl", tlX, tlY, tlR);
+            runtime.setFloatUniform("u_tr", trX, trY, trR);
+            runtime.setFloatUniform("u_br", brX, brY, brR);
+            runtime.setFloatUniform("u_bl", blX, blY, blR);
         }
 
         @Override protected void onDraw(Canvas c) {
-            int w = getWidth();
-            int h = getHeight();
-            if (w <= 0 || h <= 0) { postInvalidateDelayed(60); return; }
-            double seconds = (System.currentTimeMillis() - t0) / 1000.0;
-            double phase = seconds * 0.42;                                       // slow wave circling the screen
-            drawTop(c, w, h, phase);
-            drawRight(c, w, h, phase);
-            drawBottom(c, w, h, phase);
-            drawLeft(c, w, h, phase);
-            p.setShader(null);
-            postInvalidateDelayed(40);                                           // smooth enough, less noisy
-        }
-
-        private void drawTop(Canvas c, int w, int h, double phase) {
-            path.reset();
-            path.moveTo(0, 0);
-            path.lineTo(w, 0);
-            for (int i = 64; i >= 0; i--) {
-                float x = w * (i / 64f);
-                path.lineTo(x, inner(0, x / Math.max(1f, w), phase));
+            int clipped = -1;
+            if (physicalScreen != null) {
+                clipped = c.save();
+                c.clipPath(physicalScreen);
             }
-            path.close();
-            shader(0, 0, 0, base + wave);
-            c.drawPath(path, p);
-        }
-
-        private void drawRight(Canvas c, int w, int h, double phase) {
-            path.reset();
-            path.moveTo(w, 0);
-            path.lineTo(w, h);
-            for (int i = 64; i >= 0; i--) {
-                float y = h * (i / 64f);
-                path.lineTo(w - inner(1, y / Math.max(1f, h), phase), y);
+            if (runtime != null) drawRuntime(c);
+            else if (fallback != null) fallback.draw(c, p, (System.currentTimeMillis() - t0) / 1000f);
+            if (clipped >= 0) {
+                c.restoreToCount(clipped);
+                c.drawPath(physicalScreen, contour);       // exact physical rim: rounded corners + cutout contour
             }
-            path.close();
-            shader(w, 0, w - base - wave, 0);
-            c.drawPath(path, p);
         }
 
-        private void drawBottom(Canvas c, int w, int h, double phase) {
-            path.reset();
-            path.moveTo(w, h);
-            path.lineTo(0, h);
-            for (int i = 64; i >= 0; i--) {
-                float x = w - w * (i / 64f);
-                path.lineTo(x, h - inner(2, x / Math.max(1f, w), phase));
+        @SuppressWarnings("NewApi")
+        private void drawRuntime(Canvas c) {
+            runtime.setFloatUniform("u_time", (System.currentTimeMillis() - t0) / 1000f);
+            c.drawPaint(p);
+        }
+
+        /** Static smooth fallback for API 26-32; keeps same safe, non-interactive overlay. */
+        private static final class Fallback {
+            private final Shader top, right, bottom, left;
+            private final float inset;
+
+            Fallback(float density, int w, int h) {
+                inset = 13f * density;
+                int outer = Color.argb(72, 62, 93, 220);
+                int middle = Color.argb(24, 57, 111, 230);
+                int clear = Color.argb(0, 57, 111, 230);
+                top = new LinearGradient(0, 0, 0, inset,
+                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                right = new LinearGradient(w, 0, w - inset, 0,
+                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                bottom = new LinearGradient(0, h, 0, h - inset,
+                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
+                left = new LinearGradient(0, 0, inset, 0,
+                        new int[] { outer, middle, clear }, new float[] { 0f, .48f, 1f }, Shader.TileMode.CLAMP);
             }
-            path.close();
-            shader(0, h, 0, h - base - wave);
-            c.drawPath(path, p);
-        }
 
-        private void drawLeft(Canvas c, int w, int h, double phase) {
-            path.reset();
-            path.moveTo(0, h);
-            path.lineTo(0, 0);
-            for (int i = 64; i >= 0; i--) {
-                float y = h - h * (i / 64f);
-                path.lineTo(inner(3, y / Math.max(1f, h), phase), y);
+            void draw(Canvas c, Paint p, float seconds) {
+                float breath = .90f + .10f * (float) Math.sin(seconds * .44f);
+                p.setAlpha((int) (255f * breath));
+                p.setShader(top); c.drawRect(0, 0, c.getWidth(), inset, p);
+                p.setShader(right); c.drawRect(c.getWidth() - inset, 0, c.getWidth(), c.getHeight(), p);
+                p.setShader(bottom); c.drawRect(0, c.getHeight() - inset, c.getWidth(), c.getHeight(), p);
+                p.setShader(left); c.drawRect(0, 0, inset, c.getHeight(), p);
+                p.setAlpha(255);
+                p.setShader(null);
             }
-            path.close();
-            shader(0, 0, base + wave, 0);
-            c.drawPath(path, p);
-        }
-
-        private float inner(int side, double local, double phase) {
-            double around = (side + local) / 4.0;
-            double crest = 0.5 + 0.5 * Math.sin((around * Math.PI * 2.0 * 5.0) - phase);
-            return base + (float) (wave * crest);
-        }
-
-        private void shader(float x0, float y0, float x1, float y1) {
-            p.setShader(new LinearGradient(
-                    x0, y0, x1, y1,
-                    new int[] {
-                            Color.argb(92, 37, 99, 235),
-                            Color.argb(34, 14, 165, 233),
-                            Color.argb(0, 14, 165, 233)
-                    },
-                    new float[] { 0f, 0.48f, 1f },
-                    Shader.TileMode.CLAMP));
         }
     }
 
-    /** slow breathe in/out so a glance tells whether the agent is still working */
-    private static final class Pulse implements Runnable {
+    /** Vsync pacing keeps the full-screen shader smooth without timer jitter. */
+    private static final class Pulse implements Choreographer.FrameCallback {
         private final View v;
-        private long t0 = System.currentTimeMillis();
         private boolean on;
 
         Pulse(View v) { this.v = v; }
 
-        void start() { on = true; H.postDelayed(this, 40); }
-        void stop() { on = false; H.removeCallbacks(this); }
-        void bump() { t0 = System.currentTimeMillis(); }
+        void start() { on = true; Choreographer.getInstance().postFrameCallback(this); }
+        void stop() { on = false; Choreographer.getInstance().removeFrameCallback(this); }
+        void bump() { if (on) v.postInvalidateOnAnimation(); }
 
-        @Override public void run() {
+        @Override public void doFrame(long frameTimeNanos) {
             if (!on) return;
             try {
-                double ph = (System.currentTimeMillis() - t0) / 900.0;
-                float g = (float) (0.65 + 0.35 * Math.sin(ph));
                 v.invalidate();
             } catch (Throwable ignored) { }
-            H.postDelayed(this, 40);
+            if (on) Choreographer.getInstance().postFrameCallback(this);
         }
     }
 }
