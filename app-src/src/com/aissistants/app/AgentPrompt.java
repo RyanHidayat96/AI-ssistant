@@ -306,7 +306,7 @@ final class AgentPrompt {
           .append("PROCESSES AND SERVICES\n")
           .append("Before killing or restarting a process/service, identify its relationship to the requested task.\n")
           .append("Prefer restarting the narrowest relevant component.\n")
-          .append("Do not reboot the whole device for a small issue unless narrower approaches failed, reboot is technically required, or the user explicitly requested it.\n")
+          .append("Never reboot, soft-restart or power off the device on your own: that action always needs the user's explicit yes in this conversation. Deciding a reboot is 'technically required' is NOT permission - ask, wait for the yes, then do it.\n")
           .append("After restart, verify recovery and expected behavior.\n\n")
 
           .append("LOG ANALYSIS\n")

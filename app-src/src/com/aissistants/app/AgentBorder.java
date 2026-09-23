@@ -114,6 +114,9 @@ public final class AgentBorder {
                             | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                     PixelFormat.TRANSLUCENT);
             lp.gravity = Gravity.TOP | Gravity.START;
+            if (android.os.Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);   // no status/nav bar inset
+            if (android.os.Build.VERSION.SDK_INT >= 28)
+                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
             wm.addView(e, lp);
             android.util.Log.i("AIssistants", "border window added");
             view = e;
@@ -131,7 +134,7 @@ public final class AgentBorder {
         Edge(Context c) {
             super(c);
             float d = c.getResources().getDisplayMetrics().density;
-            inset = 3f * d; radius = 22f * d;
+            inset = 2.5f * d; radius = 22f * d;   // flush: outer edge of the stroke touches the screen
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(5f * d);
             p.setStrokeCap(Paint.Cap.ROUND);

@@ -503,6 +503,18 @@ public class MainActivity extends Activity {
         bar.addView(t, tlp);
         v.addView(bar);
 
+        EditText qbox = new EditText(this);
+        qbox.setHint("cari chat ...");
+        qbox.setSingleLine(true);
+        qbox.setTextSize(14);
+        qbox.setHintTextColor(MUTED);
+        qbox.setTextColor(FG);
+        qbox.setBackground(ripple(SURFACE, LINE, 12));
+        qbox.setPadding(dp(12), dp(8), dp(12), dp(8));
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(-1, dp(46));
+        qlp.setMargins(dp(GUTTER), dp(2), dp(GUTTER), dp(6));
+        v.addView(qbox, qlp);
+
         ScrollView sc = new ScrollView(this);
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -513,7 +525,7 @@ public class MainActivity extends Activity {
         ArrayList<JSONObject> sorted = new ArrayList<>();
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject o = sessions.optJSONObject(i);
-            if (o != null) sorted.add(o);
+            if (o != null && bubblesOf(o).length() > 0) sorted.add(o);   // empty new chats stay out of history
         }
         Collections.sort(sorted, new Comparator<JSONObject>() {
             @Override public int compare(JSONObject a, JSONObject b) {
@@ -528,7 +540,30 @@ public class MainActivity extends Activity {
             empty.setPadding(0, dp(40), 0, 0);
             list.addView(empty);
         }
-        for (JSONObject s : sorted) list.addView(sessionCard(s));
+        final LinearLayout listF = list;
+        java.util.ArrayList<JSONObject> sortedF = sorted;
+        Runnable fill = new Runnable() { public void run() {
+            listF.removeAllViews();
+            String qq = qbox.getText().toString().trim().toLowerCase(java.util.Locale.ENGLISH);
+            int shown = 0;
+            for (JSONObject s : sortedF) {
+                String hay = (titleOf(s) + " " + s.toString()).toLowerCase(java.util.Locale.ENGLISH);
+                if (!qq.isEmpty() && !hay.contains(qq)) continue;
+                listF.addView(sessionCard(s)); shown++;
+            }
+            if (shown == 0) {
+                TextView e2 = tv(13, MUTED, Typeface.NORMAL);
+                e2.setText(qq.isEmpty() ? "No chats yet." : "Tidak ada chat yang cocok.");
+                e2.setGravity(Gravity.CENTER); e2.setPadding(0, dp(40), 0, 0);
+                listF.addView(e2);
+            }
+        } };
+        fill.run();
+        qbox.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
+            public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            public void afterTextChanged(android.text.Editable e) { fill.run(); }
+        });
 
         Button ncBtn = new Button(this);
         ncBtn.setText("New chat");
@@ -576,11 +611,6 @@ public class MainActivity extends Activity {
         info.addView(meta, mlp);
         card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
 
-        TextView edit = iconBtn("\u270E", new View.OnClickListener() {
-            @Override public void onClick(View x) { renameDialog(s); }
-        });
-        setButtonA11y(edit, "Rename chat " + titleOf(s));
-        card.addView(edit);
         TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDelete(s); }
         });
@@ -2049,6 +2079,8 @@ public class MainActivity extends Activity {
 
     private void newChat() {
         if (busy) { toast("Still working \u2014 stop it first"); return; }
+        // New chat on an already empty chat reuses it instead of stacking empty entries in history
+        try { if (cur != null && bubblesOf(cur).length() == 0) { showChat(); return; } } catch (Throwable ignored) { }
         synchronized (lock) {
             cur = newSessionObj();
             sessions.put(cur);
@@ -2540,11 +2572,16 @@ public class MainActivity extends Activity {
         }
         if (OverlayView.visible()) {
             OverlayView.hide();
+            // panel gone -> the main app comes back
+            try { startActivity(new android.content.Intent(this, MainActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); } catch (Throwable ignored) { }
             toast("Overlay disembunyikan");
         } else {
             OverlayHub.allowOverlayForRun(); // explicit user toggle may reopen a panel the agent had hidden
             seedOverlay();
             OverlayView.show(this);
+            // panel up -> the main app must not be visible at the same time
+            moveTaskToBack(true);
             toast("Panel muncul saat app pindah ke belakang \u00b7 kalau tidak ada, buka izin overlay");
         }
     }
