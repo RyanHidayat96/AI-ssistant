@@ -1,0 +1,73 @@
+plugins {
+    id 'com.android.application'
+}
+
+import java.util.Properties
+
+def manifestFile = file('../app-src/manifest/AndroidManifest.xml')
+def manifestText = manifestFile.getText('UTF-8')
+def versionCodeMatch = manifestText =~ /android:versionCode="(\d+)"/
+def versionNameMatch = manifestText =~ /android:versionName="([^"]+)"/
+def appVersionCode = versionCodeMatch.find() ? versionCodeMatch.group(1).toInteger() : 1
+def appVersionName = versionNameMatch.find() ? versionNameMatch.group(1) : '1.0.0'
+
+def signingProperties = new Properties()
+def signingPropertiesFile = rootProject.file('keystore.properties')
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+def hasReleaseSigning = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+        .every { signingProperties.getProperty(it) }
+
+android {
+    namespace 'com.aissistant.app'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'com.aissistant.app'
+        minSdk 26
+        targetSdk 35
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile '../app-src/manifest/AndroidManifest.xml'
+            java.srcDirs = ['../app-src/src']
+            res.srcDirs = ['../app-src/res']
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(signingProperties.getProperty('storeFile'))
+                storePassword signingProperties.getProperty('storePassword')
+                keyAlias signingProperties.getProperty('keyAlias')
+                keyPassword signingProperties.getProperty('keyPassword')
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.aissistant.app"
+    xmlns:tools="http://schemas.android.com/tools"
     android:versionCode="144"
     android:versionName="1.68.0">
 
@@ -21,7 +21,8 @@
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
     <!-- a root assistant must be able to list/see every installed app (@mention, pm recipes);
          without this Android 11+ sandbox visibility hides all third-party apps -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <!-- Android 11+ package visibility: without this the speech service is invisible -->
     <queries>
@@ -31,7 +32,8 @@
     </queries>
 
     <application
-        android:label="AI-ssistant"
+        android:label="@string/app_name"
+        android:localeConfig="@xml/locale_config"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"

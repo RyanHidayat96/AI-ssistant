@@ -26,7 +26,7 @@ public class AgentService extends Service {
             if (Build.VERSION.SDK_INT >= 26) {
                 NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
                 if (nm != null && nm.getNotificationChannel(CHANNEL) == null) {
-                    NotificationChannel c = new NotificationChannel(CHANNEL, "Agent",
+                    NotificationChannel c = new NotificationChannel(CHANNEL, getString(R.string.notification_channel_agent),
                             NotificationManager.IMPORTANCE_LOW);
                     c.setShowBadge(false);
                     nm.createNotificationChannel(c);
@@ -54,7 +54,7 @@ public class AgentService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(ctx, CHANNEL)
                 : new Notification.Builder(ctx);
-        return b.setContentTitle("AI-ssistant")
+        return b.setContentTitle(ctx.getString(R.string.app_name))
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setOngoing(true)
@@ -81,15 +81,15 @@ public class AgentService extends Service {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
             if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CH_PERMISSION) == null) {
-                NotificationChannel c = new NotificationChannel(CH_PERMISSION, "Izin agent",
+                NotificationChannel c = new NotificationChannel(CH_PERMISSION, ctx.getString(R.string.notification_channel_permission),
                         NotificationManager.IMPORTANCE_HIGH);
                 c.setShowBadge(true);
                 c.enableVibration(true);
                 nm.createNotificationChannel(c);
             }
-            String action = label == null || label.trim().isEmpty() ? "aksi agent" : label.trim();
+            String action = label == null || label.trim().isEmpty() ? ctx.getString(R.string.notification_agent_action) : label.trim();
             String line = notificationLine(command);
-            String body = "Agent menunggu persetujuan: " + action;
+            String body = ctx.getString(R.string.notification_permission_waiting, action);
             if (!line.isEmpty()) body += "\n$ " + line;
             Intent open = new Intent(ctx, MainActivity.class);
             open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
@@ -99,7 +99,7 @@ public class AgentService extends Service {
                     ? new Notification.Builder(ctx, CH_PERMISSION)
                     : new Notification.Builder(ctx);
             b.setContentTitle("AI-ssistant · perlu izin")
-                    .setContentText("Tap untuk review: " + action)
+                    .setContentText(ctx.getString(R.string.notification_permission_tap, action))
                     .setStyle(new Notification.BigTextStyle().bigText(body))
                     .setSmallIcon(android.R.drawable.ic_dialog_alert)
                     .setContentIntent(pi)
@@ -136,7 +136,7 @@ public class AgentService extends Service {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
             if (nm == null) return;
             if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CH_DONE) == null) {
-                NotificationChannel c = new NotificationChannel(CH_DONE, "Task selesai",
+                NotificationChannel c = new NotificationChannel(CH_DONE, ctx.getString(R.string.notification_channel_done),
                         NotificationManager.IMPORTANCE_DEFAULT);
                 c.setShowBadge(true);
                 c.enableVibration(true);
@@ -150,7 +150,7 @@ public class AgentService extends Service {
                     ? new Notification.Builder(ctx, CH_DONE)
                     : new Notification.Builder(ctx);
             String body = summary == null || summary.trim().isEmpty()
-                    ? "Agent sudah selesai bekerja." : summary.trim();
+                    ? ctx.getString(R.string.notification_done_default) : summary.trim();
             b.setContentTitle(title == null || title.isEmpty() ? "AI-ssistant \u00b7 selesai" : title)
                     .setContentText(body)
                     .setStyle(new Notification.BigTextStyle().bigText(body))

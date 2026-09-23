@@ -69,6 +69,10 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
+    /** Localized UI text. User prompts, commands, model IDs, and tool output never pass here. */
+    private String uiText(int resourceId, Object... args) {
+        return args == null || args.length == 0 ? getString(resourceId) : getString(resourceId, args);
+    }
     // ---- design tokens: one gutter, one rhythm -------------------------------------------
     private static final int GUTTER = 20;
     private static final int ROW_MIN = 56;
@@ -124,14 +128,12 @@ public class MainActivity extends Activity {
     private static final int PERM_ONCE = 0, PERM_CHAT = 1, PERM_ALWAYS = 2, PERM_DENY = 3;
     /** risky-action categories that need a human OK before running (index-aligned) */
     private static final String[] CAT_KEYS = { "install", "destructive", "system", "egress", "messaging", "call" };
-    private static final String[] CAT_LABEL = {
-            "meng-install paket / APK",
-            "menghapus, memformat, atau menimpa data",
-            "mengubah sistem/kernel - atau menjalankan kode dari internet sebagai root",
-            "mengirim data keluar dari HP ini",
-            "mengirim pesan / SMS atas nama kamu",
-            "menelepon atas nama kamu"
+    private static final int[] CAT_LABEL_RES = {
+            R.string.permission_install, R.string.permission_data, R.string.permission_system,
+            R.string.permission_network, R.string.permission_message, R.string.permission_message
     };
+    /** Stable persisted value; displayed title comes from resources. */
+    private static final String NEW_CHAT_TITLE = "New chat";
     /** a bad pattern must never take the app down - fall back and keep enough to still gate things */
     private static java.util.regex.Pattern safeRe(String re, String fallback) {
         try {
@@ -345,7 +347,7 @@ public class MainActivity extends Activity {
                     if (Hygiene.cleanFoundSomething(out)) {
                         final String line = out.replace("\n", " \u00b7 ");
                         ui.post(new Runnable() { @Override public void run() {
-                            addBubble("note", "sisa sesi lama dibersihkan saat app dibuka \u00b7 " + line);
+                            addBubble("note", uiText(R.string.runtime_stale_session, line));
                             persist();
                             renderTranscript();
                         } });
@@ -387,7 +389,7 @@ public class MainActivity extends Activity {
             if (res.length > 0 && res[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 toggleVoiceInput();      // granted - start listening right away
             } else {
-                toast("Izin microphone ditolak - aktifkan di Settings app");
+                toast(uiText(R.string.toast_mic_permission_denied));
             }
         }
     }
@@ -462,30 +464,30 @@ public class MainActivity extends Activity {
     private void confirmAutomationRun(final String cmd) {
         if (cmd.length() > 2000) {
             new AlertDialog.Builder(this)
-                    .setTitle("Command needs review")
-                    .setMessage("External automation supplied a command longer than 2,000 characters. It will not run until you review it in the chat input.")
-                    .setPositiveButton("Open in input", new DialogInterface.OnClickListener() {
+                    .setTitle(uiText(R.string.automation_command_review_title))
+                    .setMessage(uiText(R.string.automation_command_review_message))
+                    .setPositiveButton(uiText(R.string.automation_open_input), new DialogInterface.OnClickListener() {
                         @Override public void onClick(DialogInterface d, int w) {
                             input.requestFocus();
-                            input.setText("$ " + cmd);
+                            input.setText(uiText(R.string.shell_command, cmd));
                             input.setSelection(input.getText().length());
                         }
                     })
-                    .setNegativeButton("Cancel", null)
+                    .setNegativeButton(uiText(R.string.common_cancel), null)
                     .show();
             return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("Run root command?")
-                .setMessage("External automation requested this command. Review it before it runs with full device access. Risky actions may need one more approval.\n\n$ " + cmd)
-                .setPositiveButton("Review & run", new DialogInterface.OnClickListener() {
+                .setTitle(uiText(R.string.automation_run_root_title))
+                .setMessage(uiText(R.string.automation_run_root_message, cmd))
+                .setPositiveButton(uiText(R.string.automation_review_run), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
-                        if (busy) { toast("Still working — stop it first"); return; }
+                        if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
                         addBubble("user", "$ " + cmd);
                         beginReviewedRun(java.util.Collections.singletonList(cmd), false);
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
@@ -493,16 +495,16 @@ public class MainActivity extends Activity {
     private void confirmAutomationPrompt(final String prompt) {
         final String shown = prompt.length() > 2000 ? prompt.substring(0, 2000) + "\n\u2026 (truncated)" : prompt;
         new AlertDialog.Builder(this)
-                .setTitle("Use external prompt?")
-                .setMessage("Another app supplied this text. Review it before sending it to your selected provider.\n\n" + shown)
-                .setPositiveButton("Open in input", new DialogInterface.OnClickListener() {
+                .setTitle(uiText(R.string.automation_external_prompt_title))
+                .setMessage(uiText(R.string.automation_external_prompt_message, shown))
+                .setPositiveButton(uiText(R.string.automation_open_input), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         input.requestFocus();
                         input.setText(prompt);
                         input.setSelection(input.getText().length());
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
@@ -548,20 +550,20 @@ public class MainActivity extends Activity {
         card.setPadding(dp(20), dp(20), dp(20), dp(18));
 
         TextView title = tv(22, FG, Typeface.BOLD);
-        title.setText("AI-ssistant terkunci");
+        title.setText(uiText(R.string.lock_title));
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         card.addView(title, new LinearLayout.LayoutParams(-1, -2));
         TextView detail = tv(13, MUTED, Typeface.NORMAL);
-        detail.setText("Masukkan password untuk membuka app.");
+        detail.setText(uiText(R.string.lock_detail));
         detail.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(-1, -2);
         detailLp.setMargins(0, dp(6), 0, dp(18));
         card.addView(detail, detailLp);
 
-        final EditText password = lockPasswordField("Password");
+        final EditText password = lockPasswordField(uiText(R.string.common_password));
         card.addView(password, new LinearLayout.LayoutParams(-1, dp(54)));
         Button unlock = new Button(this);
-        unlock.setText("Buka");
+        unlock.setText(uiText(R.string.lock_unlock));
         unlock.setAllCaps(false);
         unlock.setTextSize(15);
         unlock.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -576,7 +578,7 @@ public class MainActivity extends Activity {
 
         if (store.fingerprintUnlockEnabled() && canUseFingerprint()) {
             Button fingerprint = new Button(this);
-            fingerprint.setText("Gunakan fingerprint");
+            fingerprint.setText(uiText(R.string.lock_use_fingerprint));
             fingerprint.setAllCaps(false);
             fingerprint.setTextSize(14);
             fingerprint.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -643,7 +645,7 @@ public class MainActivity extends Activity {
         String value = field.getText().toString();
         field.setText("");
         if (!passwordMatches(value)) {
-            field.setError("Password salah");
+            field.setError(uiText(R.string.lock_wrong_password));
             field.requestFocus();
             return;
         }
@@ -680,7 +682,7 @@ public class MainActivity extends Activity {
 
     private void authenticateFingerprint() {
         if (!lockVisible || !store.appLockEnabled() || !store.fingerprintUnlockEnabled()) return;
-        if (!canUseFingerprint()) { toast("Fingerprint belum tersedia di perangkat ini"); return; }
+        if (!canUseFingerprint()) { toast(uiText(R.string.lock_fingerprint_unavailable)); return; }
         cancelFingerprintPrompt();
         fingerprintCancellation = new android.os.CancellationSignal();
         if (android.os.Build.VERSION.SDK_INT >= 28) {
@@ -689,9 +691,9 @@ public class MainActivity extends Activity {
             };
             android.hardware.biometrics.BiometricPrompt prompt =
                     new android.hardware.biometrics.BiometricPrompt.Builder(this)
-                            .setTitle("Buka AI-ssistant")
-                            .setSubtitle("Verifikasi fingerprint")
-                            .setNegativeButton("Gunakan password", executor, new DialogInterface.OnClickListener() {
+                            .setTitle(uiText(R.string.lock_biometric_title))
+                            .setSubtitle(uiText(R.string.lock_biometric_subtitle))
+                            .setNegativeButton(uiText(R.string.lock_biometric_password), executor, new DialogInterface.OnClickListener() {
                                 @Override public void onClick(DialogInterface dialog, int which) { }
                             })
                             .build();
@@ -723,7 +725,7 @@ public class MainActivity extends Activity {
                     }, ui);
         } catch (Throwable t) {
             fingerprintCancellation = null;
-            toast("Fingerprint tidak dapat digunakan");
+            toast(uiText(R.string.lock_fingerprint_error));
         }
     }
 
@@ -771,14 +773,14 @@ public class MainActivity extends Activity {
             @Override public void onClick(View x) { showChat(); }
         }));
         TextView t = tv(18, FG, Typeface.BOLD);
-        t.setText("Chats");
+        t.setText(uiText(R.string.history_title));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
         tlp.setMargins(dp(8), 0, 0, 0);
         bar.addView(t, tlp);
         v.addView(bar);
 
         EditText qbox = new EditText(this);
-        qbox.setHint("cari chat ...");
+        qbox.setHint(uiText(R.string.history_search_hint));
         qbox.setSingleLine(true);
         qbox.setTextSize(14);
         qbox.setHintTextColor(MUTED);
@@ -810,7 +812,7 @@ public class MainActivity extends Activity {
 
         if (sorted.isEmpty()) {
             TextView empty = tv(13, MUTED, Typeface.NORMAL);
-            empty.setText("No chats yet.");
+            empty.setText(uiText(R.string.history_empty));
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(0, dp(40), 0, 0);
             list.addView(empty);
@@ -828,7 +830,7 @@ public class MainActivity extends Activity {
             }
             if (shown == 0) {
                 TextView e2 = tv(13, MUTED, Typeface.NORMAL);
-                e2.setText(qq.isEmpty() ? "No chats yet." : "Tidak ada chat yang cocok.");
+                e2.setText(qq.isEmpty() ? uiText(R.string.history_empty) : uiText(R.string.history_empty_filter));
                 e2.setGravity(Gravity.CENTER); e2.setPadding(0, dp(40), 0, 0);
                 listF.addView(e2);
             }
@@ -841,7 +843,7 @@ public class MainActivity extends Activity {
         });
 
         Button ncBtn = new Button(this);
-        ncBtn.setText("New chat");
+        ncBtn.setText(uiText(R.string.history_new_chat));
         ncBtn.setAllCaps(false);
         ncBtn.setTextSize(15);
         ncBtn.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -890,12 +892,12 @@ public class MainActivity extends Activity {
         TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDelete(s); }
         });
-        setButtonA11y(remove, "Delete chat " + titleOf(s));
+        setButtonA11y(remove, uiText(R.string.a11y_delete_chat, titleOf(s)));
         card.addView(remove);
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { openSession(s.optString("id", "")); }
         });
-        setButtonA11y(card, "Open chat " + titleOf(s));
+        setButtonA11y(card, uiText(R.string.a11y_open_chat, titleOf(s)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(10));
         card.setLayoutParams(lp);
@@ -915,7 +917,7 @@ public class MainActivity extends Activity {
             @Override public void onClick(View x) { showChat(); }
         }));
         TextView t = tv(18, FG, Typeface.BOLD);
-        t.setText("Settings");
+        t.setText(uiText(R.string.common_settings));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(-2, -2);
         tlp.setMargins(dp(8), 0, 0, 0);
         bar.addView(t, tlp);
@@ -930,7 +932,7 @@ public class MainActivity extends Activity {
         v.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1));
 
         Button manage = new Button(this);
-        manage.setText("Manage models & providers");
+        manage.setText(uiText(R.string.settings_manage_models));
         manage.setAllCaps(false);
         manage.setTextSize(15);
         manage.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -945,18 +947,18 @@ public class MainActivity extends Activity {
 
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
         hlp.setMargins(0, dp(22), 0, 0);
-        panel.addView(sectionLabel("AGENT"), hlp);
+        panel.addView(sectionLabel(uiText(R.string.settings_section_agent)), hlp);
 
         LinearLayout agentFields = new LinearLayout(this);
         agentFields.setOrientation(LinearLayout.VERTICAL);
         agentFields.setPadding(0, dp(2), 0, dp(4));
-        final EditText timeout = field(agentFields, "Timeout seconds (20-1800)", String.valueOf(store.timeoutSec()), "180", false);
+        final EditText timeout = field(agentFields, uiText(R.string.settings_timeout_label), String.valueOf(store.timeoutSec()), "180", false);
         timeout.setInputType(InputType.TYPE_CLASS_NUMBER);
-        final EditText temp = field(agentFields, "Temperature (0-100)", String.valueOf(store.temperature()), "30", false);
+        final EditText temp = field(agentFields, uiText(R.string.settings_temperature_label), String.valueOf(store.temperature()), "30", false);
         temp.setInputType(InputType.TYPE_CLASS_NUMBER);
         panel.addView(agentFields);
         TextView agentHelp = tv(12, MUTED, Typeface.NORMAL);
-        agentHelp.setText("Lower temperature is more predictable. Settings are validated before saving.");
+        agentHelp.setText(uiText(R.string.settings_agent_help));
         LinearLayout.LayoutParams helpLp = new LinearLayout.LayoutParams(-1, -2);
         helpLp.setMargins(0, dp(8), 0, 0);
         panel.addView(agentHelp, helpLp);
@@ -991,7 +993,7 @@ public class MainActivity extends Activity {
         panel.addView(trow);
 
         final Switch auto = new Switch(this);
-        auto.setText("Run safe commands automatically");
+        auto.setText(uiText(R.string.settings_auto_run));
         auto.setTextColor(FG);
         auto.setTextSize(14);
         auto.setChecked(store.autoRun());
@@ -1000,22 +1002,22 @@ public class MainActivity extends Activity {
         alp.setMargins(0, dp(12), 0, 0);
         panel.addView(auto, alp);
         TextView autoHelp = tv(12, MUTED, Typeface.NORMAL);
-        autoHelp.setText("Off by default. Risky actions still need review unless you enable AUTO for this chat.");
+        autoHelp.setText(uiText(R.string.settings_auto_help));
         LinearLayout.LayoutParams autoHelpLp = new LinearLayout.LayoutParams(-1, -2);
         autoHelpLp.setMargins(0, dp(2), 0, 0);
         panel.addView(autoHelp, autoHelpLp);
 
         LinearLayout.LayoutParams securityHeaderLp = new LinearLayout.LayoutParams(-1, -2);
         securityHeaderLp.setMargins(0, dp(22), 0, dp(6));
-        panel.addView(sectionLabel("APP LOCK"), securityHeaderLp);
+        panel.addView(sectionLabel(uiText(R.string.settings_section_app_lock)), securityHeaderLp);
         TextView lockStatus = tv(12, MUTED, Typeface.NORMAL);
         lockStatus.setText(store.appLockEnabled()
-                ? "Password aktif. App meminta unlock setelah Anda meninggalkannya saat idle."
-                : "Password belum aktif.");
+                ? uiText(R.string.settings_lock_enabled)
+                : uiText(R.string.settings_lock_disabled));
         panel.addView(lockStatus, new LinearLayout.LayoutParams(-1, -2));
 
         final Switch appLock = new Switch(this);
-        appLock.setText("Minta password saat membuka app");
+        appLock.setText(uiText(R.string.settings_require_password));
         appLock.setTextColor(FG);
         appLock.setTextSize(14);
         appLock.setMinHeight(dp(48));
@@ -1032,7 +1034,7 @@ public class MainActivity extends Activity {
 
         if (store.appLockEnabled()) {
             Button changePassword = new Button(this);
-            changePassword.setText("Ganti password");
+            changePassword.setText(uiText(R.string.settings_change_password));
             changePassword.setAllCaps(false);
             changePassword.setTextSize(14);
             changePassword.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1048,7 +1050,7 @@ public class MainActivity extends Activity {
             final boolean fingerprintReady = canUseFingerprint();
             if (!fingerprintReady && store.fingerprintUnlockEnabled()) store.setFingerprintUnlockEnabled(false);
             final Switch fingerprint = new Switch(this);
-            fingerprint.setText("Buka dengan fingerprint");
+            fingerprint.setText(uiText(R.string.settings_fingerprint));
             fingerprint.setTextColor(FG);
             fingerprint.setTextSize(14);
             fingerprint.setMinHeight(dp(48));
@@ -1065,15 +1067,15 @@ public class MainActivity extends Activity {
             });
             TextView fingerprintHelp = tv(12, MUTED, Typeface.NORMAL);
             fingerprintHelp.setText(fingerprintReady
-                    ? "Password tetap tersedia bila fingerprint gagal atau dibatalkan."
-                    : "Fingerprint belum siap. Daftarkan sidik jari di pengaturan perangkat terlebih dahulu.");
+                    ? uiText(R.string.settings_fingerprint_ready)
+                    : uiText(R.string.settings_fingerprint_unready));
             LinearLayout.LayoutParams fingerprintHelpLp = new LinearLayout.LayoutParams(-1, -2);
             fingerprintHelpLp.setMargins(0, dp(2), 0, 0);
             panel.addView(fingerprintHelp, fingerprintHelpLp);
         }
 
         Button save = new Button(this);
-        save.setText("Save");
+        save.setText(uiText(R.string.common_save));
         save.setAllCaps(false);
         save.setTextSize(15);
         save.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1087,7 +1089,7 @@ public class MainActivity extends Activity {
                 store.save(tempValue, timeoutValue,
                         auto.isChecked(), thinking[0]);
                 refreshStatus();
-                toast("Tersimpan");
+                toast(uiText(R.string.settings_saved));
             }
         });
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(52));
@@ -1117,15 +1119,15 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(4), 0, dp(4), 0);
-        final EditText current = changing ? dialogPasswordField(box, "Password saat ini") : null;
+        final EditText current = changing ? dialogPasswordField(box, uiText(R.string.lock_current_password)) : null;
         final EditText next = dialogPasswordField(box, "Password baru (minimal " + AppLock.MIN_PASSWORD_LENGTH + " karakter)");
-        final EditText confirm = dialogPasswordField(box, "Ulangi password baru");
+        final EditText confirm = dialogPasswordField(box, uiText(R.string.lock_repeat_password));
         final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(changing ? "Ganti password" : "Aktifkan app lock")
-                .setMessage(changing ? "Masukkan password lama sebelum menggantinya." : "Password diminta setiap app dibuka kembali saat tidak ada sesi agent aktif.")
+                .setTitle(changing ? uiText(R.string.settings_change_password) : "Aktifkan app lock")
+                .setMessage(changing ? uiText(R.string.lock_change_message) : uiText(R.string.lock_enable_message))
                 .setView(box)
-                .setPositiveButton(changing ? "Ganti" : "Aktifkan", null)
-                .setNegativeButton("Batal", null)
+                .setPositiveButton(changing ? uiText(R.string.common_change) : uiText(R.string.common_enable), null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .create();
         dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
             @Override public void onCancel(DialogInterface ignored) { showSettings(); }
@@ -1143,12 +1145,12 @@ public class MainActivity extends Activity {
                             return;
                         }
                         if (nextValue.length() < AppLock.MIN_PASSWORD_LENGTH) {
-                            next.setError("Minimal " + AppLock.MIN_PASSWORD_LENGTH + " karakter");
+                            next.setError(uiText(R.string.lock_min_password, AppLock.MIN_PASSWORD_LENGTH));
                             next.requestFocus();
                             return;
                         }
                         if (!nextValue.equals(confirmValue)) {
-                            confirm.setError("Password tidak sama");
+                            confirm.setError(uiText(R.string.lock_password_mismatch));
                             confirm.requestFocus();
                             return;
                         }
@@ -1159,9 +1161,9 @@ public class MainActivity extends Activity {
                             lockOnForeground = false;
                             dialog.dismiss();
                             showSettings();
-                            toast(changing ? "Password diganti" : "App lock aktif");
+                            toast(changing ? uiText(R.string.lock_password_changed) : uiText(R.string.lock_enabled));
                         } catch (Throwable t) {
-                            next.setError("Password tidak dapat disimpan");
+                            next.setError(uiText(R.string.lock_save_error));
                         } finally {
                             AppLock.wipe(secret);
                             next.setText("");
@@ -1179,13 +1181,13 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(4), 0, dp(4), 0);
-        final EditText password = dialogPasswordField(box, "Password saat ini");
+        final EditText password = dialogPasswordField(box, uiText(R.string.lock_current_password));
         final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Nonaktifkan app lock?")
-                .setMessage("Masukkan password untuk menonaktifkan password dan fingerprint.")
+                .setTitle(uiText(R.string.lock_disable_title))
+                .setMessage(uiText(R.string.lock_disable_message))
                 .setView(box)
-                .setPositiveButton("Nonaktifkan", null)
-                .setNegativeButton("Batal", null)
+                .setPositiveButton(uiText(R.string.common_disable), null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .create();
         dialog.setOnCancelListener(new DialogInterface.OnCancelListener() {
             @Override public void onCancel(DialogInterface ignored) { showSettings(); }
@@ -1197,7 +1199,7 @@ public class MainActivity extends Activity {
                         String value = password.getText().toString();
                         password.setText("");
                         if (!passwordMatches(value)) {
-                            password.setError("Password salah");
+                            password.setError(uiText(R.string.lock_wrong_password));
                             password.requestFocus();
                             return;
                         }
@@ -1206,7 +1208,7 @@ public class MainActivity extends Activity {
                         lockOnForeground = false;
                         dialog.dismiss();
                         showSettings();
-                        toast("App lock nonaktif");
+                        toast(uiText(R.string.lock_disabled));
                     }
                 });
             }
@@ -1232,7 +1234,7 @@ public class MainActivity extends Activity {
         barTitle = tv(17, FG, Typeface.BOLD);
         barTitle.setSingleLine(true);
         barTitle.setEllipsize(TextUtils.TruncateAt.END);
-        barTitle.setText("AI-ssistant");
+        barTitle.setText(uiText(R.string.app_name));
         subtitle = tv(12, MUTED, Typeface.NORMAL);
         subtitle.setSingleLine(true);
         subtitle.setEllipsize(TextUtils.TruncateAt.END);
@@ -1247,7 +1249,7 @@ public class MainActivity extends Activity {
         pill.setPadding(dp(12), dp(6), dp(12), dp(6));
         pill.setMinHeight(dp(48));
         pill.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        setButtonA11y(pill, "Root access status. Tap to request or retry root access.");
+        setButtonA11y(pill, uiText(R.string.a11y_root_status));
         pill.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { requestRoot(); }
         });
@@ -1302,22 +1304,22 @@ public class MainActivity extends Activity {
         composer.setPadding(dp(GUTTER), dp(4), dp(GUTTER), navigationBarHeight() + dp(12));
 
         autoBtn = new TextView(this);
-        autoBtn.setText("REVIEW");
+        autoBtn.setText(uiText(R.string.chat_review));
         autoBtn.setTextSize(10);
         autoBtn.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         autoBtn.setLetterSpacing(0.05f);
         autoBtn.setGravity(Gravity.CENTER);
         autoBtn.setIncludeFontPadding(false);
         autoBtn.setPadding(dp(10), 0, dp(10), 0);
-        setButtonA11y(autoBtn, "Review risky actions is on");
+        setButtonA11y(autoBtn, uiText(R.string.chat_review));
         autoBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
                 if (!store.autoRun()) {
-                    toast("Automatic commands are off. Enable them in Settings first.");
+                    toast(uiText(R.string.chat_automatic_off));
                 } else if (autoApprove) {
                     autoApprove = false;
                     styleAutoBtn();
-                    toast("Risky actions need review again");
+                    toast(uiText(R.string.chat_review_again));
                 } else {
                     confirmAutoApproval();
                 }
@@ -1335,7 +1337,7 @@ public class MainActivity extends Activity {
         field.setBackground(round(SURFACE, LINE, 28));
         field.setMinimumHeight(dp(52));
 
-        ImageButton attach = composerIcon(R.drawable.ic_add_24, FG, "Add attachment", new View.OnClickListener() {
+        ImageButton attach = composerIcon(R.drawable.ic_add_24, FG, uiText(R.string.a11y_add_attachment), new View.OnClickListener() {
             @Override public void onClick(View x) { openAttachPicker(); }
         });
         LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(dp(44), dp(48));
@@ -1343,7 +1345,7 @@ public class MainActivity extends Activity {
         field.addView(attach, alp);
 
         input = new EditText(this);
-        input.setHint("Ask AI-ssistant");
+        input.setHint(uiText(R.string.chat_input_hint));
         input.setHintTextColor(MUTED);
         input.setTextColor(FG);
         input.setTextSize(16);
@@ -1424,7 +1426,7 @@ public class MainActivity extends Activity {
 
     private void menu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
-        pm.getMenu().add(0, 3, 2, "Settings");
+        pm.getMenu().add(0, 3, 2, uiText(R.string.common_settings));
         pm.getMenu().add(0, 4, 3, "Clear this chat");
         pm.getMenu().add(0, 7, 6, "Overlay mengambang");
         pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
@@ -1448,7 +1450,7 @@ public class MainActivity extends Activity {
         // caret and swallow the first characters typed into the composer. Remember and restore it.
         final boolean keepFocus = input != null && input.hasFocus();
         final int keepSel = keepFocus ? input.getSelectionStart() : 0;
-        barTitle.setText("New chat".equals(titleOf(cur)) ? "AI-ssistant" : titleOf(cur));
+        barTitle.setText(NEW_CHAT_TITLE.equals(titleOf(cur)) ? uiText(R.string.app_name) : titleOf(cur));
         chatLog.removeAllViews();
         groupKeys.clear();
         groupSpans.clear();
@@ -1557,7 +1559,7 @@ public class MainActivity extends Activity {
     /** top row of a windowed transcript: page the previous slice of bubbles back in */
     private void addOlderRow(final int n) {
         TextView t = new TextView(this);
-        t.setText("\u2191 muat " + n + " pesan sebelumnya");
+        t.setText(uiText(R.string.chat_load_previous, n));
         t.setTextSize(12);
         t.setTextColor(MUTED);
         t.setGravity(Gravity.CENTER);
@@ -1619,7 +1621,7 @@ public class MainActivity extends Activity {
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
             boolean command = text.startsWith("$ ");
             TextView label = tv(11, command ? COMMAND : MUTED, Typeface.BOLD);
-            label.setText(command ? "Perintah" : "Output");
+            label.setText(command ? uiText(R.string.chat_command) : uiText(R.string.chat_output));
             LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
             llp.setMargins(0, 0, 0, dp(6));
             card.addView(label, llp);
@@ -1755,13 +1757,13 @@ public class MainActivity extends Activity {
     /** a stopped run becomes a button: tap = send "continue" */
     private void addContinueCard() {
         TextView c = tv(13, ON_ACCENT, Typeface.BOLD);
-        c.setText("\u25B6 Lanjutkan \u00b7 tap");
+        c.setText(uiText(R.string.chat_continue));
         c.setGravity(Gravity.CENTER);
         c.setBackground(ripple(ACCENT, ACCENT, 14));
         setButtonA11y(c, "Continue this task");
         c.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) {
-                if (busy) { toast("Masih jalan \u00b7 stop dulu"); return; }
+                if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
                 send("continue");
             }
         });
@@ -1842,7 +1844,7 @@ public class MainActivity extends Activity {
     /** collapse control at the END of an expanded group - no need to scroll back to the top */
     private void addToolGroupFooter(final int count, final String key) {
         TextView f = tv(12, MUTED, Typeface.NORMAL);
-        f.setText("\u25B4 Tutup \u00b7 " + count + " perintah");
+        f.setText(uiText(R.string.chat_close_commands, count));
         f.setGravity(Gravity.CENTER);
         f.setBackground(ripple(TOOL_BG, LINE, 12));
         f.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -1934,7 +1936,7 @@ public class MainActivity extends Activity {
         if (hit == null) { groupChip.setVisibility(View.GONE); return; }
         // collapse-only chip: it appears while an expanded group sits under the viewport
         if (!expandedGroups.contains(hit)) { groupChip.setVisibility(View.GONE); return; }
-        groupChip.setText("\u25B4 Tutup \u00b7 " + hitCount + " perintah");
+        groupChip.setText(uiText(R.string.chat_close_commands, hitCount));
         setButtonA11y(groupChip, "Sembunyikan " + hitCount + " perintah");
         groupChip.setTag(hit);
         groupChip.setVisibility(View.VISIBLE);
@@ -1948,7 +1950,7 @@ public class MainActivity extends Activity {
         jumpChip.setMinHeight(dp(48));
         jumpChip.setBackground(ripple(ACCENT, ACCENT, 24));
         jumpChip.setPadding(dp(16), 0, dp(16), 0);
-        jumpChip.setText("\u2193 pesan baru");
+        jumpChip.setText(uiText(R.string.chat_new_message));
         setButtonA11y(jumpChip, "Lompat ke pesan terbaru");
         jumpChip.setVisibility(View.GONE);
         FrameLayout.LayoutParams jlp = new FrameLayout.LayoutParams(-2, dp(48),
@@ -2092,7 +2094,7 @@ public class MainActivity extends Activity {
         v.setPadding(0, dp(18), 0, dp(8));
 
         TextView t = tv(21, FG, Typeface.BOLD);
-        t.setText(hasActiveModel() ? "What would you like to check?" : "Set up AI-ssistant");
+        t.setText(hasActiveModel() ? uiText(R.string.chat_empty_title) : uiText(R.string.chat_setup_title));
         TextView s = tv(13, MUTED, Typeface.NORMAL);
         s.setText(hasActiveModel()
                 ? "Describe a goal. Risky root actions are reviewed by default."
@@ -2115,8 +2117,8 @@ public class MainActivity extends Activity {
                 {"Storage", "per-partition usage, where space went",
                         "show disk usage per partition in human units and where the space went"}
         } : new String[][] {
-                {"Add provider", "choose where model requests and API keys are sent", "__MODELS__"},
-                {"Add model", "select a model under that provider", "__MODELS__"},
+                {uiText(R.string.models_add_provider), "choose where model requests and API keys are sent", "__MODELS__"},
+                {uiText(R.string.models_add_model), "select a model under that provider", "__MODELS__"},
                 {"Test root access", "confirm KernelSU or Magisk access before a task", "__ROOT__"}
         };
         for (String[] tip : tips) v.addView(suggestion(tip[0], tip[1], tip[2]));
@@ -2149,7 +2151,7 @@ public class MainActivity extends Activity {
                     requestRoot();
                 } else if ("$ ".equals(prompt)) {
                     input.requestFocus();
-                    input.setText("$ ");
+                    input.setText(uiText(R.string.shell_prefix));
                     input.setSelection(input.getText().length());
                 } else {
                     send(prompt);
@@ -2326,11 +2328,12 @@ public class MainActivity extends Activity {
         if (subtitle == null) return;
         JSONObject m = activeModelObj();
         if (m == null) {
-            subtitle.setText("No model configured \u00b7 \u22EE \u2192 Settings");
+            subtitle.setText(uiText(R.string.chat_no_model));
         } else {
-            subtitle.setText(activeLabel() + " \u00b7 " + hostOf(activeBaseUrl())
-                    + (m.optBoolean("enabled", true) ? "" : " \u00b7 disabled")
-                    + (lastUsage.isEmpty() ? "" : " \u00b7 " + lastUsage));
+            subtitle.setText(uiText(R.string.chat_active_model_status,
+                    activeLabel(), hostOf(activeBaseUrl()),
+                    m.optBoolean("enabled", true) ? "" : uiText(R.string.chat_model_disabled_suffix),
+                    lastUsage.isEmpty() ? "" : uiText(R.string.chat_usage_suffix, lastUsage)));
         }
     }
 
@@ -2359,7 +2362,7 @@ public class MainActivity extends Activity {
     }
 
     private void requestRoot() {
-        if (busy) { toast("Stop the current task before testing root"); return; }
+        if (busy) { toast(uiText(R.string.toast_root_testing)); return; }
         addBubble("note", "requesting root\u2026 approve the KernelSU/Magisk prompt if it appears");
         new Thread(new Runnable() {
             @Override public void run() {
@@ -2464,7 +2467,7 @@ public class MainActivity extends Activity {
                         JSONObject o = log.optJSONObject(k);
                         if (o != null) bb.put(o);
                     }
-                    if ("New chat".equals(titleOf(s))) s.put("title", autoTitle(s));
+                    if (NEW_CHAT_TITLE.equals(titleOf(s))) s.put("title", autoTitle(s));
                     s.put("updated", System.currentTimeMillis());
                 }
             }
@@ -2486,7 +2489,7 @@ public class MainActivity extends Activity {
         JSONObject o = new JSONObject();
         try {
             o.put("id", String.valueOf(System.currentTimeMillis()));
-            o.put("title", "New chat");
+            o.put("title", NEW_CHAT_TITLE);
             o.put("updated", System.currentTimeMillis());
             o.put("bubbles", new JSONArray());
         } catch (Throwable ignored) { }
@@ -2504,7 +2507,7 @@ public class MainActivity extends Activity {
 
     private String titleOf(JSONObject s) {
         String t = s.optString("title", "");
-        return t.isEmpty() ? "New chat" : t;
+        return t.isEmpty() ? NEW_CHAT_TITLE : t;
     }
 
     private String previewOf(JSONObject s) {
@@ -2529,7 +2532,7 @@ public class MainActivity extends Activity {
     }
 
     private void newChat() {
-        if (busy) { toast("Still working \u2014 stop it first"); return; }
+        if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
         // New chat on an already empty chat reuses it instead of stacking empty entries in history
         try { if (cur != null && bubblesOf(cur).length() == 0) { showChat(); return; } } catch (Throwable ignored) { }
         synchronized (lock) {
@@ -2543,11 +2546,11 @@ public class MainActivity extends Activity {
         allowInChat.clear();
         if (pendingBar != null) pendingBar.setVisibility(View.GONE);
         showChat();
-        toast("New chat");
+        toast(uiText(R.string.history_new_chat));
     }
 
     private void openSession(String id) {
-        if (busy) { toast("Still working \u2014 stop it first"); return; }
+        if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
         for (int i = 0; i < sessions.length(); i++) {
             JSONObject o = sessions.optJSONObject(i);
             if (o != null && id.equals(o.optString("id"))) {
@@ -2564,12 +2567,12 @@ public class MainActivity extends Activity {
 
     private void confirmDelete(final JSONObject s) {
         new AlertDialog.Builder(this)
-                .setTitle("Delete chat?")
+                .setTitle(uiText(R.string.chat_delete_title))
                 .setMessage(titleOf(s))
-                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                .setPositiveButton(uiText(R.string.common_delete), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) { deleteSession(s.optString("id", "")); }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
@@ -2599,14 +2602,14 @@ public class MainActivity extends Activity {
     private void renameDialog(final JSONObject s) {
         final EditText e = new EditText(this);
         e.setText(titleOf(s));
-        e.setHint("Chat name");
+        e.setHint(uiText(R.string.chat_chat_name));
         e.setTextColor(FG);
         e.setHintTextColor(MUTED);
         e.setSingleLine(true);
         new AlertDialog.Builder(this)
-                .setTitle("Rename chat")
+                .setTitle(uiText(R.string.chat_rename_title))
                 .setView(e)
-                .setPositiveButton("Rename", new DialogInterface.OnClickListener() {
+                .setPositiveButton(uiText(R.string.common_rename), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         String v = e.getText().toString().trim();
                         if (!v.isEmpty()) {
@@ -2617,15 +2620,15 @@ public class MainActivity extends Activity {
                         showHistory();
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
     private void confirmClear() {
         new AlertDialog.Builder(this)
-                .setTitle("Clear this chat?")
-                .setMessage("Messages in this chat will be removed.")
-                .setPositiveButton("Clear", new DialogInterface.OnClickListener() {
+                .setTitle(uiText(R.string.chat_clear_title))
+                .setMessage(uiText(R.string.chat_clear_message))
+                .setPositiveButton(uiText(R.string.common_clear), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         synchronized (lock) {
                             try { cur.put("bubbles", new JSONArray()); } catch (Throwable ignored) { }
@@ -2637,7 +2640,7 @@ public class MainActivity extends Activity {
                         renderTranscript(true);
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
@@ -2667,7 +2670,7 @@ public class MainActivity extends Activity {
 
     private String autoTitle(JSONObject s) {
         String t = s.optString("title", "");
-        if (!t.isEmpty() && !"New chat".equals(t)) return t;
+        if (!t.isEmpty() && !NEW_CHAT_TITLE.equals(t)) return t;
         JSONArray b = bubblesOf(s);
         for (int i = 0; i < b.length(); i++) {
             JSONObject o = b.optJSONObject(i);
@@ -2677,7 +2680,7 @@ public class MainActivity extends Activity {
             if (txt.isEmpty()) continue;
             return txt.length() > 40 ? txt.substring(0, 40) + "\u2026" : txt;
         }
-        return "New chat";
+        return NEW_CHAT_TITLE;
     }
 
     private void rebuildModelMessages() {
@@ -2881,7 +2884,7 @@ public class MainActivity extends Activity {
                 if (shown.trim().isEmpty()) shown = "Thinking";
                 streamView.setTextColor(thinking ? MUTED : FG);
                 streamView.setTypeface(Typeface.DEFAULT, thinking ? Typeface.ITALIC : Typeface.NORMAL);
-                streamView.setText(shown + " \u258D");
+                streamView.setText(uiText(R.string.chat_streaming, shown));
                 scrollToBottom(false);
             }
         });
@@ -2900,7 +2903,7 @@ public class MainActivity extends Activity {
     }
 
     private void send(String text) {
-        if (busy) { toast("Still working \u2014 stop it first"); return; }
+        if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
         chatAtBottom = true;
         jumpCount = 0;
         jumpAnnounced = false;
@@ -2908,7 +2911,7 @@ public class MainActivity extends Activity {
         RootShell.resetCancel();
         if (text.startsWith("$")) {
             final String cmd = text.substring(1).trim();
-            if (cmd.isEmpty()) { toast("Type a command after $"); return; }
+            if (cmd.isEmpty()) { toast(uiText(R.string.toast_command_after_dollar)); return; }
             addBubble("user", "$ " + cmd);
             beginReviewedRun(java.util.Collections.singletonList(cmd), false);
             return;
@@ -3017,7 +3020,7 @@ public class MainActivity extends Activity {
                     if (busy) midRunSend();
                     else onSend();
                 } catch (Throwable ex) {
-                    toast("Gagal kirim: " + ex);
+                    toast(uiText(R.string.toast_send_failed, ex));
                 }
             }
         });
@@ -3026,9 +3029,9 @@ public class MainActivity extends Activity {
     /** floating panel: it needs the "draw over other apps" permission (a Settings toggle) */
     private void toggleOverlay() {
         if (!OverlayView.canDraw(this)) {
-            toast("Izinkan 'tampilkan di atas app lain' untuk app ini");
+            toast(uiText(R.string.toast_overlay_permission));
             try { startActivity(OverlayView.permissionIntent(this)); }
-            catch (Throwable t) { toast("Nggak bisa buka pengaturan: " + t); }
+            catch (Throwable t) { toast(uiText(R.string.toast_open_settings_failed, t)); }
             return;
         }
         if (OverlayView.visible()) {
@@ -3036,14 +3039,14 @@ public class MainActivity extends Activity {
             // panel gone -> the main app comes back
             try { startActivity(new android.content.Intent(this, MainActivity.class)
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); } catch (Throwable ignored) { }
-            toast("Overlay disembunyikan");
+            toast(uiText(R.string.toast_overlay_hidden));
         } else {
             OverlayHub.allowOverlayForRun(); // explicit user toggle may reopen a panel the agent had hidden
             seedOverlay();
             OverlayView.show(this);
             // panel up -> the main app must not be visible at the same time
             moveTaskToBack(true);
-            toast("Panel muncul saat app pindah ke belakang \u00b7 kalau tidak ada, buka izin overlay");
+            toast(uiText(R.string.toast_overlay_background));
         }
     }
 
@@ -3125,7 +3128,7 @@ public class MainActivity extends Activity {
 
     /** menu action: show what an anti-tamper SDK would see, then clean it up */
     private void showHygiene() {
-        if (busy) { toast("Masih jalan \u00b7 stop dulu"); return; }
+        if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
         addBubble("user", "device hygiene");
         worker = new Thread(new Runnable() {
             @Override public void run() {
@@ -3293,7 +3296,7 @@ public class MainActivity extends Activity {
         if (runGuard.reportOnly() && !reportOnly) {
             reportOnly = true;
             loopBroken = true;
-            addBubble("note", "Batas eksekusi tercapai; agent menyusun hasil dan bukti yang tersedia.");
+            addBubble("note", uiText(R.string.runtime_limit_reached));
         }
         return note;
     }
@@ -3328,10 +3331,11 @@ public class MainActivity extends Activity {
                 final int thinkNow = thinkBase == 3 ? ((escalate || stuckRun) ? 2 : autoThinking(lastPrompt)) : thinkBase;
                 ui.post(new Runnable() {
                     @Override public void run() {
-                        subtitle.setText("Working \u00b7 step " + stepNow
-                                + (thinkBase == 3 ? " \u00b7 think:" + thinkNow : ""));
-                        AgentService.status(MainActivity.this, "Working \u00b7 step " + stepNow
-                                + (thinkBase == 3 ? " \u00b7 think:" + thinkNow : ""));
+                        String thinkingSuffix = thinkBase == 3
+                                ? uiText(R.string.chat_thinking_suffix, thinkNow) : "";
+                        String status = uiText(R.string.chat_working_progress, stepNow, thinkingSuffix);
+                        subtitle.setText(status);
+                        AgentService.status(MainActivity.this, status);
                         renderTranscript();
                     }
                 });
@@ -3378,7 +3382,7 @@ public class MainActivity extends Activity {
                 if (!reply.ok && hadImage && reply.error != null && reply.error.indexOf("400") >= 0) {
                     // this model cannot take image parts - fall back to the file path and retry once
                     stripImageParts(msgs);
-                    addBubble("note", "model refused the image \u2014 retried with the file path only");
+                    addBubble("note", uiText(R.string.runtime_image_retry));
                     reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
                             msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
                                 @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
@@ -3473,7 +3477,7 @@ public class MainActivity extends Activity {
                 }
             }
             if (!brokeEarly && !stop && loopBroken) {
-                addBubble("note", "run dihentikan karena loop command berulang - kirim 'lanjut' untuk jalur baru");
+                addBubble("note", uiText(R.string.runtime_loop_stopped));
             }
         } catch (Throwable t) {
             runErrored = true;
@@ -3481,7 +3485,7 @@ public class MainActivity extends Activity {
         } finally {
             hygieneQuiet();      // never leave a hooking server running for the next app to detect
             notifyRunFinished(runErrored ? "error" : (loopBroken ? "dihentikan guard" : ""));
-            if (stop) addBubble("note", "stopped.");
+            if (stop) addBubble("note", uiText(R.string.chat_stopped));
             boolean trailing = false;
             synchronized (messages) {
                 if (!messages.isEmpty()
@@ -3498,7 +3502,7 @@ public class MainActivity extends Activity {
             stopAgentService();
             if (restart) {
                 midRunRestartUsed = true;
-                addBubble("note", "masukan lu belum diproses \u00b7 lanjut otomatis");
+                addBubble("note", uiText(R.string.runtime_input_continuing));
                 ui.post(new Runnable() {
                     @Override public void run() { setBusyUi(false); updateSubtitle(); renderTranscript(); }
                 });
@@ -3573,7 +3577,7 @@ public class MainActivity extends Activity {
     private String runCommand(String cmd) {
         if (!store.autoRun()) {
             pending.add(cmd);
-            addBubble("note", "queued (auto-run is off): " + firstLine(cmd));
+            addBubble("note", uiText(R.string.runtime_queued, firstLine(cmd)));
             showPendingBar();
             return "[not executed: auto-run is disabled]";
         }
@@ -3596,7 +3600,7 @@ public class MainActivity extends Activity {
             int verdict = askPermission(cat, cmd);
             if (verdict == PERM_DENY) {
                 audit(cat, "DENY", cmd);
-                addBubble("note", "ditolak \u00b7 " + cat + " \u00b7 " + firstLine(cmd));
+                addBubble("note", uiText(R.string.runtime_rejected, cat, firstLine(cmd)));
                 return "[denied by the user - this command was NOT executed. Do not retry it; report and continue.]";
             }
             audit(cat, verdict == PERM_ALWAYS ? "ALLOW-ALWAYS" : (verdict == PERM_CHAT ? "ALLOW-CHAT" : "ALLOW-ONCE"), cmd);
@@ -3629,7 +3633,7 @@ public class MainActivity extends Activity {
                         + "CACHED OUTPUT:\n" + cached + "]";
             }
             if (hits + 1 == 3) {
-                addBubble("note", "guard: repeat ke-3 \u00b7 agent dipaksa ganti pendekatan \u00b7 " + firstLine(cmd));
+                addBubble("note", uiText(R.string.runtime_repeat_change, firstLine(cmd)));
             }
             return "[DUPLICATE COMMAND BLOCKED: this exact command already ran " + REPEAT_CACHE_AFTER
                     + " times. It was NOT executed again. Cached output follows.\nCACHED OUTPUT:\n"
@@ -3666,7 +3670,7 @@ public class MainActivity extends Activity {
                     + "patch. Pull your own copy into $WD (name it after the package), verify with `md5sum`, work on that.";
             if (!foreignTmpWarned) {
                 foreignTmpWarned = true;
-                addBubble("note", "workspace: ada path luar folder sesi \u00b7 dialihkan ke $WD");
+                addBubble("note", uiText(R.string.runtime_workspace_redirect));
             }
         }
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
@@ -3831,7 +3835,7 @@ public class MainActivity extends Activity {
     /** Review is default. AUTO is a deliberate, per-session override after confirmation. */
     private void styleAutoBtn() {
         if (autoBtn == null) return;
-        autoBtn.setText(autoApprove ? "AUTO" : "REVIEW");
+        autoBtn.setText(autoApprove ? uiText(R.string.chat_auto) : uiText(R.string.chat_review));
         autoBtn.setTextColor(autoApprove ? ON_ACCENT : MUTED);
         autoBtn.setBackground(round(autoApprove ? ACCENT : SURFACE, autoApprove ? ACCENT : LINE, 14));
         setButtonA11y(autoBtn, autoApprove
@@ -3841,16 +3845,16 @@ public class MainActivity extends Activity {
 
     private void confirmAutoApproval() {
         new AlertDialog.Builder(this)
-                .setTitle("Auto-approve risky actions?")
-                .setMessage("Risky install, system, data, network, and messaging commands can run without another prompt for this chat session.")
-                .setPositiveButton("Enable auto-approve", new DialogInterface.OnClickListener() {
+                .setTitle(uiText(R.string.review_auto_title))
+                .setMessage(uiText(R.string.review_auto_message))
+                .setPositiveButton(uiText(R.string.review_enable_auto), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         autoApprove = true;
                         styleAutoBtn();
-                        toast("Auto-approve enabled for this session");
+                        toast(uiText(R.string.toast_auto_enabled));
                     }
                 })
-                .setNegativeButton("Keep review", null)
+                .setNegativeButton(uiText(R.string.review_keep), null)
                 .show();
     }
 
@@ -3862,7 +3866,7 @@ public class MainActivity extends Activity {
         final int ci = Math.max(0, java.util.Arrays.asList(CAT_KEYS).indexOf(cat));
         permLatch = latch;
         permResult = res;
-        if (!appVisible) AgentService.permissionRequired(this, CAT_LABEL[ci], cmd);
+        if (!appVisible) AgentService.permissionRequired(this, uiText(CAT_LABEL_RES[ci]), cmd);
         ui.post(new Runnable() {
             @Override public void run() {
                 LinearLayout box = new LinearLayout(MainActivity.this);
@@ -3879,7 +3883,7 @@ public class MainActivity extends Activity {
                 TextView msg = tv(12, MUTED, Typeface.NORMAL);
                 String line = firstLine(cmd);
                 if (line.length() > 220) line = line.substring(0, 220) + "\u2026";
-                msg.setText("$ " + line);
+                msg.setText(uiText(R.string.shell_command, line));
                 msg.setTypeface(Typeface.MONOSPACE);
                 LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
                 mlp.setMargins(0, dp(6), 0, 0);
@@ -3911,7 +3915,7 @@ public class MainActivity extends Activity {
                 }
 
                 AlertDialog dlg = new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Butuh izin: " + CAT_LABEL[ci])
+                        .setTitle(uiText(R.string.review_permission_title, uiText(CAT_LABEL_RES[ci])))
                         .setView(box)
                         .create();
                 holder[0] = dlg;
@@ -3939,7 +3943,7 @@ public class MainActivity extends Activity {
                 pendingBar.removeAllViews();
                 if (pending.isEmpty()) { pendingBar.setVisibility(View.GONE); return; }
                 Button run = new Button(MainActivity.this);
-                run.setText("Review & run " + pending.size() + " queued command" + (pending.size() == 1 ? "" : "s"));
+                run.setText(uiText(R.string.review_run_queued_count, pending.size()));
                 run.setAllCaps(false);
                 run.setTextSize(14);
                 run.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -3955,7 +3959,7 @@ public class MainActivity extends Activity {
     }
 
     private void runPending() {
-        if (busy) { toast("Still working — stop it first"); return; }
+        if (busy) { toast(uiText(R.string.toast_busy_stop)); return; }
         final List<String> queue = new ArrayList<>(pending);
         if (queue.isEmpty()) return;
         if (!beginReviewedRun(queue, true)) return;
@@ -3966,7 +3970,7 @@ public class MainActivity extends Activity {
     /** Starts a manual, external, or queued command run with the same stop/gate state as the agent loop. */
     private boolean beginReviewedRun(final List<String> commands, final boolean echoCommands) {
         if (commands == null || commands.isEmpty()) return false;
-        if (busy) { toast("Still working — stop it first"); return false; }
+        if (busy) { toast(uiText(R.string.toast_busy_stop)); return false; }
         AiClient.resetCancel();
         RootShell.resetCancel();
         busy = true;
@@ -4011,7 +4015,7 @@ public class MainActivity extends Activity {
                     // for the command and is removed exactly when this run terminates.
                     hygieneQuiet();
                     notifyRunFinished("");
-                    if (stop) addBubble("note", "stopped.");
+                    if (stop) addBubble("note", uiText(R.string.chat_stopped));
                     busy = false;
                     armAppLockWhenRunStopsOffscreen();
                     stop = false;
@@ -4199,7 +4203,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
-            toast("Nggak ada speech service di HP ini - aktifkan Google speech recognition");
+            toast(uiText(R.string.voice_unavailable));
             return;
         }
         try {
@@ -4225,16 +4229,16 @@ public class MainActivity extends Activity {
                     setVoiceUi(false);
                     if (code == android.speech.SpeechRecognizer.ERROR_NO_MATCH
                             || code == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                        toast("Nggak kedengeran - tap mic lagi");
+                        toast(uiText(R.string.voice_no_input));
                     } else if (code == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                        toast("Butuh izin microphone");
+                        toast(uiText(R.string.voice_permission));
                     } else if (code == android.speech.SpeechRecognizer.ERROR_NETWORK
                             || code == android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
-                        toast("Speech service butuh internet (atau unduh model offline di Settings Google)");
+                        toast(uiText(R.string.voice_network));
                     } else if (code == android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
-                        toast("Speech service sibuk - coba lagi");
+                        toast(uiText(R.string.voice_busy));
                     } else {
-                        toast("Speech error " + code);
+                        toast(uiText(R.string.voice_error, code));
                     }
                 }
             });
@@ -4252,7 +4256,7 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             listening = false;
             setVoiceUi(false);
-            toast("Mic gagal: " + t);
+            toast(uiText(R.string.voice_failed, t));
         }
     }
 
@@ -4419,11 +4423,11 @@ public class MainActivity extends Activity {
     }
 
     private String iconLabel(String glyph) {
-        if ("\u2190".equals(glyph)) return "Back";
+        if ("\u2190".equals(glyph)) return uiText(R.string.common_close);
         if ("\u2630".equals(glyph)) return "Open chats";
         if ("\u22EE".equals(glyph)) return "More options";
-        if ("\u002B".equals(glyph)) return "Add";
-        if ("\u2715".equals(glyph)) return "Delete";
+        if ("\u002B".equals(glyph)) return uiText(R.string.common_add);
+        if ("\u2715".equals(glyph)) return uiText(R.string.common_delete);
         if ("\u270E".equals(glyph)) return "Edit";
         return "Action";
     }
@@ -4492,7 +4496,7 @@ public class MainActivity extends Activity {
             @Override public void onClick(View x) { showSettings(); }
         }));
         TextView t = tv(18, FG, Typeface.BOLD);
-        t.setText("Models & providers");
+        t.setText(uiText(R.string.models_title));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
         tlp.setMargins(dp(8), 0, 0, 0);
         bar.addView(t, tlp);
@@ -4517,7 +4521,7 @@ public class MainActivity extends Activity {
         list.addView(sectionLabel("PROVIDERS \u00b7 " + ps.length()), h1);
         if (ps.length() == 0) {
             TextView e = tv(12, MUTED, Typeface.NORMAL);
-            e.setText("No providers yet \u2014 tap + to add one (DeepSeek, OpenAI, OpenRouter, a local server\u2026).");
+            e.setText(uiText(R.string.models_no_providers));
             list.addView(e);
         }
         for (int i = 0; i < ps.length(); i++) {
@@ -4530,7 +4534,7 @@ public class MainActivity extends Activity {
         list.addView(sectionLabel("MODELS \u00b7 " + ms.length()), h2);
         if (ms.length() == 0) {
             TextView e = tv(12, MUTED, Typeface.NORMAL);
-            e.setText("No models yet \u2014 tap + and add one under a provider.");
+            e.setText(uiText(R.string.models_no_models));
             list.addView(e);
         }
         for (int i = 0; i < ms.length(); i++) {
@@ -4539,13 +4543,13 @@ public class MainActivity extends Activity {
         }
 
         TextView hint = tv(11, MUTED, Typeface.NORMAL);
-        hint.setText("Tap a model to use it \u00b7 TEST verifies its connection \u00b7 configure or delete as needed");
+        hint.setText(uiText(R.string.models_hint));
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
         hlp.setMargins(0, dp(6), 0, 0);
         list.addView(hint, hlp);
 
         Button addP = new Button(this);
-        addP.setText("Add provider");
+        addP.setText(uiText(R.string.models_add_provider));
         addP.setAllCaps(false);
         addP.setTextSize(15);
         addP.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -4559,7 +4563,7 @@ public class MainActivity extends Activity {
         list.addView(addP, plp);
 
         Button addM = new Button(this);
-        addM.setText("Add model");
+        addM.setText(uiText(R.string.models_add_model));
         addM.setAllCaps(false);
         addM.setTextSize(15);
         addM.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -4576,7 +4580,7 @@ public class MainActivity extends Activity {
     }
 
     private void addDialog() {
-        final String[] opts = { "Provider (base URL + API key)", "Model (under a provider)" };
+        final String[] opts = { uiText(R.string.models_add_menu_provider), uiText(R.string.models_add_menu_model) };
         new AlertDialog.Builder(this)
                 .setTitle("Add\u2026")
                 .setItems(opts, new DialogInterface.OnClickListener() {
@@ -4584,7 +4588,7 @@ public class MainActivity extends Activity {
                         if (w == 0) providerDialog(null); else modelDialog(null);
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
@@ -4600,10 +4604,10 @@ public class MainActivity extends Activity {
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         TextView t1 = tv(15, FG, Typeface.BOLD);
-        t1.setText(p.optString("name", "provider"));
+        t1.setText(p.optString("name", uiText(R.string.models_default_provider)));
         t1.setSingleLine(true);
         TextView t2 = tv(12, MUTED, Typeface.NORMAL);
-        t2.setText(p.optString("baseUrl", "") + (p.optString("apiKey", "").isEmpty() ? "" : "  \u00b7  key set"));
+        t2.setText(p.optString("apiKey", "").isEmpty() ? p.optString("baseUrl", "") : uiText(R.string.models_provider_summary, p.optString("baseUrl", ""), uiText(R.string.models_api_key_set)));
         t2.setSingleLine(true);
         t2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         info.addView(t1);
@@ -4611,18 +4615,18 @@ public class MainActivity extends Activity {
         row.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
 
         final TextView testState = testStateView();
-        TextView test = actionChip("TEST", "Test connection for provider " + p.optString("name", "provider"), new View.OnClickListener() {
+        TextView test = actionChip(uiText(R.string.common_test), uiText(R.string.models_test_provider_a11y, p.optString("name", uiText(R.string.models_default_provider))), new View.OnClickListener() {
             @Override public void onClick(View x) { testProvider(p, (TextView) x, testState); }
         });
         row.addView(test, actionChipLayout());
-        ImageButton edit = iconBtn(R.drawable.ic_tune_24, "Configure provider " + p.optString("name", "provider"), new View.OnClickListener() {
+        ImageButton edit = iconBtn(R.drawable.ic_tune_24, uiText(R.string.models_configure_provider_a11y, p.optString("name", uiText(R.string.models_default_provider))), new View.OnClickListener() {
             @Override public void onClick(View x) { providerDialog(p); }
         });
         row.addView(edit);
         TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDeleteProvider(p); }
         });
-        setButtonA11y(remove, "Delete provider " + p.optString("name", "provider"));
+        setButtonA11y(remove, uiText(R.string.models_delete_provider_a11y, p.optString("name", uiText(R.string.models_default_provider))));
         row.addView(remove);
         card.addView(row);
         addTestState(card, testState);
@@ -4647,7 +4651,7 @@ public class MainActivity extends Activity {
         on.setText("");
         on.setChecked(enabled);
         on.setMinHeight(dp(48));
-        on.setContentDescription((enabled ? "Disable " : "Enable ") + shortLabel(m));
+        on.setContentDescription(enabled ? uiText(R.string.models_disable, shortLabel(m)) : uiText(R.string.models_enable, shortLabel(m)));
         on.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
             @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
                 JSONArray arr = models();
@@ -4661,7 +4665,7 @@ public class MainActivity extends Activity {
                     store.setActiveModelId(m.optString("id"));
                 }
                 updateSubtitle();
-                toast((checked ? "Enabled \u00b7 " : "Disabled \u00b7 ") + shortLabel(m));
+                toast(checked ? uiText(R.string.models_enabled, shortLabel(m)) : uiText(R.string.models_disabled, shortLabel(m)));
                 showModels();
             }
         });
@@ -4671,7 +4675,7 @@ public class MainActivity extends Activity {
         info.setOrientation(LinearLayout.VERTICAL);
         boolean isActive = m.optString("id").equals(store.activeModelId());
         TextView title = tv(15, enabled ? FG : MUTED, Typeface.BOLD);
-        title.setText((isActive ? "\u25CF " : "") + shortLabel(m));
+        title.setText(isActive ? uiText(R.string.models_active_indicator, shortLabel(m)) : shortLabel(m));
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         JSONObject provider = providerOf(m);
@@ -4680,7 +4684,7 @@ public class MainActivity extends Activity {
         modelId.setSingleLine(true);
         modelId.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         TextView providerName = tv(11, provider == null ? DANGER : MUTED, Typeface.NORMAL);
-        providerName.setText(provider == null ? "missing provider" : provider.optString("name", "provider"));
+        providerName.setText(provider == null ? uiText(R.string.models_missing_provider) : provider.optString("name", uiText(R.string.models_default_provider)));
         providerName.setSingleLine(true);
         providerName.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(title);
@@ -4691,18 +4695,18 @@ public class MainActivity extends Activity {
         row.addView(info, ilp);
 
         final TextView testState = testStateView();
-        TextView test = actionChip("TEST", "Test model " + shortLabel(m), new View.OnClickListener() {
+        TextView test = actionChip(uiText(R.string.common_test), uiText(R.string.models_test_model_a11y, shortLabel(m)), new View.OnClickListener() {
             @Override public void onClick(View x) { testModel(m, (TextView) x, testState); }
         });
         row.addView(test, actionChipLayout());
-        ImageButton edit = iconBtn(R.drawable.ic_tune_24, "Configure model " + shortLabel(m), new View.OnClickListener() {
+        ImageButton edit = iconBtn(R.drawable.ic_tune_24, uiText(R.string.models_configure_model_a11y, shortLabel(m)), new View.OnClickListener() {
             @Override public void onClick(View x) { modelDialog(m); }
         });
         row.addView(edit);
         TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDeleteModel(m); }
         });
-        setButtonA11y(remove, "Delete model " + shortLabel(m));
+        setButtonA11y(remove, uiText(R.string.models_delete_model_a11y, shortLabel(m)));
         row.addView(remove);
         card.addView(row);
         addTestState(card, testState);
@@ -4710,8 +4714,8 @@ public class MainActivity extends Activity {
             @Override public void onClick(View x) { activateModel(m); }
         });
         setButtonA11y(card, enabled
-                ? "Use model " + shortLabel(m)
-                : "Model " + shortLabel(m) + " is disabled");
+                ? uiText(R.string.models_use_model_a11y, shortLabel(m))
+                : uiText(R.string.models_disabled_a11y, shortLabel(m)));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(8));
         card.setLayoutParams(lp);
@@ -4754,7 +4758,7 @@ public class MainActivity extends Activity {
     }
 
     private void testProvider(final JSONObject provider, TextView action, TextView state) {
-        runConnectionTest(action, state, "Provider connected", new ConnectionProbe() {
+        runConnectionTest(action, state, uiText(R.string.models_provider_connected), new ConnectionProbe() {
             @Override public AiClient.Probe run() {
                 return AiClient.probeProvider(provider.optString("baseUrl", ""),
                         provider.optString("apiKey", ""), 20);
@@ -4765,13 +4769,13 @@ public class MainActivity extends Activity {
     private void testModel(JSONObject model, TextView action, TextView state) {
         final JSONObject provider = providerOf(model);
         if (provider == null) {
-            state.setText("Test failed \u00b7 provider is missing");
+            state.setText(uiText(R.string.models_test_failed_provider_missing));
             state.setTextColor(DANGER);
             state.setVisibility(View.VISIBLE);
             return;
         }
         final String modelName = model.optString("name", "");
-        runConnectionTest(action, state, "Model connected", new ConnectionProbe() {
+        runConnectionTest(action, state, uiText(R.string.models_model_connected), new ConnectionProbe() {
             @Override public AiClient.Probe run() {
                 return AiClient.probeModel(provider.optString("baseUrl", ""),
                         provider.optString("apiKey", ""), modelName, 30);
@@ -4782,18 +4786,18 @@ public class MainActivity extends Activity {
     private void runConnectionTest(final TextView action, final TextView state,
                                    final String success, final ConnectionProbe probe) {
         if (busy) {
-            toast("Agent is working \u2014 stop it before testing a connection");
+            toast(uiText(R.string.models_agent_working));
             return;
         }
         if (connectionTestRunning) {
-            toast("Another connection test is already running");
+            toast(uiText(R.string.models_test_already_running));
             return;
         }
         connectionTestRunning = true;
         action.setEnabled(false);
         action.setAlpha(0.55f);
         action.setText("\u2026");
-        state.setText("Testing connection\u2026");
+        state.setText(uiText(R.string.models_testing));
         state.setTextColor(MUTED);
         state.setVisibility(View.VISIBLE);
 
@@ -4816,13 +4820,13 @@ public class MainActivity extends Activity {
                         if (isFinishing()) return;
                         action.setEnabled(true);
                         action.setAlpha(1f);
-                        action.setText("TEST");
+                        action.setText(uiText(R.string.common_test));
                         if (probeResult != null && probeResult.ok) {
-                            state.setText(success + " \u00b7 " + formatTestDuration(elapsed));
+                            state.setText(uiText(R.string.models_test_success, success, formatTestDuration(elapsed)));
                             state.setTextColor(OK);
                         } else {
-                            String error = probeResult == null ? "no response" : shortTestText(probeResult.error);
-                            state.setText("Test failed \u00b7 " + (error.isEmpty() ? "no response" : error));
+                            String error = probeResult == null ? uiText(R.string.models_no_response) : shortTestText(probeResult.error);
+                            state.setText(uiText(R.string.models_test_failed, error.isEmpty() ? uiText(R.string.models_no_response) : error));
                             state.setTextColor(DANGER);
                         }
                         state.setVisibility(View.VISIBLE);
@@ -4832,8 +4836,8 @@ public class MainActivity extends Activity {
         }, "connection-test").start();
     }
 
-    private static String formatTestDuration(long millis) {
-        return String.format(Locale.US, "%.1fs", millis / 1000f);
+    private String formatTestDuration(long millis) {
+        return uiText(R.string.models_test_duration, millis / 1000f);
     }
 
     private static String shortTestText(String raw) {
@@ -4842,11 +4846,11 @@ public class MainActivity extends Activity {
     }
 
     private void activateModel(JSONObject m) {
-        if (!m.optBoolean("enabled", true)) { toast("Model is disabled \u2014 flip its switch on first"); return; }
-        if (providerOf(m) == null) { toast("This model's provider is missing"); return; }
+        if (!m.optBoolean("enabled", true)) { toast(uiText(R.string.models_disabled_hint)); return; }
+        if (providerOf(m) == null) { toast(uiText(R.string.models_provider_missing_hint)); return; }
         store.setActiveModelId(m.optString("id"));
         updateSubtitle();
-        toast("Active model \u00b7 " + shortLabel(m));
+        toast(uiText(R.string.models_active, shortLabel(m)));
         showModels();
     }
 
@@ -4854,20 +4858,20 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
-        final EditText name = field(box, "Name", existing == null ? "" : existing.optString("name", ""), "DeepSeek / OpenAI / Local", false);
-        final EditText url = field(box, "Base URL", existing == null ? "" : existing.optString("baseUrl", ""), "https://api.deepseek.com", false);
-        final EditText key = field(box, "API key", existing == null ? "" : existing.optString("apiKey", ""), "sk-\u2026 (empty for local)", true);
+        final EditText name = field(box, uiText(R.string.models_field_name), existing == null ? "" : existing.optString("name", ""), "DeepSeek / OpenAI / Local", false);
+        final EditText url = field(box, uiText(R.string.models_field_base_url), existing == null ? "" : existing.optString("baseUrl", ""), "https://api.deepseek.com", false);
+        final EditText key = field(box, uiText(R.string.models_field_api_key), existing == null ? "" : existing.optString("apiKey", ""), uiText(R.string.models_api_key_hint), true);
         TextView privacy = tv(12, MUTED, Typeface.NORMAL);
-        privacy.setText("Your API key and attached images are sent to this provider. Use HTTPS except for a trusted local server.");
+        privacy.setText(uiText(R.string.models_provider_privacy));
         privacy.setLineSpacing(dp(2), 1f);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
         plp.setMargins(0, dp(14), 0, 0);
         box.addView(privacy, plp);
         final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(existing == null ? "Add provider" : "Edit provider")
+                .setTitle(existing == null ? uiText(R.string.models_add_provider) : uiText(R.string.models_edit_provider))
                 .setView(box)
-                .setPositiveButton("Save", null)
-                .setNegativeButton("Cancel", null)
+                .setPositiveButton(uiText(R.string.common_save), null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .create();
         dialog.setOnShowListener(new DialogInterface.OnShowListener() {
             @Override public void onShow(DialogInterface ignored) {
@@ -4876,7 +4880,7 @@ public class MainActivity extends Activity {
                         String nm = name.getText().toString().trim();
                         String u = url.getText().toString().trim();
                         if (!isProviderUrl(u)) {
-                            url.setError("Use a valid http(s) URL");
+                            url.setError(uiText(R.string.models_invalid_url));
                             url.requestFocus();
                             return;
                         }
@@ -4888,13 +4892,13 @@ public class MainActivity extends Activity {
                                 p.put("id", "p" + System.currentTimeMillis());
                                 ps.put(p);
                             }
-                            p.put("name", nm.isEmpty() ? "Provider" : nm);
+                            p.put("name", nm.isEmpty() ? uiText(R.string.models_default_provider) : nm);
                             p.put("baseUrl", u);
                             p.put("apiKey", key.getText().toString().trim());
                             saveProviders(ps);
-                            toast("Provider saved");
+                            toast(uiText(R.string.models_provider_saved));
                         } catch (Throwable t) {
-                            toast("Save failed: " + t);
+                            toast(uiText(R.string.models_save_failed, t));
                             return;
                         }
                         dialog.dismiss();
@@ -4918,13 +4922,13 @@ public class MainActivity extends Activity {
 
     private void modelDialog(final JSONObject existing) {
         JSONArray ps = providers();
-        if (ps.length() == 0) { toast("Add a provider first"); providerDialog(null); return; }
+        if (ps.length() == 0) { toast(uiText(R.string.models_add_provider_first)); providerDialog(null); return; }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(4));
-        final EditText name = field(box, "Model ID", existing == null ? "" : existing.optString("name", ""), "deepseek-flash / gpt-4o-mini", false);
-        final EditText label = field(box, "Label", existing == null ? "" : existing.optString("label", ""), "shown in the app (optional)", false);
-        TextView providerLabel = sectionLabel("PROVIDER");
+        final EditText name = field(box, uiText(R.string.models_field_model_id), existing == null ? "" : existing.optString("name", ""), "deepseek-flash / gpt-4o-mini", false);
+        final EditText label = field(box, uiText(R.string.models_field_label), existing == null ? "" : existing.optString("label", ""), uiText(R.string.models_label_hint), false);
+        TextView providerLabel = sectionLabel(uiText(R.string.models_provider_section));
         box.addView(providerLabel);
         final android.widget.Spinner sp = new android.widget.Spinner(this);
         sp.setId(View.generateViewId());
@@ -4934,7 +4938,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < ps.length(); i++) {
             JSONObject p = ps.optJSONObject(i);
             if (p == null) continue;
-            pnames.add(p.optString("name", "provider"));
+            pnames.add(p.optString("name", uiText(R.string.models_default_provider)));
             pids.add(p.optString("id"));
         }
         sp.setAdapter(new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, pnames));
@@ -4946,23 +4950,23 @@ public class MainActivity extends Activity {
         slp.setMargins(0, dp(6), 0, dp(4));
         box.addView(sp, slp);
         final Switch sees = new Switch(this);
-        sees.setText("Sees images");
+        sees.setText(uiText(R.string.models_sees_images));
         sees.setTextColor(FG);
         sees.setTextSize(14);
         sees.setMinHeight(dp(48));
         sees.setChecked(existing == null || existing.optBoolean("vision", true));
-        sees.setContentDescription("Send attached images to this model");
+        sees.setContentDescription(uiText(R.string.models_sees_images_a11y));
         box.addView(sees, new LinearLayout.LayoutParams(-1, -2));
         TextView imageNote = tv(12, MUTED, Typeface.NORMAL);
-        imageNote.setText("When enabled, attached image contents are sent to the selected provider.");
+        imageNote.setText(uiText(R.string.models_images_note));
         LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, -2);
         imageLp.setMargins(0, 0, 0, dp(8));
         box.addView(imageNote, imageLp);
         final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(existing == null ? "Add model" : "Edit model")
+                .setTitle(existing == null ? uiText(R.string.models_add_model) : uiText(R.string.models_edit_model))
                 .setView(box)
-                .setPositiveButton("Save", null)
-                .setNegativeButton("Cancel", null)
+                .setPositiveButton(uiText(R.string.common_save), null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .create();
         dialog.setOnShowListener(new DialogInterface.OnShowListener() {
             @Override public void onShow(DialogInterface ignored) {
@@ -4970,13 +4974,13 @@ public class MainActivity extends Activity {
                     @Override public void onClick(View x) {
                         String n = name.getText().toString().trim();
                         if (n.isEmpty()) {
-                            name.setError("Model ID is required");
+                            name.setError(uiText(R.string.models_required_model_id));
                             name.requestFocus();
                             return;
                         }
                         int sel = sp.getSelectedItemPosition();
                         if (sel < 0 || sel >= pids.size()) {
-                            toast("Pick a provider");
+                            toast(uiText(R.string.models_pick_provider));
                             return;
                         }
                         try {
@@ -4994,9 +4998,9 @@ public class MainActivity extends Activity {
                             m.put("vision", sees.isChecked());
                             saveModels(ms);
                             if (store.activeModelId().isEmpty()) store.setActiveModelId(m.optString("id"));
-                            toast("Model saved");
+                            toast(uiText(R.string.models_model_saved));
                         } catch (Throwable t) {
-                            toast("Save failed: " + t);
+                            toast(uiText(R.string.models_save_failed, t));
                             return;
                         }
                         dialog.dismiss();
@@ -5016,9 +5020,9 @@ public class MainActivity extends Activity {
             if (m != null && p.optString("id").equals(m.optString("providerId"))) n++;
         }
         new AlertDialog.Builder(this)
-                .setTitle("Delete provider?")
+                .setTitle(uiText(R.string.models_delete_provider_title))
                 .setMessage(p.optString("name", "") + (n > 0 ? " \u00b7 also deletes " + n + " model(s)" : ""))
-                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                .setPositiveButton(uiText(R.string.common_delete), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         JSONArray ps = providers();
                         JSONArray outP = new JSONArray();
@@ -5038,15 +5042,15 @@ public class MainActivity extends Activity {
                         showModels();
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
     private void confirmDeleteModel(final JSONObject m) {
         new AlertDialog.Builder(this)
-                .setTitle("Delete model?")
+                .setTitle(uiText(R.string.models_delete_model_title))
                 .setMessage(shortLabel(m) + "  \u00b7  " + m.optString("name", ""))
-                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                .setPositiveButton(uiText(R.string.common_delete), new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         JSONArray ms = models();
                         JSONArray out = new JSONArray();
@@ -5059,7 +5063,7 @@ public class MainActivity extends Activity {
                         showModels();
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
@@ -5074,9 +5078,9 @@ public class MainActivity extends Activity {
     }
 
     private void openAttachPicker() {
-        final String[] opts = { "Image / photo", "Any file" };
+        final String[] opts = { uiText(R.string.attachment_image), uiText(R.string.attachment_file) };
         new AlertDialog.Builder(this)
-                .setTitle("Add attachment")
+                .setTitle(uiText(R.string.a11y_add_attachment))
                 .setItems(opts, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int w) {
                         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
@@ -5085,17 +5089,17 @@ public class MainActivity extends Activity {
                         try {
                             startActivityForResult(i, REQ_ATTACH);
                         } catch (Throwable t) {
-                            toast("No file picker: " + t);
+                            toast(uiText(R.string.attachment_no_picker, t));
                         }
                     }
                 })
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .show();
     }
 
     /** copy the picked file into the app's external files dir so the root shell can read it */
     private void saveAttachment(final android.net.Uri uri) {
-        toast("Copying attachment\u2026");
+        toast(uiText(R.string.attachment_copying));
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
@@ -5134,12 +5138,12 @@ public class MainActivity extends Activity {
                             pendingPath = path;
                             pendingName = fname;
                             showAttachChip(label);
-                            toast("Attached \u00b7 " + fname);
+                            toast(uiText(R.string.attachment_attached, fname));
                         }
                     });
                 } catch (final Throwable t) {
                     ui.post(new Runnable() {
-                        @Override public void run() { toast("Attach failed: " + t); }
+                        @Override public void run() { toast(uiText(R.string.attachment_failed, t)); }
                     });
                 }
             }
@@ -5157,7 +5161,7 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         TextView t = tv(12, FG, Typeface.NORMAL);
-        t.setText("\uD83D\uDCCE  " + label);
+        t.setText(uiText(R.string.attachment_chip, label));
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         row.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
@@ -5168,18 +5172,18 @@ public class MainActivity extends Activity {
                 attachBar.setVisibility(View.GONE);
             }
         });
-        setButtonA11y(remove, "Remove attachment " + (pendingName == null ? "" : pendingName));
+        setButtonA11y(remove, uiText(R.string.a11y_remove_attachment, pendingName == null ? "" : pendingName));
         row.addView(remove);
         chip.addView(row, new LinearLayout.LayoutParams(-1, -2));
 
         String host = hostOf(activeBaseUrl());
         TextView privacy = tv(11, MUTED, Typeface.NORMAL);
         if (host.isEmpty()) {
-            privacy.setText("Stored on this device until you select a provider and send a message.");
+            privacy.setText(uiText(R.string.attachment_stored_local));
         } else if (isImageFile(pendingName) && activeModelVision()) {
-            privacy.setText("Image contents will be sent to " + host + " when you send.");
+            privacy.setText(uiText(R.string.attachment_image_send, host));
         } else {
-            privacy.setText("Only this file path will be sent to " + host + " when you send.");
+            privacy.setText(uiText(R.string.attachment_path_send, host));
         }
         privacy.setLineSpacing(dp(1), 1f);
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, -2);
@@ -5242,7 +5246,7 @@ public class MainActivity extends Activity {
         box.setPadding(dp(16), dp(8), dp(16), dp(4));
 
         final EditText search = new EditText(this);
-        search.setHint("Search installed apps\u2026");
+        search.setHint(uiText(R.string.mention_search_hint));
         search.setHintTextColor(MUTED);
         search.setTextColor(FG);
         search.setSingleLine(true);
@@ -5259,6 +5263,8 @@ public class MainActivity extends Activity {
         lv.setPadding(0, dp(2), 0, dp(2));
         lv.setClipToPadding(false);
         final ArrayList<AppEntry> hits = new ArrayList<>();
+        final int appPickerIconId = View.generateViewId();
+        final int appPickerLabelId = View.generateViewId();
         final BaseAdapter adapter = new BaseAdapter() {
             @Override public int getCount() { return hits.size(); }
             @Override public Object getItem(int i) { return hits.get(i); }
@@ -5281,12 +5287,12 @@ public class MainActivity extends Activity {
                     card.setPadding(dp(10), dp(8), dp(12), dp(8));
                     card.setBackground(ripple(SURFACE, LINE, 14));
                     ImageView iv = new ImageView(MainActivity.this);
-                    iv.setId(1001);
+                    iv.setId(appPickerIconId);
                     card.addView(iv, new LinearLayout.LayoutParams(dp(40), dp(40)));
                     LinearLayout col = new LinearLayout(MainActivity.this);
                     col.setOrientation(LinearLayout.VERTICAL);
                     TextView t1 = tv(15, FG, Typeface.BOLD);
-                    t1.setId(1002);
+                    t1.setId(appPickerLabelId);
                     t1.setSingleLine(true);
                     t1.setEllipsize(TextUtils.TruncateAt.END);
                     col.addView(t1);
@@ -5296,8 +5302,8 @@ public class MainActivity extends Activity {
                     row.addView(card);
                 }
                 AppEntry e = hits.get(pos);
-                ((ImageView) row.findViewById(1001)).setImageDrawable(iconFor(e));
-                ((TextView) row.findViewById(1002)).setText(e.label);
+                ((ImageView) row.findViewById(appPickerIconId)).setImageDrawable(iconFor(e));
+                ((TextView) row.findViewById(appPickerLabelId)).setText(e.label);
                 return row;
             }
         };
@@ -5342,7 +5348,7 @@ public class MainActivity extends Activity {
         final AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("Mention an app")
                 .setView(box)
-                .setNegativeButton("Cancel", null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
                 .create();
         lv.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
             @Override public void onItemClick(android.widget.AdapterView<?> p, View v, int pos, long id) {

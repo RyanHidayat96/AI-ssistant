@@ -337,7 +337,7 @@ final class OverlayView {
         body.setBackground(round(TOOL_BG, LINE, 10));
         body.setPadding(dp(8), dp(6), dp(8), dp(6));
         scroll.addView(body);
-        jumpPill = chip("\u2193 1 pesan", ACCENT, ON_ACCENT, new Runnable() {
+        jumpPill = chip(text(R.string.overlay_new_messages, 1), ACCENT, ON_ACCENT, new Runnable() {
             @Override public void run() {
                 atBottom = true;
                 pendingNew = 0;
@@ -368,7 +368,7 @@ final class OverlayView {
         row.setLayoutParams(rlp);
 
         input = new android.widget.EditText(ctx);
-        input.setHint(mainAlive() ? "Ketik prompt\u2026" : "buka app dulu");
+        input.setHint(mainAlive() ? text(R.string.overlay_input_hint) : text(R.string.overlay_open_app_hint));
         input.setHintTextColor(MUTED);
         input.setTextColor(FG);
         input.setTextSize(13);
@@ -442,21 +442,21 @@ final class OverlayView {
                 MainActivity host = MainActivity.instance;
                 if (host != null) host.overlayStop();
                 else OverlayHub.requestStop();
-                flash("dihentikan…");
+                flash(text(R.string.overlay_stopped));
                 refreshComposerAction();
             }
             return;
         }
         MainActivity host = MainActivity.instance;
         if (host == null) {
-            OverlayHub.line("(app-nya sudah ditutup - buka AI-ssistant dulu)");
+            OverlayHub.line(text(R.string.overlay_main_closed));
             return;
         }
         input.setText("");
         OverlayHub.line("> " + text);
         useIme(false);            // give the input focus straight back to the app being driven
         try { host.overlaySend(text); }
-        catch (Throwable t) { OverlayHub.line("gagal kirim: " + t); }
+        catch (Throwable t) { OverlayHub.line(text(R.string.overlay_send_failed, t)); }
     }
 
     private void refreshComposerAction() {
@@ -471,13 +471,13 @@ final class OverlayView {
             actionBtn.setImageTintList(ColorStateList.valueOf(ON_ACCENT));
             actionBtn.setBackground(circle(DANGER));
             actionBtn.setAlpha(1f);
-            actionBtn.setContentDescription("Stop current run");
+            actionBtn.setContentDescription(text(R.string.a11y_stop_run));
         } else {
             actionBtn.setImageResource(R.drawable.ic_arrow_upward_24);
             actionBtn.setImageTintList(ColorStateList.valueOf(next == 1 ? ON_ACCENT : MUTED));
             actionBtn.setBackground(circle(next == 1 ? ACCENT : LINE));
             actionBtn.setAlpha(next == 1 ? 1f : .78f);
-            actionBtn.setContentDescription("Send message");
+            actionBtn.setContentDescription(text(R.string.a11y_send_message));
         }
     }
 
@@ -738,7 +738,7 @@ final class OverlayView {
             refreshComposerAction();
             String st = OverlayHub.status();
             if (statusView != null) {
-                statusView.setText(st == null || st.isEmpty() ? "AI-ssistant \u00b7 jalan" : st);
+                statusView.setText(st == null || st.isEmpty() ? text(R.string.overlay_default_status) : st);
             }
             if (collapsed || body == null) return;
             ArrayList<String> lines = OverlayHub.all();
@@ -752,7 +752,7 @@ final class OverlayView {
             int from = Math.max(0, lines.size() - 250);      // keep the panel light on huge chats
             body.removeAllViews();
             if (lines.isEmpty()) {
-                body.addView(noteLine("menunggu perintah\u2026"));
+                body.addView(noteLine(text(R.string.overlay_waiting)));
             } else {
                 for (int i = from; i < lines.size(); i++) {
                     body.addView(messageView(lines.get(i)));
@@ -769,7 +769,7 @@ final class OverlayView {
                     if (wasAtBottom) pendingNew = 0;
                     jumpPill.setVisibility(View.GONE);
                 } else {
-                    jumpPill.setText("\u2193 " + pendingNew + " pesan baru");
+                    jumpPill.setText(text(R.string.overlay_new_messages, pendingNew));
                     jumpPill.setVisibility(View.VISIBLE);
                 }
             }
@@ -781,8 +781,8 @@ final class OverlayView {
     private View messageView(String raw) {
         String s = raw == null ? "" : raw.trim();
         if (s.startsWith("> ")) return chatBubble(s.substring(2), true);
-        if (s.startsWith("$ ")) return toolCard("Perintah", s, true);
-        if (s.startsWith("| ")) return toolCard("Output", s.substring(2), false);
+        if (s.startsWith("$ ")) return toolCard(text(R.string.overlay_command), s, true);
+        if (s.startsWith("| ")) return toolCard(text(R.string.overlay_output), s.substring(2), false);
         if (s.startsWith("\u00b7 ")) return noteLine(s.substring(2));
         if (s.startsWith("(") || s.startsWith("gagal ")) return noteLine(s);
         return chatBubble(s, false);
@@ -893,6 +893,9 @@ final class OverlayView {
         return g;
     }
 
+    private String text(int resourceId, Object... args) {
+        return args == null || args.length == 0 ? ctx.getString(resourceId) : ctx.getString(resourceId, args);
+    }
     private int dp(int v) {
         return (int) (v * ctx.getResources().getDisplayMetrics().density + 0.5f);
     }

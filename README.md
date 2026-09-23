@@ -10,8 +10,19 @@ back to the model, so it can continue, verify and recover on its own.
   (targetSdk 35).
 - JDK 17 or newer.
 - Android SDK: build-tools 35.0.0 and platform android-35.
-- No Gradle. `build.ps1` drives aapt2, javac, d8, zipalign and apksigner directly.
+- Gradle Wrapper 8.9 with Android Gradle Plugin 8.7.3. The existing `build.ps1` direct pipeline remains available.
 
+## Gradle
+
+```powershell
+.\gradlew.bat :app:assembleDebug      # app\build\outputs\apk\debug\app-debug.apk
+.\gradlew.bat :app:assembleRelease    # app\build\outputs\apk\release\app-release.apk
+```
+
+Set the Android SDK path in `local.properties` (`sdk.dir=...`); Android Studio creates this file
+for you. Copy `keystore.properties.example` to `keystore.properties` for a release signed with your
+own key. Both local files are ignored by Git. Gradle reads the app source from `app-src/`, so no
+source tree has been duplicated.
 ## Build
 
 ```powershell

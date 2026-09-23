@@ -104,13 +104,23 @@ foreach ($d in "classes", "dex", "gen", "apk", "res") {
   New-Item -ItemType Directory -Force -Path (Join-Path $Build $d) | Out-Null
 }
 
+# AGP uses `namespace`; standalone aapt2 still requires package on its input manifest.
+# Keep source manifest modern, inject the identical package only into this build-local copy.
+$ManifestForAapt = Join-Path $Build "manifest\AndroidManifest.xml"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ManifestForAapt) | Out-Null
+$manifestText = [IO.File]::ReadAllText((Join-Path $Src "manifest\AndroidManifest.xml"))
+if ($manifestText -notmatch '<manifest[^>]*\bpackage=') {
+  $manifestText = [regex]::Replace($manifestText, '<manifest(\s)', '<manifest package="com.aissistant.app"$1', 1)
+}
+[IO.File]::WriteAllText($ManifestForAapt, $manifestText, [Text.UTF8Encoding]::new($false))
+
 Say "[0/6] aapt2 resources -> R.java (javac needs it, so it must run before the compile)"
 & $aapt2 compile --dir (Join-Path $Src "res") -o (Join-Path $Build "res.zip")
 if ($LASTEXITCODE -ne 0) { Die "aapt2 compile failed" }
 & $aapt2 link -o (Join-Path $Build "apk\base.apk") -I $AJar `
-  --manifest (Join-Path $Src "manifest\AndroidManifest.xml") `
+  --manifest $ManifestForAapt `
   --java (Join-Path $Build "gen") `
-  --min-sdk-version 26 --target-sdk-version 35 --no-version-vectors (Join-Path $Build "res.zip")
+  --rename-manifest-package com.aissistant.app --custom-package com.aissistant.app --min-sdk-version 26 --target-sdk-version 35 --no-version-vectors (Join-Path $Build "res.zip")
 if ($LASTEXITCODE -ne 0) { Die "aapt2 link failed" }
 $genR = Get-ChildItem (Join-Path $Build "gen") -Recurse -Filter R.java -ErrorAction SilentlyContinue
 if (-not $genR) { Die "aapt2 did not generate R.java under $Build\gen" }
@@ -132,9 +142,9 @@ Say "[3/6] aapt2 compile + link"
 & $aapt2 compile --dir (Join-Path $Src "res") -o (Join-Path $Build "res.zip")
 if ($LASTEXITCODE -ne 0) { Die "aapt2 compile failed" }
 & $aapt2 link -o (Join-Path $Build "apk\base.apk") -I $AJar `
-  --manifest (Join-Path $Src "manifest\AndroidManifest.xml") `
+  --manifest $ManifestForAapt `
   --java (Join-Path $Build "gen") `
-  --min-sdk-version 26 --target-sdk-version 35 --no-version-vectors (Join-Path $Build "res.zip")
+  --rename-manifest-package com.aissistant.app --custom-package com.aissistant.app --min-sdk-version 26 --target-sdk-version 35 --no-version-vectors (Join-Path $Build "res.zip")
 if ($LASTEXITCODE -ne 0) { Die "aapt2 link failed" }
 
 Say "[4/6] injecting classes.dex"
