@@ -14,6 +14,9 @@ import android.content.SharedPreferences;
 final class Store {
 
     private static final String PREF = "aissistant";
+    static final String LANGUAGE_SYSTEM = "system";
+    static final String LANGUAGE_INDONESIAN = "id";
+    static final String LANGUAGE_ENGLISH = "en";
     private final SharedPreferences sp;
 
     Store(Context ctx) {
@@ -39,6 +42,21 @@ final class Store {
                 .putBoolean("autoRun", autoRun)
                 .putInt("thinking", Math.max(0, Math.min(3, thinking)))
                 .apply();
+    }
+
+    // ---- language -----------------------------------------------------------------------
+
+    String languageMode() {
+        return normalizeLanguageMode(sp.getString("languageMode", LANGUAGE_SYSTEM));
+    }
+
+    void setLanguageMode(String mode) {
+        sp.edit().putString("languageMode", normalizeLanguageMode(mode)).apply();
+    }
+
+    private static String normalizeLanguageMode(String mode) {
+        if (LANGUAGE_INDONESIAN.equals(mode) || LANGUAGE_ENGLISH.equals(mode)) return mode;
+        return LANGUAGE_SYSTEM;
     }
 
     // ---- app lock -----------------------------------------------------------------------

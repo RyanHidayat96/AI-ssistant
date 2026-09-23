@@ -54,6 +54,11 @@
     <string name="a11y_delete_chat">Hapus chat %1$s</string>
     <string name="a11y_open_chat">Buka chat %1$s</string>
     <string name="settings_manage_models">Kelola model &amp; provider</string>
+    <string name="settings_section_language">BAHASA</string>
+    <string name="settings_language_help">Pilih bahasa untuk app ini. Sistem mengikuti bahasa Android Anda.</string>
+    <string name="settings_language_system">Sistem</string>
+    <string name="settings_language_indonesian">Indonesia</string>
+    <string name="settings_language_english">Inggris</string>
     <string name="settings_section_agent">AGENT</string>
     <string name="settings_timeout_label">Timeout detik (20–1800)</string>
     <string name="settings_temperature_label">Temperature (0–100)</string>
@@ -66,7 +71,7 @@
     <string name="settings_auto_run">Jalankan perintah aman otomatis</string>
     <string name="settings_auto_help">Mati secara default. Tindakan berisiko tetap perlu review kecuali AUTO aktif untuk chat ini.</string>
     <string name="settings_section_app_lock">KUNCI APP</string>
-    <string name="settings_lock_enabled">Password aktif. App meminta buka kunci setelah Anda meninggalkannya saat idle.</string>
+    <string name="settings_lock_enabled">Password aktif. Diminta setelah meninggalkan app saat idle, kecuali kembali dari panel floating.</string>
     <string name="settings_lock_disabled">Password belum aktif.</string>
     <string name="settings_require_password">Minta password saat membuka app</string>
     <string name="settings_change_password">Ganti password</string>
@@ -80,7 +85,7 @@
     <string name="lock_change_title">Ganti password</string>
     <string name="lock_enable_title">Aktifkan kunci app</string>
     <string name="lock_change_message">Masukkan password lama sebelum menggantinya.</string>
-    <string name="lock_enable_message">Password diminta saat app dibuka kembali tanpa sesi agent aktif.</string>
+    <string name="lock_enable_message">Password diminta saat app dibuka kembali tanpa sesi app aktif.</string>
     <string name="lock_min_password">Minimal %1$d karakter</string>
     <string name="lock_password_mismatch">Password tidak sama</string>
     <string name="lock_save_error">Password tidak dapat disimpan</string>

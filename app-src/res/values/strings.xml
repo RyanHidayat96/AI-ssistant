@@ -54,6 +54,11 @@
     <string name="a11y_delete_chat">Delete chat %1$s</string>
     <string name="a11y_open_chat">Open chat %1$s</string>
     <string name="settings_manage_models">Manage models &amp; providers</string>
+    <string name="settings_section_language">LANGUAGE</string>
+    <string name="settings_language_help">Choose language for this app. System follows your Android language.</string>
+    <string name="settings_language_system">System</string>
+    <string name="settings_language_indonesian">Indonesian</string>
+    <string name="settings_language_english">English</string>
     <string name="settings_section_agent">AGENT</string>
     <string name="settings_timeout_label">Timeout seconds (20–1800)</string>
     <string name="settings_temperature_label">Temperature (0–100)</string>
@@ -66,7 +71,7 @@
     <string name="settings_auto_run">Run safe commands automatically</string>
     <string name="settings_auto_help">Off by default. Risky actions still need review unless you enable AUTO for this chat.</string>
     <string name="settings_section_app_lock">APP LOCK</string>
-    <string name="settings_lock_enabled">Password active. App asks to unlock after you leave while idle.</string>
+    <string name="settings_lock_enabled">Password active. Asked after leaving while idle, except when returning from the floating panel.</string>
     <string name="settings_lock_disabled">Password is not active.</string>
     <string name="settings_require_password">Require password when opening app</string>
     <string name="settings_change_password">Change password</string>
@@ -80,7 +85,7 @@
     <string name="lock_change_title">Change password</string>
     <string name="lock_enable_title">Enable app lock</string>
     <string name="lock_change_message">Enter current password before changing it.</string>
-    <string name="lock_enable_message">Password is required when app opens again without an active agent session.</string>
+    <string name="lock_enable_message">Password is required when app opens again without an active in-app session.</string>
     <string name="lock_min_password">Minimum %1$d characters</string>
     <string name="lock_password_mismatch">Passwords do not match</string>
     <string name="lock_save_error">Password cannot be saved</string>

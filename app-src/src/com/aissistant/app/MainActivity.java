@@ -2,9 +2,11 @@ package com.aissistant.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -282,14 +284,35 @@ public class MainActivity extends Activity {
     private int screenBeforeLock;
     private Intent deferredIntent;
     private android.os.CancellationSignal fingerprintCancellation;
+    /** Locale changes recreate this activity. Keep an already-unlocked in-process session intact. */
+    private boolean changingLanguage;
+    private static volatile boolean unlockAfterLanguageChange;
 
     // ==================== lifecycle ====================
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(localizedBaseContext(base));
+    }
+
+    /** Android 13+ owns per-app locales; older Android gets an equivalent local configuration. */
+    private static Context localizedBaseContext(Context base) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) return base;
+        String mode = base.getSharedPreferences("aissistant", Context.MODE_PRIVATE)
+                .getString("languageMode", Store.LANGUAGE_SYSTEM);
+        if (!Store.LANGUAGE_INDONESIAN.equals(mode) && !Store.LANGUAGE_ENGLISH.equals(mode)) return base;
+        Configuration config = new Configuration(base.getResources().getConfiguration());
+        config.setLocale(Locale.forLanguageTag(mode));
+        return base.createConfigurationContext(config);
+    }
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         store = new Store(this);
-        appUnlocked = !store.appLockEnabled();
+        boolean retainedLanguageSession = unlockAfterLanguageChange;
+        unlockAfterLanguageChange = false;
+        appUnlocked = retainedLanguageSession || !store.appLockEnabled();
         jrnl = new SessionLog(getFilesDir());
         instance = this;
         startupHygiene();          // a killed run / reboot must not leave the phone flagged
@@ -369,7 +392,7 @@ public class MainActivity extends Activity {
         stopVoiceInput(false);      // never hold the mic open in the background
         // A quick app switch may pause without reaching onStop before it comes back.
         // Lock here, except while a user-started agent session is still working.
-        if (!busy) armAppLock();
+        if (!busy && !changingLanguage && !overlaySessionActive()) armAppLock();
         // the agent may be driving another app from under us: keep the run visible
         try {
             android.util.Log.i("AIssistant", "onStop: busy=" + busy + " canDraw=" + OverlayView.canDraw(this));
@@ -403,7 +426,7 @@ public class MainActivity extends Activity {
         super.onStop();
         appVisible = false;
         android.util.Log.i("AIssistant", "onStop: appVisible=false");
-        if (!busy) armAppLock();
+        if (!busy && !changingLanguage && !overlaySessionActive()) armAppLock();
         persist();
     }
 
@@ -413,6 +436,8 @@ public class MainActivity extends Activity {
         appVisible = true;
         android.util.Log.i("AIssistant", "onStart: appVisible=true");
         // back in the app: the panel would only duplicate what is on screen
+        boolean returningFromOverlay = overlaySessionActive();
+        if (returningFromOverlay) lockOnForeground = false;
         try { OverlayView.hide(); } catch (Throwable ignored) { }
         if (lockOnForeground && !busy && store != null && store.appLockEnabled()) {
             ui.post(new Runnable() {
@@ -524,7 +549,13 @@ public class MainActivity extends Activity {
 
     /** A run may finish while another app is visible; lock before this app is opened again. */
     private void armAppLockWhenRunStopsOffscreen() {
-        if (!appVisible) armAppLock();
+        if (!appVisible && !overlaySessionActive()) armAppLock();
+    }
+
+    /** The floating panel is part of the same authenticated app session, not another app launch. */
+    private boolean overlaySessionActive() {
+        try { return OverlayView.visible(); }
+        catch (Throwable ignored) { return false; }
     }
 
     private boolean requireAppUnlock() {
@@ -935,6 +966,43 @@ public class MainActivity extends Activity {
         sc.addView(panel, new ScrollView.LayoutParams(-1, -2));
         v.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1));
 
+        LinearLayout.LayoutParams languageHeaderLp = new LinearLayout.LayoutParams(-1, -2);
+        languageHeaderLp.setMargins(0, dp(16), 0, dp(6));
+        panel.addView(sectionLabel(uiText(R.string.settings_section_language)), languageHeaderLp);
+        TextView languageHelp = tv(12, MUTED, Typeface.NORMAL);
+        languageHelp.setText(uiText(R.string.settings_language_help));
+        panel.addView(languageHelp, new LinearLayout.LayoutParams(-1, -2));
+
+        final String selectedLanguage = selectedLanguageMode();
+        final String[] languageModes = {
+                Store.LANGUAGE_SYSTEM, Store.LANGUAGE_INDONESIAN, Store.LANGUAGE_ENGLISH
+        };
+        final int[] languageLabels = {
+                R.string.settings_language_system,
+                R.string.settings_language_indonesian,
+                R.string.settings_language_english
+        };
+        LinearLayout languageRow = new LinearLayout(this);
+        languageRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams languageRowLp = new LinearLayout.LayoutParams(-1, dp(48));
+        languageRowLp.setMargins(0, dp(8), 0, 0);
+        for (int i = 0; i < languageModes.length; i++) {
+            final String mode = languageModes[i];
+            Button button = new Button(this);
+            button.setText(uiText(languageLabels[i]));
+            button.setAllCaps(false);
+            button.setTextSize(13);
+            button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            styleThinking(button, mode.equals(selectedLanguage));
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { applyLanguageMode(mode); }
+            });
+            LinearLayout.LayoutParams buttonLp = new LinearLayout.LayoutParams(0, -1, 1);
+            buttonLp.setMargins(0, 0, i < languageModes.length - 1 ? dp(8) : 0, 0);
+            languageRow.addView(button, buttonLp);
+        }
+        panel.addView(languageRow, languageRowLp);
+
         Button manage = new Button(this);
         manage.setText(uiText(R.string.settings_manage_models));
         manage.setAllCaps(false);
@@ -1104,6 +1172,49 @@ public class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(v, new LinearLayout.LayoutParams(-1, 0, 1));
         root.requestApplyInsets();
+    }
+
+    /** Current visual choice. Android 13 Settings and this picker share one LocaleManager value. */
+    private String selectedLanguageMode() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                android.app.LocaleManager manager = (android.app.LocaleManager)
+                        getSystemService(Context.LOCALE_SERVICE);
+                android.os.LocaleList locales = manager == null ? null : manager.getApplicationLocales();
+                if (locales != null && !locales.isEmpty()) {
+                    String language = locales.get(0).getLanguage();
+                    if (Store.LANGUAGE_INDONESIAN.equals(language)) return Store.LANGUAGE_INDONESIAN;
+                    if (Store.LANGUAGE_ENGLISH.equals(language)) return Store.LANGUAGE_ENGLISH;
+                }
+                return Store.LANGUAGE_SYSTEM;
+            } catch (Throwable ignored) { }
+        }
+        return store == null ? Store.LANGUAGE_SYSTEM : store.languageMode();
+    }
+
+    private void applyLanguageMode(String mode) {
+        if (store == null || mode.equals(selectedLanguageMode())) return;
+        store.setLanguageMode(mode);
+        changingLanguage = true;
+        if (appUnlocked) {
+            unlockAfterLanguageChange = true;
+            ui.postDelayed(new Runnable() {
+                @Override public void run() { unlockAfterLanguageChange = false; }
+            }, 3000);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            try {
+                android.app.LocaleManager manager = (android.app.LocaleManager)
+                        getSystemService(Context.LOCALE_SERVICE);
+                if (manager != null) {
+                    manager.setApplicationLocales(Store.LANGUAGE_SYSTEM.equals(mode)
+                            ? android.os.LocaleList.getEmptyLocaleList()
+                            : android.os.LocaleList.forLanguageTags(mode));
+                    return;
+                }
+            } catch (Throwable ignored) { }
+        }
+        recreate();
     }
 
     private EditText dialogPasswordField(LinearLayout box, String label) {
