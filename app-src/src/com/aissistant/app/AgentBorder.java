@@ -44,6 +44,9 @@ public final class AgentBorder {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             if (!drivesTargetApp(c)) return false;
+            // A border is still an application overlay. During a strict agent run it would leak
+            // into screenshots/window dumps and participate in obscuring-opacity input checks.
+            if (OverlayHub.agentIsolation()) return false;
             android.util.Log.i("AIssistant", "border operation start: "
                     + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
@@ -69,8 +72,7 @@ public final class AgentBorder {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             if (!drivesTargetApp(c)) return false;
-            OverlayView.prepareForAgent(ctx, observesTargetScreen(c));
-            return true;
+            return OverlayView.ensureAgentIsolation(ctx) && suppressForAgentRun();
         } catch (Throwable ignored) { }
         return false;
     }
@@ -80,6 +82,7 @@ public final class AgentBorder {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             if (!drivesTargetApp(c)) return;
+            if (OverlayHub.agentIsolation()) return;
             OverlayView.finishAgentObservation(ctx);
         } catch (Throwable ignored) { }
     }
@@ -88,13 +91,40 @@ public final class AgentBorder {
         return c.matches("(?s).*\\bmonkey\\b.*")
                 || c.matches("(?s).*\\bam\\s+start\\b.*")
                 || c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
+                || c.matches("(?s).*\\b(sendevent|uinput)\\b.*")
+                || c.matches("(?s).*\\bservice\\s+call\\s+input\\b.*")
                 || c.matches("(?s).*\\bcmd\\s+activity\\b.*")
+                || c.matches("(?s).*\\bdumpsys\\s+(window|activity|input|accessibility|surfaceflinger)\\b.*")
+                || c.matches("(?s).*\\bcmd\\s+(window|accessibility|input)\\b.*")
                 || c.matches("(?s).*\\bscreencap\\b.*")
                 || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
     }
 
     private static boolean observesTargetScreen(String c) {
-        return c.matches("(?s).*\\bscreencap\\b.*");
+        return c.matches("(?s).*\\b(screencap|uiautomator)\\b.*")
+                || c.matches("(?s).*\\bdumpsys\\s+(window|activity|input|accessibility|surfaceflinger)\\b.*");
+    }
+
+    /**
+     * Synchronously remove this secondary app-owned surface before an agent command. Returning
+     * false lets the caller fail closed if the main thread is unavailable instead of injecting
+     * touch through a stale full-screen SAW window.
+     */
+    static boolean suppressForAgentRun() {
+        final java.util.concurrent.atomic.AtomicBoolean done =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        boolean completed = onMainAndWait(new Runnable() {
+            @Override public void run() {
+                try {
+                    activeOperations = 0;
+                    drop();
+                    done.set(true);
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistant", "border isolate failed: " + t);
+                }
+            }
+        }, 700L);
+        return completed && done.get();
     }
 
 
@@ -121,6 +151,22 @@ public final class AgentBorder {
         } });
     }
 
+    private static boolean onMainAndWait(final Runnable work, long timeoutMs) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            work.run();
+            return true;
+        }
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        H.post(new Runnable() {
+            @Override public void run() {
+                try { work.run(); }
+                finally { done.countDown(); }
+            }
+        });
+        try { return done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS); }
+        catch (Throwable ignored) { return false; }
+    }
+
     private static void drop() {
         try {
             if (pulse != null) { pulse.stop(); pulse = null; }
@@ -132,7 +178,7 @@ public final class AgentBorder {
     private static void show(Context ctx) {
         try {
             // The operation can finish before its queued show work reaches the main thread.
-            if (activeOperations <= 0) return;
+            if (activeOperations <= 0 || OverlayHub.agentIsolation()) return;
             if (view != null) { if (pulse != null) pulse.bump(); return; }
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return;
@@ -143,6 +189,7 @@ public final class AgentBorder {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_SECURE
                             | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                             | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                             | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,

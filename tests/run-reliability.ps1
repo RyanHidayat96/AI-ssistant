@@ -4,7 +4,9 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Cache = Join-Path ([System.IO.Path]::GetTempPath()) "ai-ssistant-test-deps"
 $Json = Join-Path $Cache "json-20240303.jar"
-$Classes = Join-Path $Root "build\reliability-classes"
+# Keep test bytecode out of Gradle/IDE output folders. Java language tooling can hold those
+# classes open on Windows while this standalone check recompiles them.
+$Classes = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-ssistant-reliability-" + $PID)
 
 if (-not (Test-Path $Json)) {
   New-Item -ItemType Directory -Force -Path $Cache | Out-Null
@@ -18,6 +20,8 @@ $sources = @(
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentPrompt.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentSkills.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentTools.java"),
+  (Join-Path $Root "app-src\src\com\aissistant\app\AgentWindowFilter.java"),
+  (Join-Path $Root "app-src\src\com\aissistant\app\OverlayHub.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\ChatBranch.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentMemory.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\ReferenceReader.java"),

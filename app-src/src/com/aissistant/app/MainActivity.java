@@ -3142,6 +3142,22 @@ public class MainActivity extends Activity {
 
     private void setBusyUi(final boolean b) {
         try { OverlayHub.setBusy(b); } catch (Throwable ignored) { }
+        if (b) {
+            // Enter this before the foreground service can recreate a floating panel.  The shell
+            // agent may inject touch or read window state; its own surfaces must be gone first.
+            boolean panelGone = false;
+            boolean borderGone = false;
+            try { panelGone = OverlayView.beginAgentRun(this); } catch (Throwable ignored) { }
+            try { borderGone = AgentBorder.suppressForAgentRun(); } catch (Throwable ignored) { }
+            if (!panelGone || !borderGone) {
+                android.util.Log.e("AIssistant", "agent isolation not ready: panel="
+                        + panelGone + " border=" + borderGone);
+            }
+        } else {
+            // The panel is visual-only during target-app control. Release it only after the
+            // whole run ends, never in the gap between two injected UI commands.
+            try { OverlayView.finishAgentRun(this); } catch (Throwable ignored) { }
+        }
         ui.post(new Runnable() {
             @Override public void run() { refreshSendBtn(); }
         });
@@ -3196,14 +3212,13 @@ public class MainActivity extends Activity {
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
         runGuard.reset();
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
-        OverlayHub.allowOverlayForRun();
         runStartMs = System.currentTimeMillis();
         loopBroken = false; reportOnly = false; deepScanWarned = false;
         stuckRun = false;
         ensureWorkDir();
         lastAssistantSaid = "";
-        startAgentService();
         setBusyUi(true);
+        startAgentService();
         renderTranscript();
         worker = new Thread(new Runnable() {
             @Override public void run() { agentLoop(); }
@@ -3324,7 +3339,6 @@ public class MainActivity extends Activity {
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
         runGuard.reset();
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
-        OverlayHub.allowOverlayForRun();
         runStartMs = System.currentTimeMillis();
         loopBroken = false; reportOnly = false; deepScanWarned = false;
         stuckRun = false;
@@ -3333,8 +3347,8 @@ public class MainActivity extends Activity {
         lastAssistantSaid = "";
         midRunRestartUsed = false;
         stepNow = 0;
-        startAgentService();
         setBusyUi(true);
+        startAgentService();
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
         });
@@ -3385,6 +3399,12 @@ public class MainActivity extends Activity {
 
     /** floating panel: it needs the "draw over other apps" permission (a Settings toggle) */
     private void toggleOverlay() {
+        // A run may inject input into another app. Do not let a manual toggle recreate a
+        // self-owned surface in the middle of its isolation scope.
+        if (OverlayHub.agentIsolation()) {
+            toast(uiText(R.string.toast_busy_stop));
+            return;
+        }
         if (!OverlayView.canDraw(this)) {
             toast(uiText(R.string.toast_overlay_permission));
             try { startActivity(OverlayView.permissionIntent(this)); }
@@ -3398,7 +3418,6 @@ public class MainActivity extends Activity {
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)); } catch (Throwable ignored) { }
             toast(uiText(R.string.toast_overlay_hidden));
         } else {
-            OverlayHub.allowOverlayForRun(); // explicit user toggle may reopen a panel the agent had hidden
             seedOverlay();
             OverlayView.show(this);
             // panel up -> the main app must not be visible at the same time
@@ -3663,6 +3682,10 @@ public class MainActivity extends Activity {
     private String dispatchTool(String name, JSONObject args) throws Exception {
         if (stop || reportOnly) return "[not executed: run stopped]";
         if ("run_shell".equals(name)) return runCommand(args.getString("command").trim());
+        if ("observe_app".equals(name))
+            return AgentA11y.observe(args.optString("package", ""));
+        if ("act_app".equals(name))
+            return AgentA11y.act(args.optString("package", ""), args.getString("node"), args.getString("action"), args.optString("text", ""));
         if ("list_skills".equals(name)) return AgentSkills.list();
         if ("read_skill".equals(name)) return AgentSkills.read(args.getString("name"));
         if ("read_reference".equals(name)) return ReferenceReader.read(args.getString("url"));
@@ -3863,7 +3886,7 @@ public class MainActivity extends Activity {
                 midRunRestartUsed = true;
                 addBubble("note", uiText(R.string.runtime_input_continuing));
                 ui.post(new Runnable() {
-                    @Override public void run() { setBusyUi(false); updateSubtitle(); renderTranscript(); }
+                    @Override public void run() { updateSubtitle(); renderTranscript(); }
                 });
                 ui.postDelayed(new Runnable() {
                     @Override public void run() { continueRun(); }
@@ -4018,22 +4041,26 @@ public class MainActivity extends Activity {
         // every command starts inside THIS session's workspace; $WD is exported for the model
         String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + toolsDir() + "; " + cmd;
         OverlayView.releaseFocus();
-        boolean agentScreenGuard = false;
-        boolean borderOperation = false;
         String raw;
-        try {
-            agentScreenGuard = AgentBorder.prepareTargetScreen(this, cmd);
-            borderOperation = AgentBorder.beginOperation(this, cmd);
-            raw = RootShell.run(exec, store.timeoutSec());
-        } finally {
-            if (agentScreenGuard) {
-                try { AgentBorder.finishTargetScreen(this, cmd); } catch (Throwable ignored) { }
-            }
-            if (borderOperation) {
-                try { AgentBorder.endOperation(); } catch (Throwable ignored) { }
+        // Every shell command has access to global device state.  Enter isolation regardless of
+        // its text rather than guessing whether it is a screenshot, UI dump, input injection, or
+        // a wrapped variant.  This keeps the floating surfaces visible to the user between tool
+        // calls but removes them for the full lifetime of every call.
+        boolean isolated = OverlayView.ensureAgentIsolation(this) && AgentBorder.suppressForAgentRun();
+        if (!isolated) {
+            // Fail closed: a shell command can inject global input or dump window state. Running
+            // it while the UI thread has not confirmed our surfaces are gone would recreate the
+            // exact self-overlay failure this boundary prevents.
+            raw = "[AGENT UI ISOLATION NOT READY: command was not executed. "
+                    + "Wait for the interface to settle, then retry once.]";
+        } else {
+            try {
+                raw = RootShell.run(exec, store.timeoutSec());
+            } finally {
+                try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
             }
         }
-        String out = withRecovery(foldLong(raw), cmd);
+        String out = withRecovery(foldLong(AgentWindowFilter.hideSelfOverlays(raw, getPackageName())), cmd);
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
@@ -4352,14 +4379,13 @@ public class MainActivity extends Activity {
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
         runGuard.reset();
         OverlayHub.resetStop();      // keep the transcript: the panel mirrors the real chat
-        OverlayHub.allowOverlayForRun();
         runStartMs = System.currentTimeMillis();
         loopBroken = false; reportOnly = false; deepScanWarned = false;
         stuckRun = false; deepScanWarned = false;
         stepNow = 0;
         lastAssistantSaid = "";
-        startAgentService();
         setBusyUi(true);
+        startAgentService();
         ui.post(new Runnable() {
             @Override public void run() { renderTranscript(); }
         });
@@ -4471,6 +4497,7 @@ public class MainActivity extends Activity {
                     + "test -d /data/adb/ksu && echo 'root manager: KernelSU'; "
                     + "test -d /data/adb/magisk && echo 'root manager: Magisk'", 30);
         } catch (Throwable ignored) { }
+        facts = (facts == null ? "" : facts) + "\n" + AgentA11y.statusLine();
         String prompt = AgentPrompt.build(workDir(), store.toolProbe(), facts);
         // the volatile blocks must sit at the very END: verify the offsets instead of trusting the code
         android.util.Log.i("AIssistant", "system prompt chars=" + prompt.length()

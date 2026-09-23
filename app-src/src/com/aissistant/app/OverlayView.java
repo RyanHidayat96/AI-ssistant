@@ -40,6 +40,13 @@ final class OverlayView {
     private static final int OUTPUT = Color.rgb(203, 213, 225);
     private static final int DANGER = Color.rgb(239, 68, 68);
     private static final int ON_ACCENT = Color.rgb(14, 15, 17);
+    /*
+     * Android 12+ applies an anti-tapjacking limit to a non-touchable application overlay.  This
+     * value is only a transition fallback; strict runs detach the panel completely.  Keeping the
+     * fallback below the usual maximum obscuring opacity avoids turning a failed/late transition
+     * into a dead area over the target app.
+     */
+    private static final float PASS_THROUGH_ALPHA = 0.70f;
 
     private static OverlayView current;
 
@@ -79,7 +86,10 @@ final class OverlayView {
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 | WindowManager.LayoutParams.FLAG_SECURE;
-        if (agentPassThrough) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        if (agentPassThrough) {
+            flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            flags &= ~WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+        }
         this.lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -91,6 +101,7 @@ final class OverlayView {
                 flags,
                 PixelFormat.TRANSLUCENT);
         lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
+        lp.alpha = agentPassThrough ? PASS_THROUGH_ALPHA : 1f;
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.x = 24;
         lp.y = 220;
@@ -112,7 +123,7 @@ final class OverlayView {
 
     static void show(Context ctx) {
         try {
-            if (OverlayHub.overlaySuppressedForDriving()) return;
+            if (OverlayHub.overlaySuppressedForDriving() || OverlayHub.agentIsolation()) return;
             if (!canDraw(ctx)) return;
             if (current != null) { current.attach(); return; }
             current = new OverlayView(ctx);
@@ -140,42 +151,94 @@ final class OverlayView {
         prepareForAgent(null, false);
     }
 
-    /** Agent is about to drive/read another app. Keep overlay visible, but make it invisible to focus/touch. */
+    /**
+     * Start a run in visual-only mode.  The panel remains useful to the user between commands,
+     * but has no touch, focus, or outside-touch path while the agent is active.
+     */
+    static boolean beginAgentRun(final Context ctx) {
+        OverlayHub.beginAgentRun();
+        final java.util.concurrent.atomic.AtomicBoolean ready =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        boolean completed = onMainAndWait(new Runnable() {
+            @Override public void run() {
+                try {
+                    OverlayView ov = current;
+                    if (ov != null) {
+                        ov.useIme(false);
+                        ov.setAgentPassThrough(true);
+                    }
+                    ready.set(true);
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistant", "overlay run preparation failed: " + t);
+                }
+            }
+        }, 700L);
+        return completed && ready.get();
+    }
+
+    /**
+     * Reassert isolation before executing a shell command.  Returns false when the main-thread
+     * barrier did not complete, so callers can fail closed instead of issuing a touch while a
+     * stale panel might still be present.
+     */
+    static boolean ensureAgentIsolation(final Context ctx) {
+        OverlayHub.enterAgentIsolation();
+        final java.util.concurrent.atomic.AtomicBoolean ready =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        boolean completed = onMainAndWait(new Runnable() {
+            @Override public void run() {
+                try {
+                    OverlayView ov = current;
+                    if (ov != null) {
+                        ov.useIme(false);
+                        ov.setAgentPassThrough(true);
+                        ov.detach();
+                    }
+                    ready.set(true);
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistant", "overlay isolate failed: " + t);
+                }
+            }
+        }, 700L);
+        return completed && ready.get();
+    }
+
+    /** Agent is about to drive/read another app. Kept for older call sites. */
     static void prepareForAgent(final Context ctx, final boolean hideForCapture) {
-        OverlayHub.setAgentPassThrough(true);
-        if (hideForCapture) OverlayHub.suppressForDriving();
-        final Runnable prep = new Runnable() {
+        ensureAgentIsolation(ctx);
+    }
+
+    /**
+     * Restore panel pixels after one capture, but keep its entire region pass-through for an
+     * active run. Android cannot route root-injected touches differently from human touches, so a
+     * panel that stays touchable between commands can still intercept the next agent tap.
+     */
+    static void finishAgentObservation(final Context ctx) {
+        // The command has already finished. The next command has to enter isolation again before
+        // it can execute, so restoring this visual-only panel cannot become an input target.
+        OverlayHub.leaveAgentIsolation();
+        final Runnable finish = new Runnable() {
             @Override public void run() {
                 try {
                     OverlayView ov = current;
                     if (ov == null) return;
-                    ov.useIme(false);
-                    ov.setAgentPassThrough(true);
-                    if (hideForCapture) ov.detach();
+                    ov.setAgentPassThrough(OverlayHub.busy());
+                    if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
                 } catch (Throwable t) {
-                    android.util.Log.e("AIssistant", "overlay prepare for agent failed: " + t);
+                    android.util.Log.e("AIssistant", "overlay finish agent observation failed: " + t);
                 }
             }
         };
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            prep.run();
+            finish.run();
             return;
         }
-        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
-            @Override public void run() {
-                try { prep.run(); }
-                finally { done.countDown(); }
-            }
-        });
-        try { done.await(350, java.util.concurrent.TimeUnit.MILLISECONDS); }
-        catch (Throwable ignored) { }
+        new Handler(Looper.getMainLooper()).post(finish);
     }
 
-    /** Restore panel interactivity after one agent command. Reattach if it was hidden for clean capture. */
-    static void finishAgentObservation(final Context ctx) {
-        OverlayHub.setAgentPassThrough(false);
-        OverlayHub.allowOverlayForRun();
+    /** End a run: the user may interact with the panel again only after input driving is over. */
+    static void finishAgentRun(final Context ctx) {
+        OverlayHub.finishAgentRun();
         final Runnable finish = new Runnable() {
             @Override public void run() {
                 try {
@@ -184,7 +247,7 @@ final class OverlayView {
                     ov.setAgentPassThrough(false);
                     if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
                 } catch (Throwable t) {
-                    android.util.Log.e("AIssistant", "overlay finish agent observation failed: " + t);
+                    android.util.Log.e("AIssistant", "overlay finish agent run failed: " + t);
                 }
             }
         };
@@ -223,7 +286,7 @@ final class OverlayView {
     // ---- the panel -----------------------------------------------------------------------------
 
     private void attach() {
-        if (panel != null) return;
+        if (panel != null || OverlayHub.agentIsolation()) return;
         panel = build();
         try {
             // keep the panel out of accessibility trees: uiautomator dumps drive the agent, and the
@@ -509,6 +572,9 @@ final class OverlayView {
     private void useIme(boolean on) {
         try {
             if (panel == null) return;
+            // A visible driving overlay is deliberately visual-only. Never let an old focus
+            // callback make it touchable in the middle of an agent run.
+            if (on && (agentPassThrough || OverlayHub.agentPassThrough())) return;
             int before = lp.flags;
             if (on) {
                 agentPassThrough = false;
@@ -540,19 +606,43 @@ final class OverlayView {
 
     private void setAgentPassThrough(boolean on) {
         try {
+            if (on) useIme(false);
             agentPassThrough = on;
             int before = lp.flags;
+            float beforeAlpha = lp.alpha;
             if (on) {
                 lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
                 lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                // A NOT_TOUCHABLE window that asks for outside touches still receives agent input
+                // as ACTION_OUTSIDE on some platform versions.  It must receive no input at all.
+                lp.flags &= ~WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+                lp.alpha = PASS_THROUGH_ALPHA;
             } else {
                 lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                lp.flags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+                lp.alpha = 1f;
             }
-            if (panel != null && lp.flags != before) wm.updateViewLayout(panel, lp);
-            if (on || lp.flags != before) android.util.Log.i("AIssistant", "overlay passThrough=" + on);
+            if (panel != null && (lp.flags != before || lp.alpha != beforeAlpha)) wm.updateViewLayout(panel, lp);
+            if (on || lp.flags != before || lp.alpha != beforeAlpha) android.util.Log.i("AIssistant", "overlay passThrough=" + on);
         } catch (Throwable t) {
             android.util.Log.e("AIssistant", "overlay pass-through toggle: " + t);
         }
+    }
+
+    private static boolean onMainAndWait(final Runnable work, long timeoutMs) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            work.run();
+            return true;
+        }
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override public void run() {
+                try { work.run(); }
+                finally { done.countDown(); }
+            }
+        });
+        try { return done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS); }
+        catch (Throwable ignored) { return false; }
     }
 
     /** a panel left focusable mid-run would keep the agent blind to the app it drives */

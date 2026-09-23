@@ -346,4 +346,5 @@
     <string name="a11y_mic_finishing">Menyelesaikan dikte</string>
     <string name="voice_audio_unavailable">Mikrofon tidak tersedia atau sedang dipakai app lain</string>
     <string name="voice_interrupted">Layanan suara berhenti. Coba lagi.</string>
+    <string name="a11y_service_desc">Mengizinkan agent AI-ssistant membaca dan mengoperasikan UI app lain lewat Accessibility, tanpa screenshot.</string>
 </resources>

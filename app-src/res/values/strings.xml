@@ -346,4 +346,5 @@
     <string name="a11y_mic_finishing">Finishing dictation</string>
     <string name="voice_audio_unavailable">Microphone is unavailable or being used by another app</string>
     <string name="voice_interrupted">Speech service stopped. Try again.</string>
+  <string name="a11y_service_desc">Lets the AI-ssistant agent read and operate the UI of other apps (no screenshots).</string>
 </resources>

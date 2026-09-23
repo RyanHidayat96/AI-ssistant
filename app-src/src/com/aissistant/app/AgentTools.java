@@ -12,6 +12,8 @@ final class AgentTools {
         add(result, "run_shell", "Execute a root shell script on the device, subject to runtime approvals. "
                 + "Returns current stdout/stderr; verify important changes independently.",
                 "command", "Shell script to execute; never send incomplete JSON.");
+        addObserveApp(result);
+        addActApp(result);
         add(result, "list_skills", "List available task guides. No device changes.", null, null);
         add(result, "read_skill", "Load one task guide by its exact name from list_skills.",
                 "name", "Skill name.");
@@ -26,7 +28,7 @@ final class AgentTools {
         add(result, "read_evidence", "Read a saved tool result without rerunning the action. "
                 + "This is historical evidence, not a fresh device observation.",
                 "id", "Evidence filename returned by the runtime.");
-        JSONObject props = result.getJSONObject(5).getJSONObject("function")
+        JSONObject props = result.getJSONObject(result.length() - 1).getJSONObject("function")
                 .getJSONObject("parameters").getJSONObject("properties");
         props.put("offset", new JSONObject().put("type", "integer").put("minimum", 0)
                 .put("description", "Character offset; defaults to zero. Returns up to 6000 characters."));
@@ -44,6 +46,37 @@ final class AgentTools {
                 .put("required", required).put("additionalProperties", false);
         tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
                 .put("name", name).put("description", description).put("parameters", params)));
+    }
+
+    private static void addObserveApp(JSONArray tools) throws Exception {
+        JSONObject props = new JSONObject();
+        props.put("package", new JSONObject().put("type", "string")
+                .put("description", "Optional target package. Empty means active non-AI-ssistant app window."));
+        JSONObject params = new JSONObject().put("type", "object").put("properties", props)
+                .put("required", new JSONArray()).put("additionalProperties", false);
+        tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
+                .put("name", "observe_app")
+                .put("description", "Observe target app Accessibility window while excluding AI-ssistant overlay windows. Returns node ids for act_app.")
+                .put("parameters", params)));
+    }
+
+    private static void addActApp(JSONArray tools) throws Exception {
+        JSONObject props = new JSONObject();
+        props.put("package", new JSONObject().put("type", "string")
+                .put("description", "Optional target package expected from observe_app."));
+        props.put("node", new JSONObject().put("type", "string")
+                .put("description", "Node id returned by observe_app, for example n3."));
+        props.put("action", new JSONObject().put("type", "string")
+                .put("description", "click, long_click, focus, set_text, scroll_forward, or scroll_backward."));
+        props.put("text", new JSONObject().put("type", "string")
+                .put("description", "Text for set_text. Optional for other actions."));
+        JSONObject params = new JSONObject().put("type", "object").put("properties", props)
+                .put("required", new JSONArray().put("node").put("action"))
+                .put("additionalProperties", false);
+        tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
+                .put("name", "act_app")
+                .put("description", "Perform an Accessibility node action on the target app without raw coordinate hit-testing through the overlay.")
+                .put("parameters", params)));
     }
 
     static JSONObject arguments(JSONObject call) throws Exception {
@@ -83,6 +116,13 @@ final class AgentTools {
             Object n = args.get("offset");
             if (!(n instanceof Number) || ((Number) n).doubleValue() != ((Number) n).intValue()
                     || ((Number) n).intValue() < 0) throw new IllegalArgumentException("Invalid offset");
+        }
+        keys = args.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if ("offset".equals(key)) continue;
+            Object value = args.get(key);
+            if (!(value instanceof String)) throw new IllegalArgumentException("Invalid string argument: " + key);
         }
         return args;
     }

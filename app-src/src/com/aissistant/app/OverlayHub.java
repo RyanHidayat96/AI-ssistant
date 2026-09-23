@@ -21,6 +21,13 @@ final class OverlayHub {
     private static volatile boolean suppressedForDriving = false;
     /** True while a root/UI command is targeting another app; any overlay created now must ignore touch. */
     private static volatile boolean agentPassThrough = false;
+    /**
+     * Strict isolation for an active agent run.  The assistant's own app-owned windows must not
+     * exist while its shell/accessibility tools inspect or drive another app.  This is deliberately
+     * stronger than just removing focus: root-injected input and window diagnostics otherwise still
+     * observe the same overlay.
+     */
+    private static volatile boolean agentIsolation = false;
     private static volatile int version = 0;
 
     private OverlayHub() { }
@@ -107,4 +114,33 @@ final class OverlayHub {
     static boolean overlaySuppressedForDriving() { return suppressedForDriving; }
     static void setAgentPassThrough(boolean v) { agentPassThrough = v; }
     static boolean agentPassThrough() { return agentPassThrough; }
+
+    /** Run is active: any panel shown between commands remains visual-only. */
+    static void beginAgentRun() {
+        agentIsolation = false;
+        agentPassThrough = true;
+        suppressedForDriving = false;
+    }
+
+    /** A command is about to inspect or drive the screen: remove every self-owned surface. */
+    static void enterAgentIsolation() {
+        agentIsolation = true;
+        agentPassThrough = true;
+        suppressedForDriving = true;
+    }
+
+    /** Command completed; preserve visual-only mode until the full run has ended. */
+    static void leaveAgentIsolation() {
+        agentIsolation = false;
+        suppressedForDriving = false;
+    }
+
+    /** Terminal cleanup: user can use the overlay normally again. */
+    static void finishAgentRun() {
+        agentIsolation = false;
+        agentPassThrough = false;
+        suppressedForDriving = false;
+    }
+
+    static boolean agentIsolation() { return agentIsolation; }
 }

@@ -28,6 +28,8 @@ public final class AgentReliabilityTest {
         testToolValidation();
         testMemory();
         testMessageBranch();
+        testOverlayWindowMask();
+        testOverlayIsolationState();
         testRunGuard();
         testCapabilityTriage();
         testPromptIsGeneral();
@@ -51,12 +53,17 @@ public final class AgentReliabilityTest {
 
     private static void testToolValidation() throws Exception {
         JSONArray tools = AgentTools.definitions();
-        check(tools.length() == 6, "all registered tools exposed");
+        check(tools.length() == 8, "all registered tools exposed");
         JSONObject valid = call("run_shell", "{\"command\":\"id\"}");
         check("id".equals(AgentTools.arguments(valid).getString("command")), "valid shell arguments accepted");
         rejects(call("run_shell", "id"), "non-JSON shell arguments rejected");
         rejects(call("run_shell", "{\"command\":\"id\",\"extra\":true}"), "unexpected argument rejected");
         rejects(call("not_registered", "{}"), "unknown tool rejected");
+        JSONObject observe = call("observe_app", "{\"package\":\"com.example.target\"}");
+        check("com.example.target".equals(AgentTools.arguments(observe).getString("package")),
+                "target app observation arguments accepted");
+        JSONObject act = call("act_app", "{\"node\":\"n1\",\"action\":\"click\"}");
+        check("click".equals(AgentTools.arguments(act).getString("action")), "target app action arguments accepted");
         JSONObject evidence = call("read_evidence", "{\"id\":\"e-1-1.txt\",\"offset\":3}");
         check(AgentTools.arguments(evidence).getInt("offset") == 3, "integer evidence offset accepted");
     }
@@ -115,6 +122,55 @@ public final class AgentReliabilityTest {
                 "branch rejects a message that changed before submit");
     }
 
+    private static void testOverlayWindowMask() {
+        String dump = "Window #5:\n"
+                + "  name=Sys2038:com.aissistant.app\n"
+                + "  touchableRegion=[24,360][1100,1429]\n"
+                + "Window #4: com.example.target/.MainActivity\n"
+                + "  touchableRegion=[0,0][1200,2400]";
+        String filtered = AgentWindowFilter.hideSelfOverlays(dump, "com.aissistant.app");
+        check(!filtered.contains("Sys2038:com.aissistant.app") && !filtered.contains("[24,360]"),
+                "self overlay window block does not reach model");
+        check(filtered.contains("com.example.target/.MainActivity"),
+                "target window diagnostics remain available");
+
+        String bareInputDump = "InputWindowHandle name=Sys2038:com.aissistant.app\n"
+                + "  frame=[24,360][1100,1429]\n"
+                + "  alpha=1.0\n"
+                + "InputWindowHandle name=com.example.target/.MainActivity\n"
+                + "  frame=[0,0][1200,2400]";
+        String bareFiltered = AgentWindowFilter.hideSelfOverlays(bareInputDump, "com.aissistant.app");
+        check(!bareFiltered.contains("Sys2038") && !bareFiltered.contains("[24,360]"),
+                "header variants discard their complete self-owned diagnostics block");
+        check(bareFiltered.contains("com.example.target/.MainActivity"),
+                "next target diagnostics block remains after self-owned input block");
+
+        String grep = "mCurrentFocus=Window{42 Sys2038:com.aissistant.app}\n"
+                + "mFocusedApp=AppWindowToken{com.example.target}";
+        String grepFiltered = AgentWindowFilter.hideSelfOverlays(grep, "com.aissistant.app");
+        check(!grepFiltered.contains("aissistant") && grepFiltered.contains("com.example.target"),
+                "headerless self-owned focus result does not reach model");
+    }
+
+    private static void testOverlayIsolationState() {
+        OverlayHub.finishAgentRun();
+        OverlayHub.beginAgentRun();
+        check(OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
+                        && !OverlayHub.overlaySuppressedForDriving(),
+                "active run keeps any user-visible panel visual-only between commands");
+        OverlayHub.enterAgentIsolation();
+        check(OverlayHub.agentPassThrough() && OverlayHub.agentIsolation()
+                        && OverlayHub.overlaySuppressedForDriving(),
+                "command isolation removes any self-owned window before UI work");
+        OverlayHub.leaveAgentIsolation();
+        check(OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
+                        && !OverlayHub.overlaySuppressedForDriving(),
+                "command completion restores only visual mode, never touch during active run");
+        OverlayHub.finishAgentRun();
+        check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation(),
+                "terminal run cleanup restores normal overlay interaction");
+    }
+
     private static void testRunGuard() {
         RunGuard guard = new RunGuard();
         String note = "";
@@ -151,7 +207,8 @@ public final class AgentReliabilityTest {
     private static void testPromptIsGeneral() {
         String prompt = AgentPrompt.build("/tmp/run", "probe_epoch_ms=1", "sdk=35");
         String low = prompt.toLowerCase();
-        check(prompt.contains("list_skills") && prompt.contains("read_reference") && prompt.contains("save_checkpoint"),
+        check(prompt.contains("list_skills") && prompt.contains("read_reference") && prompt.contains("save_checkpoint")
+                        && prompt.contains("observe_app") && prompt.contains("act_app"),
                 "prompt documents registered capabilities");
         check(prompt.contains("ANDROID RECIPE CANDIDATES") && prompt.contains("TOOL INVENTORY SNAPSHOT"),
                 "prompt labels generic candidates and volatile probe");
