@@ -5,8 +5,8 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.PixelFormat;
-import android.graphics.RectF;
 import android.graphics.Shader;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,7 +15,7 @@ import android.view.View;
 import android.view.WindowManager;
 
 /**
- * Thin blue edge while the agent drives another app.
+ * Animated edge while the agent drives another app.
  *
  * Mirrors "someone is operating this screen" the way a browser agent outlines its window.
  * Non-focusable, non-touchable and invisible to accessibility, so it can never steal the
@@ -138,49 +138,105 @@ public final class AgentBorder {
         } catch (Throwable t) { android.util.Log.w("AIssistants", "border show FAILED: " + t); }
     }
 
-    /** the blue frame itself: a travelling wave with a solid -> transparent fade around the edge */
+    /** Ambient edge: solid at screen edge, transparent toward the app, with a slow inner wave. */
     private static final class Edge extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final android.graphics.Path frame = new android.graphics.Path();
-        private final android.graphics.Path seg = new android.graphics.Path();
-        private final android.graphics.PathMeasure pm = new android.graphics.PathMeasure();
+        private final Path path = new Path();
         private final long t0 = System.currentTimeMillis();
-        private float stroke, radius;
+        private float base, wave;
 
         Edge(Context c) {
             super(c);
             float d = c.getResources().getDisplayMetrics().density;
-            stroke = 7f * d;
-            radius = 22f * d;
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeCap(Paint.Cap.ROUND);
+            base = 18f * d;
+            wave = 7f * d;
+            p.setStyle(Paint.Style.FILL);
+            p.setDither(true);
             setLayerType(View.LAYER_TYPE_HARDWARE, null);
         }
 
-        @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
-            float in = stroke / 2f;                     // outer edge of the stroke sits exactly on the screen edge
-            android.graphics.RectF r = new android.graphics.RectF(in, in, w - in, h - in);
-            frame.reset();
-            frame.addRoundRect(r, radius, radius, android.graphics.Path.Direction.CW);
-            pm.setPath(frame, false);
+        @Override protected void onDraw(Canvas c) {
+            int w = getWidth();
+            int h = getHeight();
+            if (w <= 0 || h <= 0) { postInvalidateDelayed(60); return; }
+            double seconds = (System.currentTimeMillis() - t0) / 1000.0;
+            double phase = seconds * 0.42;                                       // slow wave circling the screen
+            drawTop(c, w, h, phase);
+            drawRight(c, w, h, phase);
+            drawBottom(c, w, h, phase);
+            drawLeft(c, w, h, phase);
+            p.setShader(null);
+            postInvalidateDelayed(40);                                           // smooth enough, less noisy
         }
 
-        @Override protected void onDraw(Canvas c) {
-            float len = pm.getLength();
-            if (len <= 0) { postInvalidateDelayed(60); return; }
-            double phase = (System.currentTimeMillis() - t0) / 1000.0 * 0.55;   // slow travel
-            final int N = 150;
-            for (int i = 0; i < N; i++) {
-                double u = (double) i / N;                                        // 0..1 around the frame
-                double wave = 0.5 + 0.5 * Math.sin(u * Math.PI * 2 * 3 - phase);   // 3 soft lobes
-                double fade = 0.12 + 0.88 * (0.5 + 0.5 * Math.cos(u * Math.PI * 2)); // pekat -> transparan -> pekat
-                int alpha = (int) (240 * (0.35 + 0.65 * wave) * fade);
-                p.setAlpha(Math.max(6, alpha));
-                p.setStrokeWidth(stroke * (0.55f + 0.75f * (float) wave));
-                seg.reset();
-                if (pm.getSegment(len * i / N, len * (i + 1) / N + stroke * 0.5f, seg, true)) c.drawPath(seg, p);
+        private void drawTop(Canvas c, int w, int h, double phase) {
+            path.reset();
+            path.moveTo(0, 0);
+            path.lineTo(w, 0);
+            for (int i = 64; i >= 0; i--) {
+                float x = w * (i / 64f);
+                path.lineTo(x, inner(0, x / Math.max(1f, w), phase));
             }
-            postInvalidateDelayed(33);                                            // keep it moving
+            path.close();
+            shader(0, 0, 0, base + wave);
+            c.drawPath(path, p);
+        }
+
+        private void drawRight(Canvas c, int w, int h, double phase) {
+            path.reset();
+            path.moveTo(w, 0);
+            path.lineTo(w, h);
+            for (int i = 64; i >= 0; i--) {
+                float y = h * (i / 64f);
+                path.lineTo(w - inner(1, y / Math.max(1f, h), phase), y);
+            }
+            path.close();
+            shader(w, 0, w - base - wave, 0);
+            c.drawPath(path, p);
+        }
+
+        private void drawBottom(Canvas c, int w, int h, double phase) {
+            path.reset();
+            path.moveTo(w, h);
+            path.lineTo(0, h);
+            for (int i = 64; i >= 0; i--) {
+                float x = w - w * (i / 64f);
+                path.lineTo(x, h - inner(2, x / Math.max(1f, w), phase));
+            }
+            path.close();
+            shader(0, h, 0, h - base - wave);
+            c.drawPath(path, p);
+        }
+
+        private void drawLeft(Canvas c, int w, int h, double phase) {
+            path.reset();
+            path.moveTo(0, h);
+            path.lineTo(0, 0);
+            for (int i = 64; i >= 0; i--) {
+                float y = h - h * (i / 64f);
+                path.lineTo(inner(3, y / Math.max(1f, h), phase), y);
+            }
+            path.close();
+            shader(0, 0, base + wave, 0);
+            c.drawPath(path, p);
+        }
+
+        private float inner(int side, double local, double phase) {
+            double around = (side + local) / 4.0;
+            double crest = 0.5 + 0.5 * Math.sin((around * Math.PI * 2.0 * 5.0) - phase);
+            return base + (float) (wave * crest);
+        }
+
+        private void shader(float x0, float y0, float x1, float y1) {
+            p.setShader(new LinearGradient(
+                    x0, y0, x1, y1,
+                    new int[] {
+                            Color.argb(92, 37, 99, 235),
+                            Color.argb(34, 14, 165, 233),
+                            Color.argb(0, 14, 165, 233)
+                    },
+                    new float[] { 0f, 0.48f, 1f },
+                    Shader.TileMode.CLAMP));
         }
     }
 
