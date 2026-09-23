@@ -236,6 +236,8 @@ public class MainActivity extends Activity {
     private final List<String> pending = new ArrayList<>();
 
     private volatile boolean busy;
+    /** A connection probe owns AiClient while it runs, so it cannot race an agent turn. */
+    private volatile boolean connectionTestRunning;
     /** true once an injected mid-run message already got its one automatic continuation */
     private boolean midRunRestartUsed = false;
     /** mid-run user input waiting for a safe point in the conversation (never between tool_calls and its tool replies) */
@@ -656,39 +658,6 @@ public class MainActivity extends Activity {
         sc.addView(panel, new ScrollView.LayoutParams(-1, -2));
         v.addView(sc, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        panel.addView(sectionLabel("ACTIVE MODEL"));
-        LinearLayout mcard = new LinearLayout(this);
-        mcard.setOrientation(LinearLayout.HORIZONTAL);
-        mcard.setGravity(Gravity.CENTER_VERTICAL);
-        mcard.setBackground(ripple(SURFACE, LINE, 14));
-        mcard.setPadding(dp(14), dp(12), dp(14), dp(12));
-        LinearLayout minfo = new LinearLayout(this);
-        minfo.setOrientation(LinearLayout.VERTICAL);
-        TextView m1 = tv(15, FG, Typeface.BOLD);
-        m1.setText(activeLabel());
-        m1.setSingleLine(true);
-        TextView m2 = tv(12, MUTED, Typeface.NORMAL);
-        JSONObject am = activeModelObj();
-        JSONObject amp = providerOf(am);
-        m2.setText(am == null ? "no model yet \u2014 tap to add one"
-                : (am.optBoolean("enabled", true) ? "" : "(disabled)  ")
-                  + (amp == null ? "no provider" : amp.optString("name", "") + "  \u00b7  " + hostOf(amp.optString("baseUrl", ""))));
-        m2.setSingleLine(true);
-        m2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        minfo.addView(m1);
-        minfo.addView(m2);
-        mcard.addView(minfo, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView mchev = tv(16, MUTED, Typeface.NORMAL);
-        mchev.setText("\u25B8");
-        mcard.addView(mchev);
-        mcard.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View x) { showModels(); }
-        });
-        setButtonA11y(mcard, "Manage models and providers. Active: " + activeLabel());
-        LinearLayout.LayoutParams mclp = new LinearLayout.LayoutParams(-1, -2);
-        mclp.setMargins(0, dp(6), 0, 0);
-        panel.addView(mcard, mclp);
-
         Button manage = new Button(this);
         manage.setText("Manage models & providers");
         manage.setAllCaps(false);
@@ -1015,13 +984,11 @@ public class MainActivity extends Activity {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 3, 2, "Settings");
         pm.getMenu().add(0, 4, 3, "Clear this chat");
-        pm.getMenu().add(0, 5, 4, "Models & providers");
         pm.getMenu().add(0, 7, 6, "Overlay mengambang");
         pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
             @Override public boolean onMenuItemClick(android.view.MenuItem item) {
                 if (item.getItemId() == 3) showSettings();
                 else if (item.getItemId() == 4) confirmClear();
-                else if (item.getItemId() == 5) showModels();
                 else if (item.getItemId() == 7) toggleOverlay();
                 return true;
             }
@@ -3938,6 +3905,19 @@ public class MainActivity extends Activity {
         return b;
     }
 
+    /** A simple vector action icon for settings rows, with a stable 48dp touch target. */
+    private ImageButton iconBtn(int drawable, String label, View.OnClickListener listener) {
+        ImageButton b = new ImageButton(this);
+        b.setImageResource(drawable);
+        b.setImageTintList(ColorStateList.valueOf(FG));
+        b.setScaleType(ImageView.ScaleType.CENTER);
+        b.setPadding(dp(12), dp(12), dp(12), dp(12));
+        b.setBackground(ripple(Color.TRANSPARENT, 0, 24));
+        if (listener != null) b.setOnClickListener(listener);
+        setButtonA11y(b, label);
+        b.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        return b;
+    }
     /** A vector icon inside the composer: fixed tap target, visual tint controlled by state. */
     private ImageButton composerIcon(int drawable, int tint, String label, View.OnClickListener listener) {
         ImageButton b = new ImageButton(this);
@@ -4070,7 +4050,7 @@ public class MainActivity extends Activity {
         }
 
         TextView hint = tv(11, MUTED, Typeface.NORMAL);
-        hint.setText("Tap a model to use it \u00b7 switch to enable/disable \u00b7 edit to configure \u00b7 delete to remove");
+        hint.setText("Tap a model to use it \u00b7 TEST verifies its connection \u00b7 configure or delete as needed");
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
         hlp.setMargins(0, dp(6), 0, 0);
         list.addView(hint, hlp);
@@ -4120,10 +4100,13 @@ public class MainActivity extends Activity {
 
     private View providerCard(final JSONObject p) {
         LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(ripple(SURFACE, LINE, 16));
         card.setPadding(dp(14), dp(10), dp(6), dp(10));
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         TextView t1 = tv(15, FG, Typeface.BOLD);
@@ -4135,17 +4118,25 @@ public class MainActivity extends Activity {
         t2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         info.addView(t1);
         info.addView(t2);
-        card.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView edit = iconBtn("\u270E", new View.OnClickListener() {
+        row.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+
+        final TextView testState = testStateView();
+        TextView test = actionChip("TEST", "Test connection for provider " + p.optString("name", "provider"), new View.OnClickListener() {
+            @Override public void onClick(View x) { testProvider(p, (TextView) x, testState); }
+        });
+        row.addView(test, actionChipLayout());
+        ImageButton edit = iconBtn(R.drawable.ic_tune_24, "Configure provider " + p.optString("name", "provider"), new View.OnClickListener() {
             @Override public void onClick(View x) { providerDialog(p); }
         });
-        setButtonA11y(edit, "Edit provider " + p.optString("name", "provider"));
-        card.addView(edit);
+        row.addView(edit);
         TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDeleteProvider(p); }
         });
         setButtonA11y(remove, "Delete provider " + p.optString("name", "provider"));
-        card.addView(remove);
+        row.addView(remove);
+        card.addView(row);
+        addTestState(card, testState);
+
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(8));
         card.setLayoutParams(lp);
@@ -4155,11 +4146,13 @@ public class MainActivity extends Activity {
     private View modelCard(final JSONObject m) {
         final boolean enabled = m.optBoolean("enabled", true);
         LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(ripple(SURFACE, LINE, 16));
-        card.setPadding(dp(6), dp(6), dp(6), dp(6));
+        card.setPadding(dp(6), dp(6), dp(6), dp(8));
 
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         Switch on = new Switch(this);
         on.setText("");
         on.setChecked(enabled);
@@ -4182,37 +4175,47 @@ public class MainActivity extends Activity {
                 showModels();
             }
         });
-        card.addView(on);
+        row.addView(on);
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
         boolean isActive = m.optString("id").equals(store.activeModelId());
-        TextView t1 = tv(15, enabled ? FG : MUTED, Typeface.BOLD);
-        t1.setText((isActive ? "\u25CF " : "") + shortLabel(m));
-        t1.setSingleLine(true);
-        TextView t2 = tv(12, MUTED, Typeface.NORMAL);
-        JSONObject p = providerOf(m);
-        t2.setText(m.optString("name", "") + "  \u00b7  " + (p == null ? "missing provider" : p.optString("name", ""))
-                + (m.optBoolean("vision", true) ? "  \u00b7  vision" : "")
-                + (enabled ? "" : "  \u00b7  disabled"));
-        t2.setSingleLine(true);
-        t2.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        info.addView(t1);
-        info.addView(t2);
+        TextView title = tv(15, enabled ? FG : MUTED, Typeface.BOLD);
+        title.setText((isActive ? "\u25CF " : "") + shortLabel(m));
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        JSONObject provider = providerOf(m);
+        TextView modelId = tv(12, MUTED, Typeface.NORMAL);
+        modelId.setText(m.optString("name", ""));
+        modelId.setSingleLine(true);
+        modelId.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        TextView providerName = tv(11, provider == null ? DANGER : MUTED, Typeface.NORMAL);
+        providerName.setText(provider == null ? "missing provider" : provider.optString("name", "provider"));
+        providerName.setSingleLine(true);
+        providerName.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(title);
+        info.addView(modelId);
+        info.addView(providerName);
         LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(0, -2, 1);
-        ilp.setMargins(dp(6), 0, dp(6), 0);
-        card.addView(info, ilp);
+        ilp.setMargins(dp(6), 0, dp(2), 0);
+        row.addView(info, ilp);
 
-        TextView edit = iconBtn("\u270E", new View.OnClickListener() {
+        final TextView testState = testStateView();
+        TextView test = actionChip("TEST", "Test model " + shortLabel(m), new View.OnClickListener() {
+            @Override public void onClick(View x) { testModel(m, (TextView) x, testState); }
+        });
+        row.addView(test, actionChipLayout());
+        ImageButton edit = iconBtn(R.drawable.ic_tune_24, "Configure model " + shortLabel(m), new View.OnClickListener() {
             @Override public void onClick(View x) { modelDialog(m); }
         });
-        setButtonA11y(edit, "Edit model " + shortLabel(m));
-        card.addView(edit);
+        row.addView(edit);
         TextView remove = iconBtn("\u2715", new View.OnClickListener() {
             @Override public void onClick(View x) { confirmDeleteModel(m); }
         });
         setButtonA11y(remove, "Delete model " + shortLabel(m));
-        card.addView(remove);
+        row.addView(remove);
+        card.addView(row);
+        addTestState(card, testState);
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { activateModel(m); }
         });
@@ -4223,6 +4226,129 @@ public class MainActivity extends Activity {
         lp.setMargins(0, 0, 0, dp(8));
         card.setLayoutParams(lp);
         return card;
+    }
+
+    private TextView actionChip(String text, String label, View.OnClickListener listener) {
+        TextView b = tv(10, ACCENT, Typeface.BOLD);
+        b.setText(text);
+        b.setGravity(Gravity.CENTER);
+        b.setMinHeight(dp(40));
+        b.setPadding(dp(4), 0, dp(4), 0);
+        b.setBackground(ripple(SURFACE, ACCENT, 10));
+        b.setOnClickListener(listener);
+        setButtonA11y(b, label);
+        return b;
+    }
+
+    private LinearLayout.LayoutParams actionChipLayout() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(48), dp(40));
+        lp.setMargins(dp(2), 0, 0, 0);
+        return lp;
+    }
+
+    private TextView testStateView() {
+        TextView state = tv(11, MUTED, Typeface.NORMAL);
+        state.setMaxLines(2);
+        state.setVisibility(View.GONE);
+        return state;
+    }
+
+    private void addTestState(LinearLayout card, TextView state) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(dp(56), dp(2), dp(8), 0);
+        card.addView(state, lp);
+    }
+
+    private interface ConnectionProbe {
+        AiClient.Probe run();
+    }
+
+    private void testProvider(final JSONObject provider, TextView action, TextView state) {
+        runConnectionTest(action, state, "Provider connected", new ConnectionProbe() {
+            @Override public AiClient.Probe run() {
+                return AiClient.probeProvider(provider.optString("baseUrl", ""),
+                        provider.optString("apiKey", ""), 20);
+            }
+        });
+    }
+
+    private void testModel(JSONObject model, TextView action, TextView state) {
+        final JSONObject provider = providerOf(model);
+        if (provider == null) {
+            state.setText("Test failed \u00b7 provider is missing");
+            state.setTextColor(DANGER);
+            state.setVisibility(View.VISIBLE);
+            return;
+        }
+        final String modelName = model.optString("name", "");
+        runConnectionTest(action, state, "Model connected", new ConnectionProbe() {
+            @Override public AiClient.Probe run() {
+                return AiClient.probeModel(provider.optString("baseUrl", ""),
+                        provider.optString("apiKey", ""), modelName, 30);
+            }
+        });
+    }
+
+    private void runConnectionTest(final TextView action, final TextView state,
+                                   final String success, final ConnectionProbe probe) {
+        if (busy) {
+            toast("Agent is working \u2014 stop it before testing a connection");
+            return;
+        }
+        if (connectionTestRunning) {
+            toast("Another connection test is already running");
+            return;
+        }
+        connectionTestRunning = true;
+        action.setEnabled(false);
+        action.setAlpha(0.55f);
+        action.setText("\u2026");
+        state.setText("Testing connection\u2026");
+        state.setTextColor(MUTED);
+        state.setVisibility(View.VISIBLE);
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                long started = System.currentTimeMillis();
+                AiClient.Probe result;
+                try {
+                    AiClient.resetCancel();
+                    result = probe.run();
+                } catch (Throwable t) {
+                    result = new AiClient.Probe();
+                    result.error = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                }
+                final AiClient.Probe probeResult = result;
+                final long elapsed = Math.max(0L, System.currentTimeMillis() - started);
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        connectionTestRunning = false;
+                        if (isFinishing()) return;
+                        action.setEnabled(true);
+                        action.setAlpha(1f);
+                        action.setText("TEST");
+                        if (probeResult != null && probeResult.ok) {
+                            state.setText(success + " \u00b7 " + formatTestDuration(elapsed));
+                            state.setTextColor(OK);
+                        } else {
+                            String error = probeResult == null ? "no response" : shortTestText(probeResult.error);
+                            state.setText("Test failed \u00b7 " + (error.isEmpty() ? "no response" : error));
+                            state.setTextColor(DANGER);
+                        }
+                        state.setVisibility(View.VISIBLE);
+                    }
+                });
+            }
+        }, "connection-test").start();
+    }
+
+    private static String formatTestDuration(long millis) {
+        return String.format(Locale.US, "%.1fs", millis / 1000f);
+    }
+
+    private static String shortTestText(String raw) {
+        String text = raw == null ? "" : raw.replace('\n', ' ').replace('\r', ' ').trim();
+        return text.length() > 80 ? text.substring(0, 80) + "\u2026" : text;
     }
 
     private void activateModel(JSONObject m) {

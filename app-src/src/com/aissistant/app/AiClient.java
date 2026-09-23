@@ -81,6 +81,96 @@ final class AiClient {
 
     static void resetCancel() { cancelled = false; }
 
+    /** Result of a low-cost configuration probe. A 2xx response is enough to prove acceptance. */
+    static final class Probe {
+        boolean ok;
+        int statusCode;
+        String error = "";
+    }
+
+    /**
+     * Checks provider endpoint and credentials only. `/models` is part of the OpenAI-compatible
+     * provider contract and needs no configured chat model.
+     */
+    static Probe probeProvider(String baseUrl, String apiKey, int timeoutSec) {
+        return probe(baseUrl, apiKey, null, timeoutSec);
+    }
+
+    /**
+     * Checks one configured model with the smallest portable chat request. Do not require a full
+     * generated answer: HTTP acceptance proves this provider accepted this model and credential.
+     */
+    static Probe probeModel(String baseUrl, String apiKey, String model, int timeoutSec) {
+        return probe(baseUrl, apiKey, model, timeoutSec);
+    }
+
+    private static Probe probe(String baseUrl, String apiKey, String model, int timeoutSec) {
+        Probe out = new Probe();
+        HttpURLConnection conn = null;
+        try {
+            if (cancelled) { out.error = "stopped"; return out; }
+            if (baseUrl == null || baseUrl.trim().isEmpty()) { out.error = "no endpoint configured"; return out; }
+            boolean checkModel = model != null;
+            if (checkModel && model.trim().isEmpty()) { out.error = "no model configured"; return out; }
+
+            String root = baseUrl.trim();
+            while (root.endsWith("/")) root = root.substring(0, root.length() - 1);
+            if (root.endsWith("/chat/completions")) {
+                root = root.substring(0, root.length() - "/chat/completions".length());
+            }
+            String url = checkModel ? root + "/chat/completions" : root + "/models";
+            conn = (HttpURLConnection) new URL(url).openConnection();
+            active = conn;
+            conn.setRequestMethod(checkModel ? "POST" : "GET");
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(Math.max(10, timeoutSec) * 1000);
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("User-Agent", "AI-ssistant/1.3 (Android)");
+            if (apiKey != null && !apiKey.trim().isEmpty()) {
+                conn.setRequestProperty("Authorization", "Bearer " + apiKey.trim());
+            }
+            if (checkModel) {
+                JSONObject body = new JSONObject();
+                body.put("model", model.trim());
+                body.put("messages", new JSONArray().put(new JSONObject()
+                        .put("role", "user").put("content", "Reply only with OK.")));
+                body.put("max_tokens", 16);
+                body.put("stream", false);
+                byte[] payload = body.toString().getBytes("UTF-8");
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setFixedLengthStreamingMode(payload.length);
+                OutputStream os = conn.getOutputStream();
+                try { os.write(payload); } finally { os.close(); }
+            }
+
+            out.statusCode = conn.getResponseCode();
+            String body = slurp(out.statusCode >= 400 ? conn.getErrorStream() : conn.getInputStream());
+            if (cancelled) { out.error = "stopped"; return out; }
+            if (out.statusCode < 200 || out.statusCode >= 300) {
+                out.error = "HTTP " + out.statusCode + ": " + cut(body, 400);
+                return out;
+            }
+            // Some proxies put an OpenAI-style error object in a 2xx JSON body. Do not call it success.
+            try {
+                JSONObject json = new JSONObject(body);
+                if (json.has("error")) {
+                    Object error = json.opt("error");
+                    out.error = "provider error: " + cut(String.valueOf(error), 400);
+                    return out;
+                }
+            } catch (Throwable ignored) { }
+            out.ok = true;
+            return out;
+        } catch (Throwable t) {
+            out.error = String.valueOf(t);
+            return out;
+        } finally {
+            if (active == conn) active = null;
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int thinking, int timeoutSec, StreamCb cb) {
         return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, 4096, cb);
