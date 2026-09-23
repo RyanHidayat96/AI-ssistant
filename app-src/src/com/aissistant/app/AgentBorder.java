@@ -34,25 +34,34 @@ public final class AgentBorder {
     private static View view;
     private static WindowManager wm;
     private static Pulse pulse;
-    /** True from the first target-app command until the owning agent run reaches its terminal cleanup. */
-    private static volatile boolean targetSession;
+    /** Number of commands currently controlling or observing another app. Main-thread only. */
+    private static int activeOperations;
 
     private AgentBorder() { }
 
-    /**
-     * Call with every command the agent runs. The first UI-driving command latches the edge for
-     * the rest of that run; {@link #hide()} is the only terminal cleanup path.
-     */
-    public static void ping(Context ctx, String cmd) {
+    /** Start one command that controls or observes another app. Always pair with {@link #endOperation()}. */
+    public static boolean beginOperation(Context ctx, String cmd) {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
-            boolean drives = drivesTargetApp(c);
-            if (!drives) return;
-            android.util.Log.i("AIssistant", "border ping hit: " + c.substring(0, Math.min(60, c.length())));
+            if (!drivesTargetApp(c)) return false;
+            android.util.Log.i("AIssistant", "border operation start: "
+                    + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
-            targetSession = true;
-            H.post(new Runnable() { @Override public void run() { show(ac); } });
+            H.post(new Runnable() { @Override public void run() {
+                activeOperations++;
+                show(ac);
+            } });
+            return true;
         } catch (Throwable ignored) { }
+        return false;
+    }
+
+    /** End one command previously admitted by {@link #beginOperation(Context, String)}. */
+    public static void endOperation() {
+        H.post(new Runnable() { @Override public void run() {
+            if (activeOperations > 0) activeOperations--;
+            if (activeOperations == 0) drop();
+        } });
     }
 
     /** Enter a UI-critical phase before the command can read or touch another app. */
@@ -81,8 +90,7 @@ public final class AgentBorder {
                 || c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
                 || c.matches("(?s).*\\bcmd\\s+activity\\b.*")
                 || c.matches("(?s).*\\bscreencap\\b.*")
-                || c.matches("(?s).*\\buiautomator\\s+dump\\b.*")
-                || c.matches("(?s).*\\bdumpsys\\s+window\\b.*");
+                || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
     }
 
     private static boolean observesTargetScreen(String c) {
@@ -105,11 +113,11 @@ public final class AgentBorder {
         } catch (Throwable ignored) { }
     }
 
+    /** Terminal cleanup for stop, error, or completed run. */
     public static void hide() {
-        targetSession = false;
         H.post(new Runnable() { @Override public void run() {
-            // A newer run may already have started while this older run was winding down.
-            if (!targetSession) drop();
+            activeOperations = 0;
+            drop();
         } });
     }
 
@@ -123,8 +131,8 @@ public final class AgentBorder {
 
     private static void show(Context ctx) {
         try {
-            // The run can finish between ping() posting this work and the main thread handling it.
-            if (!targetSession) return;
+            // The operation can finish before its queued show work reaches the main thread.
+            if (activeOperations <= 0) return;
             if (view != null) { if (pulse != null) pulse.bump(); return; }
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return;

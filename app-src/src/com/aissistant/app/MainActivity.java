@@ -3216,14 +3216,18 @@ public class MainActivity extends Activity {
         String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + toolsDir() + "; " + cmd;
         OverlayView.releaseFocus();
         boolean agentScreenGuard = false;
+        boolean borderOperation = false;
         String raw;
         try {
             agentScreenGuard = AgentBorder.prepareTargetScreen(this, cmd);
-            AgentBorder.ping(this, cmd);
+            borderOperation = AgentBorder.beginOperation(this, cmd);
             raw = RootShell.run(exec, store.timeoutSec());
         } finally {
             if (agentScreenGuard) {
                 try { AgentBorder.finishTargetScreen(this, cmd); } catch (Throwable ignored) { }
+            }
+            if (borderOperation) {
+                try { AgentBorder.endOperation(); } catch (Throwable ignored) { }
             }
         }
         String out = withRecovery(foldLong(raw), cmd);
