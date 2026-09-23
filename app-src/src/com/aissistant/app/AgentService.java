@@ -34,12 +34,12 @@ public class AgentService extends Service {
             }
             startForeground(ID, build(this, getString(R.string.status_working_device)));
         } catch (Throwable ignored) { }
-        // the run keeps going while the agent drives OTHER apps - only then does the panel belong
-        // on screen; while the user is looking at the chat it would just cover it
+        // A foreground service keeps agent work alive while this app stays background. Never
+        // create a floating panel automatically: it would cover the user's active app.
         try {
             android.util.Log.i("AIssistant", "service start: appVisible=" + MainActivity.appVisible
-                    + " canDraw=" + OverlayView.canDraw(this));
-            if (!MainActivity.appVisible && OverlayView.canDraw(this)) OverlayView.show(this);
+                    + " background-only agent service");
+            if (!MainActivity.appVisible) OverlayView.hide();
             if (!MainActivity.appVisible) AgentBorder.showForBackgroundOperation(this);
         } catch (Throwable ignored) { }
         return START_NOT_STICKY;

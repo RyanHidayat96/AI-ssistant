@@ -105,7 +105,9 @@ public class MainActivity extends Activity {
     private ScrollView chatScroll;
     /** scroll viewport; owns transient chips so they overlay messages without moving the composer */
     private FrameLayout chatScrollWrap;
-    private TextView barTitle, subtitle, pill;
+    private TextView barTitle, subtitle;
+    /** Current root state appears inside the overflow menu, keeping chat header compact. */
+    private String rootStatus = "";
     private EditText input;
     private ImageButton sendBtn;
     private ImageButton micBtn;
@@ -413,10 +415,11 @@ public class MainActivity extends Activity {
         // A quick app switch may pause without reaching onStop before it comes back.
         // Lock here, except while a user-started agent session is still working.
         if (!busy && !changingLanguage && !overlaySessionActive()) armAppLock();
-        // the agent may be driving another app from under us: keep the run visible
+        // Keep a running agent in the background. Its foreground-service notification and
+        // operation border communicate progress without covering the app the user opened.
         try {
-            android.util.Log.i("AIssistant", "onStop: busy=" + busy + " canDraw=" + OverlayView.canDraw(this));
-            if (busy && OverlayView.canDraw(this)) { seedOverlay(); OverlayView.show(this); }
+            android.util.Log.i("AIssistant", "onPause: busy=" + busy);
+            if (busy) OverlayView.hide();
             if (busy) AgentBorder.showForBackgroundOperation(this);
         } catch (Throwable ignored) { }
         persist();
@@ -1488,17 +1491,6 @@ public class MainActivity extends Activity {
         hlp.setMargins(dp(8), 0, 0, 0);
         bar.addView(head, hlp);
 
-        pill = tv(11, WARN, Typeface.BOLD);
-        pill.setGravity(Gravity.CENTER);
-        pill.setPadding(dp(12), dp(6), dp(12), dp(6));
-        pill.setMinHeight(dp(48));
-        pill.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        setButtonA11y(pill, uiText(R.string.a11y_root_status));
-        pill.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View x) { requestRoot(); }
-        });
-        bar.addView(pill);
-
         final Button more = iconBtn("\u22EE", null);
         more.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View x) { menu(x); }
@@ -1678,12 +1670,15 @@ public class MainActivity extends Activity {
 
     private void menu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
+        pm.getMenu().add(0, 8, 1, uiText(R.string.menu_root_status,
+                rootStatus.isEmpty() ? uiText(R.string.root_checking) : rootStatus));
         pm.getMenu().add(0, 3, 2, uiText(R.string.common_settings));
         pm.getMenu().add(0, 4, 3, uiText(R.string.menu_clear_chat));
         pm.getMenu().add(0, 7, 6, uiText(R.string.menu_floating_overlay));
         pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
             @Override public boolean onMenuItemClick(android.view.MenuItem item) {
-                if (item.getItemId() == 3) showSettings();
+                if (item.getItemId() == 8) requestRoot();
+                else if (item.getItemId() == 3) showSettings();
                 else if (item.getItemId() == 4) confirmClear();
                 else if (item.getItemId() == 7) toggleOverlay();
                 return true;
@@ -2745,26 +2740,19 @@ public class MainActivity extends Activity {
 
     private void refreshStatus() {
         updateSubtitle();
-        setPill(uiText(R.string.root_checking), WARN);
+        setRootStatus(uiText(R.string.root_checking));
         new Thread(new Runnable() {
             @Override public void run() {
                 final boolean ok = RootShell.available();
                 ui.post(new Runnable() {
-                    @Override public void run() { setPill(ok ? uiText(R.string.root_available) : uiText(R.string.root_unavailable), ok ? OK : DANGER); }
+                    @Override public void run() { setRootStatus(ok ? uiText(R.string.root_available) : uiText(R.string.root_unavailable)); }
                 });
             }
         }).start();
     }
 
-    private void setPill(String text, int color) {
-        pill.setText(text);
-        pill.setTextColor(color);
-        pill.setBackground(round(Color.TRANSPARENT, color, 14));
-        String label;
-        if (uiText(R.string.root_available).equals(text)) label = uiText(R.string.a11y_root_enabled);
-        else if (uiText(R.string.root_checking).equals(text)) label = uiText(R.string.a11y_root_checking);
-        else label = uiText(R.string.a11y_root_unavailable);
-        setButtonA11y(pill, label);
+    private void setRootStatus(String text) {
+        rootStatus = text == null ? "" : text;
     }
 
     private void requestRoot() {
@@ -2776,7 +2764,7 @@ public class MainActivity extends Activity {
                 addBubble("tool", out);
                 final boolean ok = out.contains("uid=0");
                 ui.post(new Runnable() {
-                    @Override public void run() { setPill(ok ? uiText(R.string.root_available) : uiText(R.string.root_unavailable), ok ? OK : DANGER); }
+                    @Override public void run() { setRootStatus(ok ? uiText(R.string.root_available) : uiText(R.string.root_unavailable)); }
                 });
             }
         }).start();

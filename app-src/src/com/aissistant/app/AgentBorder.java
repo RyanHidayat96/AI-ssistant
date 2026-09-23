@@ -106,12 +106,15 @@ public final class AgentBorder {
         return true;
     }
 
-    /** End one command previously admitted by {@link #beginOperation(Context, String)}. */
+    /** End one target-app action, remove the edge, then hand back to the chat after a quiet gap. */
     public static void endOperation() {
         H.post(new Runnable() { @Override public void run() {
             if (activeOperations > 0) activeOperations--;
             if (activeOperations == 0) {
                 drop();
+                // A model can continue with another app action immediately. That action calls
+                // beginOperation/beginAccessibilityOperation and cancels this handoff.
+                scheduleReturnToMain();
             }
         } });
     }
@@ -202,9 +205,8 @@ public final class AgentBorder {
         H.post(new Runnable() { @Override public void run() {
             activeOperations = 0;
             drop();
-            // Keep the target app in front while the model is still deciding its next step.
-            // Returning after every click/scroll made MainActivity steal foreground from a live
-            // target session. Only terminal run cleanup may hand control back to the full chat.
+            // Keep the terminal fallback for a target session that ended without a final
+            // endOperation callback. Usual handoff is scheduled as soon as its border drops.
             boolean returnToMain = targetAppSession;
             targetAppSession = false;
             if (returnToMain) scheduleReturnToMain();
