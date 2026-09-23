@@ -3790,8 +3790,9 @@ public class MainActivity extends Activity {
 
     /** does this command point at /data/local/tmp OUTSIDE this session's workspace (or the tool cache)? */
     private boolean touchesForeignTmp(String cmd) {
-        if (cmd == null) return false;
-        return cmd.replace(workDir(), "").replace(toolsDir(), "").contains("/data/local/tmp");
+        // Isolation removed by user request: old session folders under /data/local/tmp must stay usable
+        // (continuing a previous task after its chat history was lost needs exactly that).
+        return false;
     }
 
     /** run one command as root, echo it in the chat, return the output for the model */
