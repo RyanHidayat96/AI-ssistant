@@ -331,4 +331,7 @@
     <string name="notification_task_chat_suffix"> - %1$s</string>
     <string name="notification_task_blocked_detail">The agent needs more requirements from you to continue.</string>
     <string name="notification_elapsed_seconds">%1$ds</string>
+    <string name="a11y_mic_finishing">Finishing dictation</string>
+    <string name="voice_audio_unavailable">Microphone is unavailable or being used by another app</string>
+    <string name="voice_interrupted">Speech service stopped. Try again.</string>
 </resources>

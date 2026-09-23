@@ -108,7 +108,11 @@ public class MainActivity extends Activity {
     private ImageButton sendBtn;
     private ImageButton micBtn;
     private android.speech.SpeechRecognizer speech;
+    /** A recognition transaction remains active until its terminal callback arrives. */
     private boolean listening;
+    private boolean voiceStopRequested;
+    private long voiceSession;
+    private Runnable voiceStopWatchdog;
     private String voiceBase = "";
     private LinearLayout inputRow;
     private LinearLayout attachBar;
@@ -377,7 +381,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         cancelFingerprintPrompt();
-        try { if (speech != null) { speech.destroy(); speech = null; } } catch (Throwable ignored) { }
+        stopVoiceInput(false);
         if (instance == this) instance = null;
         super.onDestroy();
     }
@@ -4191,6 +4195,8 @@ public class MainActivity extends Activity {
     // while you speak and the final text stays there for review before sending.
 
     private void toggleVoiceInput() {
+        // Android requires startListening() only after the previous transaction has ended in
+        // onResults/onError. Do not create a second recognizer while a stop is pending.
         if (listening) { stopVoiceInput(true); return; }
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -4201,69 +4207,115 @@ public class MainActivity extends Activity {
             toast(uiText(R.string.voice_unavailable));
             return;
         }
+        final long session = ++voiceSession;
+        voiceStopRequested = false;
+        voiceBase = input == null ? "" : input.getText().toString().trim();
+        hideComposerKeyboard();
         try {
-            if (speech != null) { speech.destroy(); speech = null; }
-            speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
+            ensureSpeechRecognizer();
             speech.setRecognitionListener(new android.speech.RecognitionListener() {
                 @Override public void onReadyForSpeech(android.os.Bundle p) { }
                 @Override public void onBeginningOfSpeech() { }
-                @Override public void onRmsChanged(float v) { }
+                @Override public void onRmsChanged(float rms) { updateVoiceLevel(session, rms); }
                 @Override public void onBufferReceived(byte[] b) { }
                 @Override public void onEndOfSpeech() { }
                 @Override public void onEvent(int t, android.os.Bundle p) { }
                 @Override public void onPartialResults(android.os.Bundle p) {
+                    if (!isActiveVoiceSession(session)) return;
                     String best = bestSpeech(p);
                     if (!best.isEmpty()) setVoiceText(best);
                 }
                 @Override public void onResults(android.os.Bundle p) {
+                    if (!isActiveVoiceSession(session)) return;
                     String best = bestSpeech(p);
                     if (!best.isEmpty()) setVoiceText(best);
-                    stopVoiceInput(false);
+                    finishVoiceSession(session);
                 }
                 @Override public void onError(int code) {
-                    setVoiceUi(false);
+                    if (!isActiveVoiceSession(session)) return;
+                    boolean stoppedByUser = voiceStopRequested;
+                    finishVoiceSession(session);
+                    // A manual stop commonly reaches recognizers as ERROR_CLIENT or NO_MATCH.
+                    // The partial transcript is already kept, so this is not actionable failure.
+                    if (stoppedByUser) return;
                     if (code == android.speech.SpeechRecognizer.ERROR_NO_MATCH
                             || code == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                         toast(uiText(R.string.voice_no_input));
                     } else if (code == android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                         toast(uiText(R.string.voice_permission));
+                    } else if (code == android.speech.SpeechRecognizer.ERROR_AUDIO) {
+                        toast(uiText(R.string.voice_audio_unavailable));
                     } else if (code == android.speech.SpeechRecognizer.ERROR_NETWORK
                             || code == android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
                         toast(uiText(R.string.voice_network));
                     } else if (code == android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+                        destroySpeechRecognizer();
                         toast(uiText(R.string.voice_busy));
+                    } else if (code == android.speech.SpeechRecognizer.ERROR_CLIENT) {
+                        destroySpeechRecognizer();
+                        toast(uiText(R.string.voice_interrupted));
                     } else {
                         toast(uiText(R.string.voice_error, code));
                     }
                 }
             });
-            voiceBase = input == null ? "" : input.getText().toString().trim();
             Intent ri = new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             ri.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                     android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             ri.putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
             ri.putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-            ri.putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,
-                    java.util.Locale.getDefault().toLanguageTag());
-            speech.startListening(ri);
+            // Use the recognizer's own language preference. Forcing the app locale can fail when
+            // its language model is not installed on the device.
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                ri.putExtra(android.speech.RecognizerIntent.EXTRA_ENABLE_FORMATTING,
+                        android.speech.RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY);
+                ri.putExtra(android.speech.RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true);
+            }
             listening = true;
             setVoiceUi(true);
+            speech.startListening(ri);
         } catch (Throwable t) {
-            listening = false;
-            setVoiceUi(false);
+            if (session == voiceSession) {
+                listening = false;
+                voiceStopRequested = false;
+                setVoiceUi(false);
+            }
+            destroySpeechRecognizer();
             toast(uiText(R.string.voice_failed, t));
         }
     }
 
-    private String bestSpeech(android.os.Bundle b) {
-        if (b == null) return "";
-        java.util.ArrayList<String> r =
-                b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
-        if (r == null || r.isEmpty() || r.get(0) == null) return "";
-        return r.get(0).trim();
+    private void ensureSpeechRecognizer() {
+        if (speech == null) speech = android.speech.SpeechRecognizer.createSpeechRecognizer(this);
     }
 
-    /** partial text replaces the dictated part; anything already typed stays in front of it */
+    private boolean isActiveVoiceSession(long session) {
+        return listening && session == voiceSession;
+    }
+
+    private void finishVoiceSession(long session) {
+        if (session != voiceSession) return;
+        listening = false;
+        voiceStopRequested = false;
+        clearVoiceStopWatchdog();
+        setVoiceUi(false);
+    }
+
+    private void updateVoiceLevel(long session, float rms) {
+        if (!isActiveVoiceSession(session) || voiceStopRequested || micBtn == null) return;
+        float scale = 1f + Math.min(0.12f, Math.max(0f, rms) * 0.012f);
+        micBtn.setScaleX(scale);
+        micBtn.setScaleY(scale);
+    }
+
+    private String bestSpeech(android.os.Bundle b) {
+        if (b == null) return "";
+        java.util.ArrayList<String> results =
+                b.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION);
+        if (results == null || results.isEmpty() || results.get(0) == null) return "";
+        return results.get(0).trim();
+    }
+
     private void setVoiceText(String text) {
         if (input == null) return;
         String full = voiceBase.isEmpty() ? text : voiceBase + " " + text;
@@ -4272,18 +4324,84 @@ public class MainActivity extends Activity {
     }
 
     private void setVoiceUi(boolean on) {
-        listening = on;
         if (micBtn == null) return;
+        micBtn.setImageResource(on ? R.drawable.ic_stop_20 : R.drawable.ic_mic_24);
         micBtn.setImageTintList(ColorStateList.valueOf(on ? ON_ACCENT : MUTED));
         micBtn.setBackground(on ? circle(ACCENT) : ripple(Color.TRANSPARENT, 0, 24));
-        setButtonA11y(micBtn, on ? uiText(R.string.a11y_mic_stop) : uiText(R.string.a11y_mic_start));
+        micBtn.setAlpha(on && voiceStopRequested ? 0.68f : 1f);
+        if (!on) {
+            micBtn.setScaleX(1f);
+            micBtn.setScaleY(1f);
+        }
+        setButtonA11y(micBtn, on
+                ? uiText(voiceStopRequested ? R.string.a11y_mic_finishing : R.string.a11y_mic_stop)
+                : uiText(R.string.a11y_mic_start));
     }
 
+    /** User tap requests final speech result. Background cancels and invalidates callbacks. */
     private void stopVoiceInput(boolean userTap) {
-        try { if (speech != null) speech.stopListening(); } catch (Throwable ignored) { }
-        setVoiceUi(false);
+        if (!listening) {
+            if (!userTap) destroySpeechRecognizer();
+            return;
+        }
+        final long session = voiceSession;
+        if (!userTap) {
+            voiceSession++;
+            listening = false;
+            voiceStopRequested = false;
+            clearVoiceStopWatchdog();
+            setVoiceUi(false);
+            try { if (speech != null) speech.cancel(); } catch (Throwable ignored) { }
+            destroySpeechRecognizer();
+            return;
+        }
+        if (voiceStopRequested) return;
+        voiceStopRequested = true;
+        setVoiceUi(true);
+        try {
+            if (speech != null) speech.stopListening();
+            armVoiceStopWatchdog(session);
+        } catch (Throwable t) {
+            finishVoiceSession(session);
+            destroySpeechRecognizer();
+            toast(uiText(R.string.voice_failed, t));
+        }
     }
 
+    /** Some vendor recognizers never deliver a terminal callback after stopListening(). */
+    private void armVoiceStopWatchdog(final long session) {
+        clearVoiceStopWatchdog();
+        voiceStopWatchdog = new Runnable() {
+            @Override public void run() {
+                if (!isActiveVoiceSession(session) || !voiceStopRequested) return;
+                finishVoiceSession(session);
+                destroySpeechRecognizer();
+            }
+        };
+        ui.postDelayed(voiceStopWatchdog, 1800L);
+    }
+
+    private void clearVoiceStopWatchdog() {
+        if (voiceStopWatchdog == null) return;
+        try { ui.removeCallbacks(voiceStopWatchdog); } catch (Throwable ignored) { }
+        voiceStopWatchdog = null;
+    }
+
+    private void destroySpeechRecognizer() {
+        if (speech == null) return;
+        try { speech.cancel(); } catch (Throwable ignored) { }
+        try { speech.destroy(); } catch (Throwable ignored) { }
+        speech = null;
+    }
+
+    private void hideComposerKeyboard() {
+        if (input == null) return;
+        try {
+            android.view.inputmethod.InputMethodManager imm =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
+        } catch (Throwable ignored) { }
+    }
     /** Focus can arrive before the composer is attached after a transcript render; defer IME once. */
     private void showComposerKeyboard() {
         final EditText field = input;

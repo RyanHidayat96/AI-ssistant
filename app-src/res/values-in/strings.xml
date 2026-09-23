@@ -331,4 +331,7 @@
     <string name="notification_task_chat_suffix"> - %1$s</string>
     <string name="notification_task_blocked_detail">Agent membutuhkan requirement tambahan dari Anda untuk melanjutkan.</string>
     <string name="notification_elapsed_seconds">%1$d dtk</string>
+    <string name="a11y_mic_finishing">Menyelesaikan dikte</string>
+    <string name="voice_audio_unavailable">Mikrofon tidak tersedia atau sedang dipakai app lain</string>
+    <string name="voice_interrupted">Layanan suara berhenti. Coba lagi.</string>
 </resources>
