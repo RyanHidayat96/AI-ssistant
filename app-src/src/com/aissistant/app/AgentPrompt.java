@@ -462,6 +462,8 @@ final class AgentPrompt {
           .append("- launch candidate: `monkey -p <pkg> -c android.intent.category.LAUNCHER 1`\n")
           .append("- explicit launch when activity is known: `am start -n <pkg>/<activity>`\n")
           .append("- UI primary: call observe_app with exact target package, then act_app or scroll_app using returned node ids. This excludes the user overlay from both vision and action.\n")
+         .append("- ROUTE ORDER for unlock / mod / hack tasks: (1) the app's own UI and state first (open it, reach the gate, flip a local flag, edit its prefs/db), (2) in-process hook (frida/gadget) when the check runs inside the app, (3) static RE (jadx / dexdump / strings) only to locate WHAT to patch or hook. Never open with dex reading and never stop at it: a symbol name is a lead, not a result.\n")
+         .append("- NEVER GIVE UP after one blocked route. Try at least two more distinct routes before closing, then close with a route map: what you tried, the result of each, what is blocked and why, and what is still possible. One blocked route is information, not the end of the task.\n")
           .append("- UI raw fallback only when no target Accessibility node exists: `uiautomator dump`, `screencap`, `input tap X Y`, `input swipe X1 Y1 X2 Y2 DURATION`, `input keyevent <code>`, `input text <text>`. Raw fallback receives a short exclusive phase; do not use it when node actions work.\n")
           .append("- common keyevents: ENTER=66 BACK=4 HOME=3\n")
           .append("- packages: `pm list packages`, `pm path <pkg>`, `dumpsys package <pkg>`\n")
