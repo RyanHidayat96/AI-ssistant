@@ -19,7 +19,7 @@ final class OverlayHub {
     private static volatile boolean busy = false;
     /** Clean capture window: do not recreate the panel until the current screenshot/dump finishes. */
     private static volatile boolean suppressedForDriving = false;
-    /** True while a root/UI command is targeting another app; any overlay created now must ignore touch. */
+    /** True only while a raw global-input command is isolated; normal runs keep overlay usable. */
     private static volatile boolean agentPassThrough = false;
     /**
      * Strict isolation for an active agent run.  The assistant's own app-owned windows must not
@@ -115,23 +115,24 @@ final class OverlayHub {
     static void setAgentPassThrough(boolean v) { agentPassThrough = v; }
     static boolean agentPassThrough() { return agentPassThrough; }
 
-    /** Run is active: any panel shown between commands remains visual-only. */
+    /** Run is active: keep overlay visible and usable for the user. Agent tools filter it out. */
     static void beginAgentRun() {
         agentIsolation = false;
-        agentPassThrough = true;
+        agentPassThrough = false;
         suppressedForDriving = false;
     }
 
-    /** A command is about to inspect or drive the screen: remove every self-owned surface. */
+    /** A raw shell/input command is about to inspect or drive the screen: remove self surfaces. */
     static void enterAgentIsolation() {
         agentIsolation = true;
         agentPassThrough = true;
         suppressedForDriving = true;
     }
 
-    /** Command completed; preserve visual-only mode until the full run has ended. */
+    /** Raw command completed; target-window tools keep the overlay interactive between commands. */
     static void leaveAgentIsolation() {
         agentIsolation = false;
+        agentPassThrough = false;
         suppressedForDriving = false;
     }
 

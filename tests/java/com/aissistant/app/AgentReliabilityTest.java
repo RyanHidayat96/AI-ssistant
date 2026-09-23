@@ -155,17 +155,17 @@ public final class AgentReliabilityTest {
     private static void testOverlayIsolationState() {
         OverlayHub.finishAgentRun();
         OverlayHub.beginAgentRun();
-        check(OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
+        check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
                         && !OverlayHub.overlaySuppressedForDriving(),
-                "active run keeps any user-visible panel visual-only between commands");
+                "active run keeps the overlay usable while target-window tools filter it out");
         OverlayHub.enterAgentIsolation();
         check(OverlayHub.agentPassThrough() && OverlayHub.agentIsolation()
                         && OverlayHub.overlaySuppressedForDriving(),
-                "command isolation removes any self-owned window before UI work");
+                "raw command isolation removes any self-owned window before global input");
         OverlayHub.leaveAgentIsolation();
-        check(OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
+        check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
                         && !OverlayHub.overlaySuppressedForDriving(),
-                "command completion restores only visual mode, never touch during active run");
+                "raw command completion restores normal overlay interaction");
         OverlayHub.finishAgentRun();
         check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation(),
                 "terminal run cleanup restores normal overlay interaction");

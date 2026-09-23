@@ -152,8 +152,8 @@ final class OverlayView {
     }
 
     /**
-     * Start a run in visual-only mode.  The panel remains useful to the user between commands,
-     * but has no touch, focus, or outside-touch path while the agent is active.
+     * Start a run with the panel still usable by the user. Agent UI tools use a target-window
+     * Accessibility path and never receive this app's own overlay nodes.
      */
     static boolean beginAgentRun(final Context ctx) {
         OverlayHub.beginAgentRun();
@@ -165,7 +165,7 @@ final class OverlayView {
                     OverlayView ov = current;
                     if (ov != null) {
                         ov.useIme(false);
-                        ov.setAgentPassThrough(true);
+                        ov.setAgentPassThrough(false);
                     }
                     ready.set(true);
                 } catch (Throwable t) {
@@ -209,20 +209,22 @@ final class OverlayView {
     }
 
     /**
-     * Restore panel pixels after one capture, but keep its entire region pass-through for an
-     * active run. Android cannot route root-injected touches differently from human touches, so a
-     * panel that stays touchable between commands can still intercept the next agent tap.
+     * Restore panel after one raw command. The next raw command must isolate again; target-window
+     * Accessibility actions cannot target this overlay because its package is filtered out.
      */
     static void finishAgentObservation(final Context ctx) {
         // The command has already finished. The next command has to enter isolation again before
-        // it can execute, so restoring this visual-only panel cannot become an input target.
+        // it can execute, so restoring this user-visible panel cannot become a raw-input target.
         OverlayHub.leaveAgentIsolation();
         final Runnable finish = new Runnable() {
             @Override public void run() {
                 try {
                     OverlayView ov = current;
-                    if (ov == null) return;
-                    ov.setAgentPassThrough(OverlayHub.busy());
+                    if (ov == null) {
+                        if (ctx != null && !MainActivity.appVisible && canDraw(ctx)) OverlayView.show(ctx);
+                        return;
+                    }
+                    ov.setAgentPassThrough(false);
                     if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
                 } catch (Throwable t) {
                     android.util.Log.e("AIssistant", "overlay finish agent observation failed: " + t);
