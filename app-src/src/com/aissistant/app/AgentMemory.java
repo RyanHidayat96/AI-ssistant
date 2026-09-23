@@ -57,6 +57,11 @@ final class AgentMemory {
         return id;
     }
 
+    /** Retrieval output is historical context and must never become another evidence source. */
+    static boolean isEvidenceReadAction(String action) {
+        return action != null && action.trim().startsWith("read_evidence");
+    }
+
     String readEvidence(String id, int offset) throws Exception {
         if (id == null || !id.matches("e-[0-9]+-[0-9]+\\.txt"))
             throw new IllegalArgumentException("Invalid evidence id");

@@ -13,7 +13,7 @@ final class RunGuard {
     };
     /** Counts one error class across different checks; it nudges triage but never proves a task impossible. */
     private final Map<String, Integer> failureFamilies = new LinkedHashMap<String, Integer>();
-    private int repeated, calls;
+    private int repeated, calls, consecutiveEvidenceReads;
     private boolean exhausted;
 
     void reset() {
@@ -21,6 +21,7 @@ final class RunGuard {
         failureFamilies.clear();
         repeated = 0;
         calls = 0;
+        consecutiveEvidenceReads = 0;
         exhausted = false;
     }
 
@@ -32,7 +33,18 @@ final class RunGuard {
         String result = output == null ? "" : output;
         String previous = observations.put(key, result);
         repeated = result.equals(previous) ? repeated + 1 : 0;
+        boolean evidenceRead = key.trim().startsWith("read_evidence");
+        consecutiveEvidenceReads = evidenceRead ? consecutiveEvidenceReads + 1 : 0;
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
+        if (consecutiveEvidenceReads >= 4) {
+            exhausted = true;
+            return triage + "\n[RUNTIME: four consecutive historical-evidence retrievals add context but no fresh observation. "
+                    + "Stop retrieving evidence, report the facts already extracted, and choose one concrete next action on resume. No further tools this run.]";
+        }
+        if (consecutiveEvidenceReads == 3) {
+            return triage + "\n[RUNTIME: three consecutive historical-evidence retrievals. Do not retrieve evidence of a retrieval or follow a reference chain. "
+                    + "Use the source facts now, or make one fresh, task-relevant observation.]";
+        }
         if (repeated >= 12 || calls >= 240) {
             exhausted = true;
             return triage + "\n[RUNTIME: execution budget reached (" + calls + " calls, " + repeated

@@ -105,7 +105,7 @@
     <string name="chat_output">Output</string>
     <string name="chat_continue">▶ Lanjutkan · tap</string>
     <string name="chat_close_commands">▴ Sembunyikan · %1$d perintah</string>
-    <string name="chat_new_messages">↓ %1$d pembaruan baru</string>
+    <string name="chat_new_messages">↓ %1$d pesan baru</string>
     <string name="chat_new_message">↓ Pesan baru</string>
     <string name="chat_empty_title">Apa yang ingin Anda cek?</string>
     <string name="chat_setup_title">Atur AI-ssistant</string>
@@ -241,6 +241,7 @@
     <string name="runtime_runaway">Guard: loop tak terkendali %1$d perintah · tugas dihentikan · %2$s</string>
     <string name="runtime_repeat_change">Guard: pengulangan ketiga · agent harus mengganti pendekatan · %1$s</string>
     <string name="runtime_workspace_redirect">Workspace: ada path di luar folder sesi · dialihkan ke $WD</string>
+    <string name="runtime_workspace_blocked">Workspace: path di luar sesi ini diblokir</string>
     <string name="overlay_stopped">Dihentikan…</string>
     <string name="overlay_main_closed">(app sudah ditutup — buka AI-ssistant dulu)</string>
     <string name="overlay_send_failed">Gagal kirim: %1$s</string>    <string name="shell_command">$ %1$s</string>
@@ -262,9 +263,9 @@
     <string name="a11y_continue_task">Lanjutkan tugas ini</string>
     <string name="a11y_show_commands">Tampilkan %1$d perintah</string>
     <string name="a11y_hide_commands">Sembunyikan %1$d perintah</string>
-    <string name="a11y_jump_latest">Lompat ke pembaruan terbaru, %1$d pembaruan baru</string>
+    <string name="a11y_jump_latest">Lompat ke pesan terbaru, %1$d pesan baru</string>
     <string name="a11y_jump_end">Lompat ke akhir percakapan</string>
-    <string name="a11y_new_messages_announcement">%1$d pembaruan baru. Ketuk untuk pembaruan terbaru.</string>
+    <string name="a11y_new_messages_announcement">%1$d pesan baru. Ketuk untuk melihat pesan terbaru.</string>
     <string name="chat_command_group_base">%1$d perintah</string>
     <string name="chat_command_group_last"> - %1$s</string>
     <string name="chat_command_group_action"> - %1$s</string>

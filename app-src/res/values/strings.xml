@@ -105,7 +105,7 @@
     <string name="chat_output">Output</string>
     <string name="chat_continue">▶ Continue · tap</string>
     <string name="chat_close_commands">▴ Hide · %1$d commands</string>
-    <string name="chat_new_messages">↓ %1$d new updates</string>
+    <string name="chat_new_messages">↓ %1$d new messages</string>
     <string name="chat_new_message">↓ New message</string>
     <string name="chat_empty_title">What would you like to check?</string>
     <string name="chat_setup_title">Set up AI-ssistant</string>
@@ -241,6 +241,7 @@
     <string name="runtime_runaway">Guard: runaway loop %1$d commands · run stopped · %2$s</string>
     <string name="runtime_repeat_change">Guard: third repeat · agent must change approach · %1$s</string>
     <string name="runtime_workspace_redirect">Workspace: path outside session folder · redirected to $WD</string>
+    <string name="runtime_workspace_blocked">Workspace: path outside current session was blocked</string>
     <string name="overlay_stopped">Stopped…</string>
     <string name="overlay_main_closed">(app is closed — open AI-ssistant first)</string>
     <string name="overlay_send_failed">Send failed: %1$s</string>    <string name="shell_command">$ %1$s</string>
@@ -262,9 +263,9 @@
     <string name="a11y_continue_task">Continue this task</string>
     <string name="a11y_show_commands">Show %1$d commands</string>
     <string name="a11y_hide_commands">Hide %1$d commands</string>
-    <string name="a11y_jump_latest">Jump to latest update, %1$d new updates</string>
+    <string name="a11y_jump_latest">Jump to latest messages, %1$d new messages</string>
     <string name="a11y_jump_end">Jump to end of conversation</string>
-    <string name="a11y_new_messages_announcement">%1$d new updates. Tap for latest updates.</string>
+    <string name="a11y_new_messages_announcement">%1$d new messages. Tap for latest messages.</string>
     <string name="chat_command_group_base">%1$d commands</string>
     <string name="chat_command_group_last"> - %1$s</string>
     <string name="chat_command_group_action"> - %1$s</string>

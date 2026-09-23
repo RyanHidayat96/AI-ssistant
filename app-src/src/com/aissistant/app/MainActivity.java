@@ -204,8 +204,9 @@ public class MainActivity extends Activity {
     private FrameLayout thumbHit;
     private View thumb;
     private boolean thumbHeld;
-    /** "jump to newest" pill: shown while the user reads older messages and new ones arrive */
+    /** Quiet down arrow and update pill shown while the user reads older messages. */
     private TextView jumpChip;
+    private TextView newMessagesChip;
     private int jumpCount;
     private int jumpTotal;
     private boolean jumpAnnounced;
@@ -1602,7 +1603,7 @@ public class MainActivity extends Activity {
             renderFrom = 0;
             renderTo = 0;
             jumpCount = 0; jumpTotal = 0; jumpAnnounced = false; chatAtBottom = false;
-            if (jumpChip != null) jumpChip.setVisibility(View.GONE);
+            hideJumpControls();
         } else {
             int total = snap.size();
             // Keep a small tail window while current. Reading history may retain at most two pages.
@@ -2111,44 +2112,75 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Floating bottom pill: stays above composer without changing the transcript viewport. */
+    /** Separate controls keep the state unambiguous: a quiet arrow for navigation, or an update pill for unseen work. */
     private void ensureJumpChip() {
-        if (jumpChip != null) return;
-        jumpChip = tv(12, ON_ACCENT, Typeface.BOLD);
+        if (jumpChip != null && newMessagesChip != null) return;
+
+        jumpChip = tv(22, FG, Typeface.NORMAL);
         jumpChip.setGravity(Gravity.CENTER);
         jumpChip.setMinHeight(dp(48));
         jumpChip.setMinWidth(dp(48));
-        jumpChip.setText(uiText(R.string.chat_new_message));
+        jumpChip.setText("\u2193");
         setButtonA11y(jumpChip, uiText(R.string.a11y_jump_end));
-        styleJumpChip(false);
+        jumpChip.setBackground(ripple(TOOL_BG, LINE, 24));
         jumpChip.setVisibility(View.GONE);
-        FrameLayout.LayoutParams jlp = new FrameLayout.LayoutParams(-2, dp(48),
+        FrameLayout.LayoutParams arrowLp = new FrameLayout.LayoutParams(dp(48), dp(48),
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        jlp.setMargins(0, 0, 0, dp(10));
-        if (chatScrollWrap != null) chatScrollWrap.addView(jumpChip, jlp);
+        arrowLp.setMargins(0, 0, 0, dp(10));
+        if (chatScrollWrap != null) chatScrollWrap.addView(jumpChip, arrowLp);
+        jumpChip.setOnTouchListener(cancelChatFlingOnPress());
         jumpChip.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                jumpCount = 0;
-                jumpAnnounced = false;
-                chatAtBottom = true;
-                renderFrom = Integer.MAX_VALUE;      // re-anchor the window on the newest bubbles
-                renderTo = Integer.MAX_VALUE;
-                jumpChip.setVisibility(View.GONE);
-                renderTranscript(true);
-            }
+            @Override public void onClick(View v) { jumpToLatest(); }
+        });
+
+        newMessagesChip = tv(12, ON_ACCENT, Typeface.BOLD);
+        newMessagesChip.setGravity(Gravity.CENTER);
+        newMessagesChip.setMinHeight(dp(48));
+        newMessagesChip.setPadding(dp(16), 0, dp(16), 0);
+        newMessagesChip.setText(uiText(R.string.chat_new_messages, 1));
+        newMessagesChip.setBackground(ripple(ACCENT, ACCENT, 24));
+        newMessagesChip.setVisibility(View.GONE);
+        FrameLayout.LayoutParams updatesLp = new FrameLayout.LayoutParams(-2, dp(48),
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        updatesLp.setMargins(0, 0, 0, dp(10));
+        if (chatScrollWrap != null) chatScrollWrap.addView(newMessagesChip, updatesLp);
+        newMessagesChip.setOnTouchListener(cancelChatFlingOnPress());
+        newMessagesChip.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { jumpToLatest(); }
         });
     }
 
-    /** A quiet down arrow becomes an update pill only when the agent added unseen content. */
-    private void styleJumpChip(boolean hasUpdates) {
-        if (jumpChip == null) return;
-        jumpChip.setTextColor(hasUpdates ? ON_ACCENT : FG);
-        jumpChip.setTextSize(hasUpdates ? 12 : 22);
-        jumpChip.setPadding(hasUpdates ? dp(16) : 0, 0, hasUpdates ? dp(16) : 0, 0);
-        jumpChip.setBackground(ripple(hasUpdates ? ACCENT : TOOL_BG,
-                hasUpdates ? ACCENT : LINE, 24));
+    /** A press on either bottom control must cancel an in-flight ScrollView fling before its click runs. */
+    private View.OnTouchListener cancelChatFlingOnPress() {
+        return new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) cancelChatFling();
+                return false;       // preserve normal pressed state, click, and accessibility behavior
+            }
+        };
     }
 
+    private void cancelChatFling() {
+        if (chatScroll == null) return;
+        chatScroll.fling(0);        // public ScrollView API replaces any running fling at its current position
+        chatScroll.stopNestedScroll();
+    }
+
+    private void jumpToLatest() {
+        cancelChatFling();
+        jumpCount = 0;
+        jumpAnnounced = false;
+        chatAtBottom = true;
+        renderFrom = Integer.MAX_VALUE;      // re-anchor the window on the newest bubbles
+        renderTo = Integer.MAX_VALUE;
+        hideJumpControls();
+        renderTranscript(true);
+    }
+
+    private void hideJumpControls() {
+        if (jumpChip != null) jumpChip.setVisibility(View.GONE);
+        if (newMessagesChip != null) newMessagesChip.setVisibility(View.GONE);
+    }
     /** keep track of whether we are pinned to the newest message */
     private void onChatScrolled() {
         if (chatScroll == null || chatLog == null) return;
@@ -2233,31 +2265,29 @@ public class MainActivity extends Activity {
         thumbHit.setVisibility(View.VISIBLE);
     }
 
-    /** Bottom control always offers a quick return; unseen updates expand it into a labeled pill. */
+    /** New-message pill takes the arrow's exact place, never appearing beside it. */
     private void refreshJumpChip() {
-        if (jumpChip == null) return;
+        if (jumpChip == null || newMessagesChip == null) return;
         boolean hasBelow = chatScroll != null && chatScroll.getChildCount() > 0
                 && chatScroll.getChildAt(0).getHeight() > chatScroll.getHeight();
         boolean show = !chatAtBottom && hasBelow && screen == 0
                 && chatScreen != null && chatScreen.isShown();
         if (!show) {
-            jumpChip.setVisibility(View.GONE);
+            hideJumpControls();
             if (chatAtBottom) jumpAnnounced = false;
             return;
         }
         boolean hasUpdates = jumpCount > 0;
-        jumpChip.setText(hasUpdates ? uiText(R.string.chat_new_messages, jumpCount) : "\u2193");
-        setButtonA11y(jumpChip, hasUpdates
-                ? uiText(R.string.a11y_jump_latest, jumpCount)
-                : uiText(R.string.a11y_jump_end));
-        styleJumpChip(hasUpdates);
-        jumpChip.setVisibility(View.VISIBLE);
-        if (hasUpdates && !jumpAnnounced) {
+        jumpChip.setVisibility(hasUpdates ? View.GONE : View.VISIBLE);
+        newMessagesChip.setVisibility(hasUpdates ? View.VISIBLE : View.GONE);
+        if (!hasUpdates) return;
+        newMessagesChip.setText(uiText(R.string.chat_new_messages, jumpCount));
+        setButtonA11y(newMessagesChip, uiText(R.string.a11y_jump_latest, jumpCount));
+        if (!jumpAnnounced) {
             jumpAnnounced = true;
-            jumpChip.announceForAccessibility(uiText(R.string.a11y_new_messages_announcement, jumpCount));
+            newMessagesChip.announceForAccessibility(uiText(R.string.a11y_new_messages_announcement, jumpCount));
         }
     }
-
     private View busyRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
@@ -3782,6 +3812,18 @@ public class MainActivity extends Activity {
 
     /** `echoCommand` is false when the user-visible bubble already contains the exact command. */
     private String executeCommand(String cmd, boolean echoCommand) {
+        if (touchesForeignTmp(cmd)) {
+            String blocked = "[WORKSPACE ISOLATION: this command points outside this session workspace ("
+                    + workDir() + "). It was NOT executed. Use current-session artifacts or obtain a fresh, "
+                    + "task-relevant copy in $WD before continuing.]";
+            if (!foreignTmpWarned) {
+                foreignTmpWarned = true;
+                addBubble("note", uiText(R.string.runtime_workspace_blocked));
+            }
+            if (echoCommand) addBubble("tool", "$ " + cmd);
+            addBubble("tool", blocked);
+            return blocked;
+        }
         String cat = permissionCategory(cmd);
         boolean gated = cat != null;
         if (gated && autoApprove) {
@@ -3853,15 +3895,6 @@ public class MainActivity extends Activity {
             }
         }
         String out = withRecovery(foldLong(raw), cmd);
-        if (touchesForeignTmp(cmd)) {
-            out = out + "\n[workspace] part of that command pointed at /data/local/tmp OUTSIDE this session's workspace ("
-                    + wd + "). Those files were made by a DIFFERENT task: not your target, not evidence, not yours to "
-                    + "patch. Pull your own copy into $WD (name it after the package), verify with `md5sum`, work on that.";
-            if (!foreignTmpWarned) {
-                foreignTmpWarned = true;
-                addBubble("note", uiText(R.string.runtime_workspace_redirect));
-            }
-        }
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
@@ -3939,6 +3972,10 @@ public class MainActivity extends Activity {
     /** Keep full evidence off-context; send a bounded head and tail with a retrieval handle. */
     private String modelOut(String action, String output) {
         String out = output == null || output.isEmpty() ? "(no output)" : output;
+        if (AgentMemory.isEvidenceReadAction(action)) {
+            return AgentMemory.excerpt(out, 6000)
+                    + "\n[HISTORICAL EVIDENCE RETRIEVED: this retrieval was not saved again. Use its source facts; do not read evidence of this retrieval.]";
+        }
         try {
             String id = taskMemory.evidence(action, out);
             return AgentMemory.excerpt(out, 6000)
@@ -3948,7 +3985,6 @@ public class MainActivity extends Activity {
                     + "\n[Evidence archive unavailable: " + error.getClass().getSimpleName() + "]";
         }
     }
-
     /** Token diet: keep the live request bounded - old tool output shrinks to a stub, the newest
      *  tool result and every user/assistant message stay intact. */
     private void compactMessages(int budget) {

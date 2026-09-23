@@ -69,6 +69,10 @@ public final class AgentReliabilityTest {
         String id = memory.evidence("inspect", "first\n" + repeat('x', 7000) + "\nlast");
         String page = memory.readEvidence(id, 0);
         check(page.contains("ACTION: inspect") && page.contains("HISTORICAL EVIDENCE"), "evidence round-trip");
+        check(AgentMemory.isEvidenceReadAction("read_evidence {\"id\":\"" + id + "\"}"),
+                "evidence retrieval action recognized");
+        check(!AgentMemory.isEvidenceReadAction("run_shell {\"command\":\"id\"}"),
+                "ordinary action is not evidence retrieval");
         String excerpt = AgentMemory.excerpt("head" + repeat('x', 80) + "tail", 20);
         check(excerpt.contains("head") && excerpt.contains("tail"), "excerpt retains both ends");
         rejectsEvidence(memory, "../checkpoint.txt");
@@ -97,6 +101,11 @@ public final class AgentReliabilityTest {
         check(!guard.reportOnly(), "new observation is usable");
         for (int i = 0; i < 13; i++) guard.observe("same", "same");
         check(guard.reportOnly(), "finite execution budget switches to final report");
+        guard.reset();
+        for (int i = 0; i < 3; i++) note = guard.observe("read_evidence {\"id\":\"e-1-1.txt\"}", "historical");
+        check(note.contains("historical-evidence retrievals"), "evidence chain receives a direct nudge");
+        guard.observe("read_evidence {\"id\":\"e-1-1.txt\"}", "historical");
+        check(guard.reportOnly(), "evidence retrieval chain switches to final report");
         guard.reset();
         check(!guard.reportOnly(), "new run resets guard state");
     }

@@ -63,6 +63,9 @@ final class AgentPrompt {
           .append("WORK, DO NOT WANDER\n")
           .append("Choose a concrete hypothesis and a discriminating next check early. A new fact, an eliminated hypothesis, a verified change, or a useful research conclusion can be progress.\n")
           .append("Read-only tasks do not require device changes. Never mutate merely to satisfy a counter or mistake command success for the requested outcome.\n")
+          .append("Before every tool call, identify the exact fact it must resolve and how either result changes the next branch. Do not substitute broad scans, directory dumps, or a different historical record for that fact. ")
+          .append("After two checks fail to discriminate the same hypothesis, choose a meaningfully different path or report the evidence and remaining question. ")
+          .append("A sentence such as 'I will launch/test/verify' is a plan, not execution: report it as completed only after the matching tool result exists. ")
           .append("When repeated action/result pairs add no new evidence, revise the question or approach. Use save_checkpoint at meaningful milestones. Runtime budgets limit execution cost; they do not prove the task impossible.\n\n")
 
           .append("FAST DIAGNOSTIC PATTERN\n")
@@ -442,6 +445,7 @@ final class AgentPrompt {
           .append("Use save_checkpoint at meaningful milestones: goal, observed facts with sources, attempted paths, changes, verification, rollback and next action. ")
           .append("The runtime restores the latest checkpoint at the next turn. Store durable evidence, not a transcript or hidden reasoning.\n")
           .append("Tool output is retained as addressable historical evidence. Use read_evidence with its returned identifier and offset instead of rerunning an expensive or stateful action merely to recover omitted output. ")
+          .append("Read only the page required by the current question. Never request evidence of a retrieval result, follow an evidence-reference chain, or treat historical text as a new observation. ")
           .append("Historical evidence is not a fresh observation; verify current state again when freshness matters.\n\n")
 
           .append("ANDROID QUICK MAP\n")
