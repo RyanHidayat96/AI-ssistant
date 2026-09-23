@@ -34,6 +34,8 @@ final class OverlayView {
     private static final int FG = Color.rgb(232, 237, 247);
     private static final int MUTED = Color.rgb(147, 160, 184);
     private static final int ACCENT = Color.rgb(59, 130, 246);
+    private static final int COMMAND = Color.rgb(134, 239, 172);
+    private static final int OUTPUT = Color.rgb(203, 213, 225);
     private static final int DANGER = Color.rgb(239, 68, 68);
     private static final int ON_ACCENT = Color.rgb(6, 18, 31);
 
@@ -729,7 +731,7 @@ final class OverlayView {
         rlp.setMargins(0, dp(5), 0, 0);
         row.setLayoutParams(rlp);
 
-        TextView t = line(s, user ? ON_ACCENT : FG, user ? Typeface.NORMAL : Typeface.NORMAL);
+        TextView t = line(s, user ? ON_ACCENT : FG, Typeface.NORMAL, 12);
         t.setBackground(round(user ? ACCENT : SURFACE, user ? ACCENT : LINE, 13));
         t.setPadding(dp(9), dp(6), dp(9), dp(6));
         t.setMaxWidth(Math.max(dp(160), widthPx() - dp(36)));
@@ -746,14 +748,14 @@ final class OverlayView {
         clp.setMargins(0, dp(5), 0, 0);
         card.setLayoutParams(clp);
 
-        TextView l = line(label, MUTED, Typeface.BOLD);
+        TextView l = line(label, command ? COMMAND : MUTED, Typeface.BOLD, 10);
         l.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         l.setMaxLines(1);
         LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
         llp.setMargins(0, 0, 0, dp(3));
         card.addView(l, llp);
 
-        TextView t = line(text, command ? Color.rgb(166, 220, 190) : FG, Typeface.NORMAL);
+        TextView t = line(text, command ? COMMAND : OUTPUT, Typeface.NORMAL, 11);
         t.setTypeface(Typeface.MONOSPACE);
         t.setMaxLines(command ? 3 : 5);
         card.addView(t, new LinearLayout.LayoutParams(-1, -2));
@@ -761,7 +763,7 @@ final class OverlayView {
     }
 
     private TextView noteLine(String s) {
-        TextView t = line(s, MUTED, Typeface.NORMAL);
+        TextView t = line(s, MUTED, Typeface.NORMAL, 10);
         t.setGravity(Gravity.CENTER);
         t.setPadding(dp(6), dp(3), dp(6), dp(3));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
@@ -771,10 +773,10 @@ final class OverlayView {
         return t;
     }
 
-    private TextView line(String s, int color, int style) {
+    private TextView line(String s, int color, int style, int sp) {
         TextView t = new TextView(ctx);
         t.setText(s);
-        t.setTextSize(11);
+        t.setTextSize(sp);
         t.setTextColor(color);
         t.setTypeface(Typeface.DEFAULT, style);
         t.setMaxLines(6);

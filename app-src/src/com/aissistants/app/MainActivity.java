@@ -79,7 +79,12 @@ public class MainActivity extends Activity {
     private static final int LINE      = Color.rgb(34, 48, 74);
     private static final int FG        = Color.rgb(232, 237, 247);
     private static final int MUTED     = Color.rgb(147, 160, 184);
+    private static final int STAMP     = Color.rgb(111, 125, 150);
     private static final int ACCENT    = Color.rgb(59, 130, 246);
+    private static final int COMMAND   = Color.rgb(134, 239, 172);
+    private static final int OUTPUT    = Color.rgb(203, 213, 225);
+    private static final int CODE_BG   = Color.rgb(30, 41, 59);
+    private static final int CODE_FG   = Color.rgb(226, 232, 240);
     private static final int OK        = Color.rgb(34, 197, 94);
     private static final int WARN      = Color.rgb(245, 158, 11);
     private static final int DANGER    = Color.rgb(239, 68, 68);
@@ -1203,17 +1208,18 @@ public class MainActivity extends Activity {
             card.setOrientation(LinearLayout.VERTICAL);
             card.setBackground(round(TOOL_BG, LINE, 14));
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
-            TextView label = tv(11, MUTED, Typeface.BOLD);
-            label.setText(text.startsWith("$ ") ? "Perintah" : "Output");
+            boolean command = text.startsWith("$ ");
+            TextView label = tv(11, command ? COMMAND : MUTED, Typeface.BOLD);
+            label.setText(command ? "Perintah" : "Output");
             LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(-1, -2);
             llp.setMargins(0, 0, 0, dp(6));
             card.addView(label, llp);
-            TextView body = tv(12, FG, Typeface.NORMAL);
+            TextView body = tv(12, command ? COMMAND : OUTPUT, Typeface.NORMAL);
             body.setTypeface(Typeface.MONOSPACE);
             body.setTextIsSelectable(true);
             body.setLineSpacing(dp(2), 1f);
             String shown = text.length() > 4000 ? text.substring(0, 4000) + "\n\u2026 (truncated)" : text;
-            if (shown.startsWith("$ ")) {
+            if (command) {
                 SpannableString ss = new SpannableString(shown);
                 ss.setSpan(new ForegroundColorSpan(ACCENT), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 body.setText(ss);
@@ -1225,7 +1231,7 @@ public class MainActivity extends Activity {
             row.addView(card, new LinearLayout.LayoutParams(-2, -2));
         } else {
             boolean shell = user && text.trim().startsWith("$ ");
-            TextView b = tv(shell ? 13 : 14, shell ? FG : (user ? ON_ACCENT : FG), Typeface.NORMAL);
+            TextView b = tv(shell ? 13 : 15, shell ? COMMAND : (user ? ON_ACCENT : FG), Typeface.NORMAL);
             String shown = text.length() > 6000 ? text.substring(0, 6000) + "\n\u2026 (truncated)" : text;
             b.setText(user ? shown : markdownText(shown));
             b.setTextIsSelectable(true);
@@ -1246,7 +1252,7 @@ public class MainActivity extends Activity {
 
         String stamp = fmtStamp(t);
         if (!stamp.isEmpty() && !note) {
-            TextView s = tv(11, MUTED, Typeface.NORMAL);
+            TextView s = tv(11, STAMP, Typeface.NORMAL);
             s.setText(stamp);
             LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
             slp.setMargins(note ? 0 : dp(6), dp(3), dp(6), 0);
@@ -1333,7 +1339,8 @@ public class MainActivity extends Activity {
     private void styleCode(SpannableStringBuilder out, int start, int end) {
         if (start < 0 || end <= start) return;
         out.setSpan(new TypefaceSpan("monospace"), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        out.setSpan(new BackgroundColorSpan(TOOL_BG), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        out.setSpan(new ForegroundColorSpan(CODE_FG), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        out.setSpan(new BackgroundColorSpan(CODE_BG), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
     }
 
     /** a stopped run becomes a button: tap = send "continue" */
@@ -1390,9 +1397,20 @@ public class MainActivity extends Activity {
         TextView t = tv(12, MUTED, Typeface.NORMAL);
         t.setSingleLine(true);
         t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        t.setText("\u2699 " + cmds + " perintah"
+        String action = open ? "sembunyikan" : "lihat output";
+        String groupText = "\u2699 " + cmds + " perintah"
                 + (last.isEmpty() ? "" : " \u00b7 " + last)
-                + (open ? " \u00b7 sembunyikan" : " \u00b7 lihat output"));
+                + " \u00b7 " + action;
+        SpannableString title = new SpannableString(groupText);
+        if (!last.isEmpty()) {
+            int ls = groupText.indexOf(last);
+            if (ls >= 0) title.setSpan(new ForegroundColorSpan(COMMAND), ls, ls + last.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        int as = groupText.lastIndexOf(action);
+        if (as >= 0) title.setSpan(new ForegroundColorSpan(open ? MUTED : ACCENT), as, as + action.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        t.setText(title);
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1);
         card.addView(t, tlp);
         TextView chev = tv(12, MUTED, Typeface.NORMAL);
