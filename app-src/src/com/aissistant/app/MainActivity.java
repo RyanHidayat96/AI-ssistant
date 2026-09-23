@@ -109,6 +109,7 @@ public class MainActivity extends Activity {
     private LinearLayout inputRow;
     private LinearLayout attachBar;
     private int lastIme = -1;
+    private int lastNavigationInset = -1;
     private TextView streamView;
     private View busyView;
     private String pendingPath = null;
@@ -290,18 +291,20 @@ public class MainActivity extends Activity {
         // so lift the whole layout by the IME inset ourselves and keep the input row visible
         root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
             @Override public WindowInsets onApplyWindowInsets(View v, WindowInsets wi) {
+                int navigation = navigationBarInset(wi);
                 int ime;
                 if (android.os.Build.VERSION.SDK_INT >= 30) {
                     ime = wi.getInsets(WindowInsets.Type.ime()).bottom;
                 } else {
-                    ime = Math.max(0, wi.getSystemWindowInsetBottom() - navigationBarHeight());
+                    ime = Math.max(0, wi.getSystemWindowInsetBottom() - navigation);
                 }
-                if (ime != lastIme) {
+                if (ime != lastIme || navigation != lastNavigationInset) {
                     lastIme = ime;
+                    lastNavigationInset = navigation;
                     v.setPadding(0, 0, 0, ime);
                     if (inputRow != null) {
                         inputRow.setPadding(dp(GUTTER), dp(6), dp(GUTTER),
-                                ime > 0 ? dp(12) : navigationBarHeight() + dp(12));
+                                ime > 0 ? dp(12) : navigation + dp(12));
                     }
                     if (ime > 0) scrollToBottom(false);
                 }
@@ -523,6 +526,7 @@ public class MainActivity extends Activity {
         v.addView(qbox, qlp);
 
         ScrollView sc = new ScrollView(this);
+        keepScrollActionsAboveSystemBars(sc);
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(GUTTER), dp(4), dp(GUTTER), dp(16));
@@ -587,7 +591,8 @@ public class MainActivity extends Activity {
         v.addView(ncBtn, nlp);
 
         root.removeAllViews();
-        root.addView(v);
+        root.addView(v, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.requestApplyInsets();
     }
 
     private View sessionCard(final JSONObject s) {
@@ -652,6 +657,7 @@ public class MainActivity extends Activity {
         v.addView(bar);
 
         ScrollView sc = new ScrollView(this);
+        keepScrollActionsAboveSystemBars(sc);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(GUTTER), dp(6), dp(GUTTER), dp(24));
@@ -749,27 +755,17 @@ public class MainActivity extends Activity {
                 store.save(tempValue, timeoutValue,
                         auto.isChecked(), thinking[0]);
                 refreshStatus();
-                toast("Saved \u00b7 " + activeLabel());
+                toast("Tersimpan");
             }
         });
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, dp(52));
         slp.setMargins(0, dp(22), 0, dp(10));
         panel.addView(save, slp);
 
-        Button test = new Button(this);
-        test.setText("Test root access");
-        test.setAllCaps(false);
-        test.setTextSize(15);
-        test.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        test.setTextColor(FG);
-        test.setBackground(ripple(SURFACE, LINE, 14));
-        test.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View x) { showChat(); requestRoot(); }
-        });
-        panel.addView(test, new LinearLayout.LayoutParams(-1, dp(52)));
 
         root.removeAllViews();
-        root.addView(v);
+        root.addView(v, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.requestApplyInsets();
     }
 
     // ==================== chat screen ====================
@@ -2651,14 +2647,21 @@ public class MainActivity extends Activity {
             if (secs > 0) b.append(b.length() > 0 ? "  \u00b7  " : "").append(secs).append("s");
             if (outcome != null && !outcome.isEmpty()) b.append(b.length() > 0 ? "  \u00b7  " : "").append(outcome);
             String titleName = titleOf(cur);
-            AgentService.done(this, "AI-ssistant \u00b7 selesai"
+            boolean needsUser = reportsEvidenceBlocker(lastAssistantSaid);
+            AgentService.done(this, "AI-ssistant \u00b7 " + (needsUser ? "butuh tindakan" : "selesai")
                     + (titleName.isEmpty() ? "" : " \u00b7 " + titleName),
-                    b.length() == 0 ? "Agent sudah selesai bekerja." : b.toString());
+                    b.length() == 0 ? (needsUser ? "Agent butuh requirement dari Anda untuk lanjut." : "Agent sudah selesai bekerja.") : b.toString());
         } catch (Throwable t) {
             android.util.Log.e("AIssistant", "notifyRunFinished: " + t);
         }
     }
 
+    /** A structured blocker report changes background notification wording; ordinary uncertainty does not. */
+    private static boolean reportsEvidenceBlocker(String report) {
+        if (report == null) return false;
+        String low = report.trim().toLowerCase(Locale.US);
+        return low.startsWith("blocked\n") || low.startsWith("blocked:") || low.startsWith("[blocked]");
+    }
     private void hygieneQuiet() {
         try {
             String out = Hygiene.clean();
@@ -2914,9 +2917,10 @@ public class MainActivity extends Activity {
                     for (JSONObject m : messages) msgs.put(m);
                 }
                 if (finalTurn) msgs.put(new JSONObject().put("role", "user").put("content",
-                        "[RUNTIME: execution stopped. Give one final report from recorded evidence: verified results, "
-                        + "changes, uncertainties and next check. Budget exhaustion is not proof of impossibility. "
-                        + "Do not emit tools, RUN commands, or claim unverified success.]"));
+                        "[RUNTIME: execution stopped. Give one final report from recorded evidence. Do not emit tools, RUN commands, or claim unverified success. "
+                        + "Choose one: (A) NEXT CHECK with exact evidence-based action the agent can perform on resume; or (B) BLOCKED only when an unmet requirement is proven. "
+                        + "For BLOCKED, start exactly with BLOCKED then list: requested outcome; missing required capability; observed evidence; meaningful approaches attempted and why they failed; what you prepared or can still prepare; minimum compatible item/spec/action required from user; and exact resume/verification step. "
+                        + "Budget exhaustion alone is never a blocker.]"));
                 android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
                         + " payloadChars=" + msgs.toString().length());
                 final boolean hadImage = hasImagePart(msgs);
@@ -3258,9 +3262,11 @@ public class MainActivity extends Activity {
             h.append("\n");
         }
         if (lo.contains("inaccessible or not found") || lo.contains("exit 127") || lo.contains("not found]")) {
-            h.append("- a binary is missing (no python/java/apktool in /system/bin). Use toybox, or a Termux tool as the ");
-            h.append("termux user: `U=$(pm list packages -U | sed -n 's/.*com\\.termux uid:\\([0-9]*\\).*/\\1/p'); su $U -c 'P=/data/data/com.termux/files/usr; PATH=$P/bin LD_LIBRARY_PATH=$P/lib $P/bin/<tool> ...'`, ");
-            h.append("or install it: `su $U -c '$P/bin/pkg install -y <pkgs>'`\n");
+            h.append("- a tool path is unavailable. This does not prove the task or hardware is impossible. First inspect the exact capability: built-ins, installed PATH, $TOOLS inventory, compatible ABI, and execution context. If a compatible tool is absent, acquire/setup it in $TOOLS or the matching user-space, run a harmless version/test, then resume. Ask the user only if compatible acquisition is proven to need an external requirement.\n");
+        }
+        if (lo.contains("no such device") || lo.contains("device not present") || lo.contains("camera unavailable")
+                || lo.contains("no camera") || lo.contains("hardware not supported") || lo.contains("operation not supported")) {
+            h.append("- possible hardware, driver, service, or platform capability gap. Do not call it blocked yet. Query the exact relevant feature/interface and service state, test realistic compatible paths, then report a minimum external requirement only with that evidence.\n");
         }
         if (lo.contains("permission denied")) {
             h.append("- permission/context problem: retry the same read through init's namespace `nsenter -t 1 -m -- <cmd>` ");
@@ -3862,9 +3868,41 @@ public class MainActivity extends Activity {
         return id > 0 ? getResources().getDimensionPixelSize(id) : dp(28);
     }
 
-    private int navigationBarHeight() {
+    /** Current navigation-bar inset; resource fallback keeps first layout safe before attachment. */
+    private int navigationBarInset(WindowInsets wi) {
+        if (wi != null) {
+            int bottom;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                bottom = wi.getInsets(WindowInsets.Type.navigationBars()).bottom;
+            } else if (android.os.Build.VERSION.SDK_INT >= 21) {
+                bottom = wi.getStableInsetBottom();
+            } else {
+                bottom = wi.getSystemWindowInsetBottom();
+            }
+            if (bottom > 0) return bottom;
+        }
         int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
         return id > 0 ? getResources().getDimensionPixelSize(id) : dp(16);
+    }
+
+    private int navigationBarHeight() {
+        WindowInsets wi = root == null ? null : root.getRootWindowInsets();
+        return navigationBarInset(wi);
+    }
+
+    /** Lets the final item scroll fully above Android's edge-to-edge navigation area. */
+    private void keepScrollActionsAboveSystemBars(final ScrollView sc) {
+        final int left = sc.getPaddingLeft();
+        final int top = sc.getPaddingTop();
+        final int right = sc.getPaddingRight();
+        sc.setClipToPadding(false);
+        sc.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override public WindowInsets onApplyWindowInsets(View v, WindowInsets wi) {
+                int bottom = navigationBarInset(wi) + dp(12);
+                if (v.getPaddingBottom() != bottom) v.setPadding(left, top, right, bottom);
+                return wi;
+            }
+        });
     }
 
     private void scrollToBottom(final boolean force) {
@@ -4014,6 +4052,7 @@ public class MainActivity extends Activity {
         v.addView(bar);
 
         ScrollView sc = new ScrollView(this);
+        keepScrollActionsAboveSystemBars(sc);
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(GUTTER), dp(4), dp(GUTTER), dp(24));
@@ -4082,7 +4121,8 @@ public class MainActivity extends Activity {
         list.addView(addM, new LinearLayout.LayoutParams(-1, dp(50)));
 
         root.removeAllViews();
-        root.addView(v);
+        root.addView(v, new LinearLayout.LayoutParams(-1, 0, 1));
+        root.requestApplyInsets();
     }
 
     private void addDialog() {

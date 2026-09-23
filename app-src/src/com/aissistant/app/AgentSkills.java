@@ -8,6 +8,12 @@ final class AgentSkills {
          + "facts from hypotheses. Choose cheapest check that distinguishes likely causes. New evidence is progress "
          + "without mutation. Record eliminated hypotheses and sourced facts with save_checkpoint. If blocked, show "
          + "observed constraint and realistic next check."},
+        {"capability-preflight", "Resolve a missing hardware, software, tool, access, or service prerequisite.",
+         "Map the requested outcome to its exact required capability. Probe only relevant hardware/interface, OS/API/ABI, "
+         + "driver/service, app/runtime, toolchain, permission/account, storage, network, or remote prerequisite. Treat a "
+         + "failure as evidence, not proof. Try compatible built-ins, installed tools, $TOOLS, user-space, configuration, "
+         + "or a small helper and harmlessly verify each setup before resuming. If an external requirement is proven, record "
+         + "the blocker, evidence, distinct paths ruled out, minimum compatible requirement, user action, and resume check."},
         {"research", "Resolve uncertainty using version-matched primary references.",
          "Identify exact unknown API, format, tool option or platform behavior and relevant version. Read local help "
          + "or use read_reference for supported official URL. Check HTTP status, final URL and version before trusting "

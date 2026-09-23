@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.aissistant.app"
-    android:versionCode="143"
-    android:versionName="1.67.0">
+    android:versionCode="144"
+    android:versionName="1.68.0">
 
     <!-- the assistant talks to any OpenAI-compatible endpoint (cloud or LAN) -->
     <uses-permission android:name="android.permission.INTERNET" />

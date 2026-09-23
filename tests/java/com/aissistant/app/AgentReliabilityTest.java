@@ -27,6 +27,7 @@ public final class AgentReliabilityTest {
         testToolValidation();
         testMemory();
         testRunGuard();
+        testCapabilityTriage();
         testPromptIsGeneral();
         testStreamingResponses();
         testPersistentShellMarker();
@@ -86,6 +87,21 @@ public final class AgentReliabilityTest {
         check(!guard.reportOnly(), "new run resets guard state");
     }
 
+    private static void testCapabilityTriage() {
+        RunGuard guard = new RunGuard();
+        String note = "";
+        for (int i = 0; i < 4; i++) {
+            note = guard.observe("different-tool-" + i, "sh: analyzer: not found");
+        }
+        check(note.contains("CAPABILITY TRIAGE") && note.contains("TOOL_OR_RUNTIME"),
+                "different failed tool paths trigger triage before terminal report");
+        check(!guard.reportOnly(), "triage is a nudge, not an unsupported-task claim");
+        guard.reset();
+        for (int i = 0; i < 4; i++) {
+            note = guard.observe("different-interface-" + i, "camera unavailable");
+        }
+        check(note.contains("HARDWARE_OR_INTERFACE"), "hardware-like failures require prerequisite triage");
+    }
     private static void testPromptIsGeneral() {
         String prompt = AgentPrompt.build("/tmp/run", "probe_epoch_ms=1", "sdk=35");
         String low = prompt.toLowerCase();
@@ -93,6 +109,8 @@ public final class AgentReliabilityTest {
                 "prompt documents registered capabilities");
         check(prompt.contains("ANDROID RECIPE CANDIDATES") && prompt.contains("TOOL INVENTORY SNAPSHOT"),
                 "prompt labels generic candidates and volatile probe");
+        check(prompt.contains("CAPABILITY GAP RESOLUTION") && prompt.contains("minimum compatible item/spec/action"),
+                "prompt requires evidence-backed external requirements");
         check(!low.contains("proven recipes on this phone") && !low.contains("unlocking a feature")
                         && !low.contains("vip camera") && !low.contains("tricky_store"),
                 "prompt has no case-specific route or stale device claim");
