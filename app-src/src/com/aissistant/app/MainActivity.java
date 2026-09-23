@@ -194,10 +194,13 @@ public class MainActivity extends Activity {
 
     /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
     private final java.util.Set<String> expandedGroups = new java.util.HashSet<>();
-
-    /** floating collapse chip: follows the scroll so a huge expanded tool group can be closed from anywhere */
+    /** Sticky collapse control for the expanded command group currently under the viewport. */
     private TextView groupChip;
+
     /** custom right-edge scrollbar: draggable with the finger, like a real fast-scroll thumb */
+    private static final int SCROLLBAR_HIT_WIDTH = 48;
+    private static final int SCROLLBAR_MIN_HEIGHT = 64;
+    private static final int SCROLLBAR_TRACK_INSET = 8;
     private FrameLayout thumbHit;
     private View thumb;
     private boolean thumbHeld;
@@ -207,11 +210,15 @@ public class MainActivity extends Activity {
     private int jumpTotal;
     private boolean jumpAnnounced;
     private boolean chatAtBottom = true;
-    /** long chats: only this many bubbles are rendered at once, older ones page in on demand */
+    /** long chats render in a bounded sliding window: one page normally, two while reading history */
     private static final int WINDOW_PAGE = 80;
+    private static final int WINDOW_LIMIT = WINDOW_PAGE * 2;
+    private static final int OLDER_PRELOAD_DISTANCE = 64;
     /** an expanded tool group bigger than this would itself freeze the UI */
     private static final int GROUP_RENDER_MAX = 150;
     private int renderFrom = 0;
+    private int renderTo = Integer.MAX_VALUE;
+    private boolean loadingOlder;
     private final java.util.List<String> groupKeys = new java.util.ArrayList<>();
     private final java.util.List<int[]> groupSpans = new java.util.ArrayList<>();
     private static ArrayList<AppEntry> installedApps = null;
@@ -785,9 +792,10 @@ public class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(chatScreen, new LinearLayout.LayoutParams(-1, 0, 1));
         root.requestApplyInsets();
-        // opening a long session lands on the newest message (like any chat app); older pages
-        // are pulled in from the top row on demand
+        // Opening a long session lands on the newest message. Older pages load at the top edge.
         renderFrom = Integer.MAX_VALUE;
+        renderTo = Integer.MAX_VALUE;
+        loadingOlder = false;
         chatAtBottom = true;
         jumpCount = 0;
         jumpTotal = 0;
@@ -1384,26 +1392,31 @@ public class MainActivity extends Activity {
         chatLog.setPadding(dp(GUTTER), dp(4), dp(GUTTER), dp(8));
         chatScroll.addView(chatLog, new ScrollView.LayoutParams(-1, -2));
         chatScroll.setOnScrollChangeListener(new View.OnScrollChangeListener() {
-            @Override public void onScrollChange(View v, int sx, int sy, int ox, int oy) { updateGroupChip(); onChatScrolled(); }
+            @Override public void onScrollChange(View v, int sx, int sy, int ox, int oy) {
+                onChatScrolled();
+                updateGroupChip();
+                autoLoadOlderIfNeeded();
+            }
         });
         chatScroll.setVerticalScrollBarEnabled(false);     // our own thumb is draggable, the stock bar is not
         chatScrollWrap = new FrameLayout(this);
         chatScrollWrap.addView(chatScroll, new FrameLayout.LayoutParams(-1, -1));
         thumbHit = new FrameLayout(this);
-        FrameLayout.LayoutParams thlp = new FrameLayout.LayoutParams(dp(26), dp(48), Gravity.RIGHT | Gravity.TOP);
-        thlp.setMargins(0, dp(4), 0, 0);
+        FrameLayout.LayoutParams thlp = new FrameLayout.LayoutParams(dp(SCROLLBAR_HIT_WIDTH),
+                dp(SCROLLBAR_MIN_HEIGHT), Gravity.RIGHT | Gravity.TOP);
+        thlp.setMargins(0, dp(SCROLLBAR_TRACK_INSET), 0, 0);
         thumbHit.setLayoutParams(thlp);
         thumbHit.setVisibility(View.GONE);
         thumb = new View(this);
-        thumb.setBackground(round(Color.argb(120, 255, 255, 255), Color.argb(120, 255, 255, 255), 6));
-        FrameLayout.LayoutParams tvp = new FrameLayout.LayoutParams(dp(6), -1, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        tvp.setMargins(0, 0, dp(3), 0);
+        thumb.setBackground(round(Color.argb(175, 255, 255, 255), Color.argb(175, 255, 255, 255), 8));
+        FrameLayout.LayoutParams tvp = new FrameLayout.LayoutParams(dp(8), -1, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        tvp.setMargins(0, 0, dp(10), 0);
         thumbHit.addView(thumb, tvp);
         chatScrollWrap.addView(thumbHit);
         installThumbDrag();
         chatScreen.addView(chatScrollWrap, new LinearLayout.LayoutParams(-1, 0, 1));
-        ensureJumpChip();          // sits just above the input row, so the keyboard never covers it
         ensureGroupChip();
+        ensureJumpChip();          // sits just above the input row, so the keyboard never covers it
 
         pendingBar = new LinearLayout(this);
         pendingBar.setOrientation(LinearLayout.VERTICAL);
@@ -1586,36 +1599,47 @@ public class MainActivity extends Activity {
             chatScroll.post(new Runnable() {
                 @Override public void run() { chatScroll.scrollTo(0, 0); }
             });
+            renderFrom = 0;
+            renderTo = 0;
             jumpCount = 0; jumpTotal = 0; jumpAnnounced = false; chatAtBottom = false;
             if (jumpChip != null) jumpChip.setVisibility(View.GONE);
         } else {
             int total = snap.size();
-            // A long chat must not re-inflate hundreds of views on the UI thread on every update
-            // (that is the scroll lag / freeze). Render the tail, page the rest in on demand.
-            if (total <= WINDOW_PAGE) renderFrom = 0;
-            else if (chatAtBottom || forceBottom) renderFrom = total - WINDOW_PAGE;
-            renderFrom = Math.max(0, Math.min(renderFrom, Math.max(0, total - 1)));
+            // Keep a small tail window while current. Reading history may retain at most two pages.
+            if (total <= WINDOW_PAGE) {
+                renderFrom = 0;
+                renderTo = total;
+            } else if (chatAtBottom || forceBottom) {
+                renderTo = total;
+                renderFrom = total - WINDOW_PAGE;
+            } else {
+                renderTo = Math.max(1, Math.min(renderTo, total));
+                renderFrom = Math.max(0, Math.min(renderFrom, renderTo - 1));
+                if (renderTo - renderFrom > WINDOW_LIMIT) renderTo = renderFrom + WINDOW_LIMIT;
+            }
             // never cut a tool run in half, or its collapse key would differ from the stored one
             while (renderFrom > 0 && "tool".equals((String) snap.get(renderFrom)[0])
                     && "tool".equals((String) snap.get(renderFrom - 1)[0])) renderFrom--;
-            if (renderFrom > 0) addOlderRow(renderFrom);
+            while (renderTo < total && "tool".equals((String) snap.get(renderTo - 1)[0])
+                    && "tool".equals((String) snap.get(renderTo)[0])) renderTo++;
             String prev = null;
-            for (int i = renderFrom; i < snap.size(); i++) {
+            for (int i = renderFrom; i < renderTo; i++) {
                 Object[] m = snap.get(i);
                 String role = (String) m[0];
                 if ("tool".equals(role)) {
                     int j = i;
-                    while (j < snap.size() && "tool".equals((String) snap.get(j)[0])) j++;
+                    while (j < renderTo && "tool".equals((String) snap.get(j)[0])) j++;
                     final int start = i;
                     final int count = j - i;
                     final String key = cur.optString("id", "") + ":" + start;
                     boolean open = expandedGroups.contains(key) && count <= GROUP_RENDER_MAX;
                     int hidx = addToolGroup(start, count, open, key);
+                    tagTranscriptRow(hidx, start);
                     if (open) {
                         for (int k = i; k < j; k++) {
                             addBubbleView("tool", (String) snap.get(k)[1], (Long) snap.get(k)[2], "tool");
+                            tagLastTranscriptRow(k);
                         }
-                        addToolGroupFooter(count, key);
                     }
                     groupKeys.add(key);
                     groupSpans.add(new int[]{ hidx, chatLog.getChildCount() - 1, count });
@@ -1629,6 +1653,7 @@ public class MainActivity extends Activity {
                     continue;
                 }
                 addBubbleView(role, (String) m[1], (Long) m[2], prev);
+                tagLastTranscriptRow(i);
                 prev = role;
             }
         }
@@ -1653,7 +1678,7 @@ public class MainActivity extends Activity {
         refreshJumpChip();
         if (snap.size() > WINDOW_PAGE || chatLog.getChildCount() > WINDOW_PAGE + 20) {
             android.util.Log.i("AIssistant", "transcript: total=" + snap.size() + " rendered="
-                    + chatLog.getChildCount() + " from=" + renderFrom + " in "
+                    + chatLog.getChildCount() + " from=" + renderFrom + " to=" + renderTo + " in "
                     + (System.currentTimeMillis() - t0) + "ms");
         }
         chatLog.post(new Runnable() { @Override public void run() { updateGroupChip(); updateThumb(); } });
@@ -1671,41 +1696,92 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** top row of a windowed transcript: page the previous slice of bubbles back in */
-    private void addOlderRow(final int n) {
-        TextView t = new TextView(this);
-        t.setText(uiText(R.string.chat_load_previous, n));
-        t.setTextSize(12);
-        t.setTextColor(MUTED);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(14), dp(10), dp(14), dp(10));
-        t.setBackground(ripple(SURFACE, LINE, 16));
-        setButtonA11y(t, uiText(R.string.a11y_load_older, n));
-        t.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { loadOlder(); }
-        });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        lp.gravity = Gravity.CENTER_HORIZONTAL;
-        lp.setMargins(0, dp(6), 0, dp(12));
-        chatLog.addView(t, lp);
-    }
-
-    /** pull in the next page of older bubbles without moving what the user is reading */
+    /** Load one older page at the top while retaining a bounded, anchored transcript window. */
     private void loadOlder() {
-        if (chatLog == null || chatScroll == null || renderFrom <= 0) return;
+        if (loadingOlder || chatLog == null || chatScroll == null || cur == null || renderFrom <= 0) return;
+        int total;
+        synchronized (lock) { total = bubblesOf(cur).length(); }
+        if (total <= 0) return;
+        loadingOlder = true;
+        final int anchorIndex = firstVisibleTranscriptIndex();
+        final int anchorOffset = firstVisibleTranscriptOffset();
         final int savedScroll = chatScroll.getScrollY();
         final int before = chatLog.getMeasuredHeight();
-        renderFrom = Math.max(0, renderFrom - WINDOW_PAGE);
+        int oldFrom = renderFrom;
+        int oldTo = Math.max(oldFrom + 1, Math.min(renderTo, total));
+        renderFrom = Math.max(0, oldFrom - WINDOW_PAGE);
+        renderTo = oldTo - renderFrom > WINDOW_LIMIT
+                ? Math.min(total, renderFrom + WINDOW_LIMIT)
+                : oldTo;
         renderTranscript(false);
         chatLog.post(new Runnable() {
             @Override public void run() {
-                if (chatScroll == null || chatLog == null) return;
-                int after = chatLog.getMeasuredHeight();
-                // everything new was added above, so push the viewport down by exactly that much
-                chatScroll.scrollTo(0, Math.max(0, savedScroll + (after - before)));
-                updateThumb();
+                try {
+                    if (chatScroll == null || chatLog == null) return;
+                    if (!restoreTranscriptAnchor(anchorIndex, anchorOffset)) {
+                        int after = chatLog.getMeasuredHeight();
+                        chatScroll.scrollTo(0, Math.max(0, savedScroll + (after - before)));
+                    }
+                    updateThumb();
+                } finally {
+                    loadingOlder = false;
+                }
             }
         });
+    }
+
+    /** Auto-page only when the user deliberately reaches the older edge, never on initial tail load. */
+    private void autoLoadOlderIfNeeded() {
+        if (loadingOlder || chatAtBottom || renderFrom <= 0 || chatScroll == null || chatLog == null) return;
+        if (screen != 0 || chatScreen == null || !chatScreen.isShown()) return;
+        if (chatScroll.getScrollY() > dp(OLDER_PRELOAD_DISTANCE)) return;
+        loadOlder();
+    }
+
+    private void tagTranscriptRow(int index, int bubbleIndex) {
+        if (chatLog == null || index < 0 || index >= chatLog.getChildCount()) return;
+        chatLog.getChildAt(index).setTag(Integer.valueOf(bubbleIndex));
+    }
+
+    private void tagLastTranscriptRow(int bubbleIndex) {
+        if (chatLog == null) return;
+        tagTranscriptRow(chatLog.getChildCount() - 1, bubbleIndex);
+    }
+
+    private int firstVisibleTranscriptIndex() {
+        if (chatLog == null || chatScroll == null) return -1;
+        int top = chatScroll.getScrollY();
+        for (int i = 0; i < chatLog.getChildCount(); i++) {
+            View row = chatLog.getChildAt(i);
+            if (row == null || row.getBottom() <= top) continue;
+            Object tag = row.getTag();
+            if (tag instanceof Integer) return (Integer) tag;
+        }
+        return -1;
+    }
+
+    private int firstVisibleTranscriptOffset() {
+        if (chatLog == null || chatScroll == null) return 0;
+        int top = chatScroll.getScrollY();
+        for (int i = 0; i < chatLog.getChildCount(); i++) {
+            View row = chatLog.getChildAt(i);
+            if (row != null && row.getBottom() > top && row.getTag() instanceof Integer) {
+                return row.getTop() - top;
+            }
+        }
+        return 0;
+    }
+
+    private boolean restoreTranscriptAnchor(int bubbleIndex, int offset) {
+        if (bubbleIndex < 0 || chatLog == null || chatScroll == null) return false;
+        for (int i = 0; i < chatLog.getChildCount(); i++) {
+            View row = chatLog.getChildAt(i);
+            if (!(row != null && row.getTag() instanceof Integer
+                    && bubbleIndex == ((Integer) row.getTag()).intValue())) continue;
+            chatScroll.scrollTo(0, Math.max(0, row.getTop() - offset));
+            return true;
+        }
+        return false;
     }
 
     private void addBubbleView(String role, String text, long t, String prevRole) {
@@ -1956,105 +2032,83 @@ public class MainActivity extends Activity {
         return chatLog.getChildCount() - 1;
     }
 
-    /** collapse control at the END of an expanded group - no need to scroll back to the top */
-    private void addToolGroupFooter(final int count, final String key) {
-        TextView f = tv(12, MUTED, Typeface.NORMAL);
-        f.setText(uiText(R.string.chat_close_commands, count));
-        f.setGravity(Gravity.CENTER);
-        f.setBackground(ripple(TOOL_BG, LINE, 12));
-        f.setPadding(dp(12), dp(10), dp(12), dp(10));
-        setButtonA11y(f, uiText(R.string.a11y_hide_commands, count));
-        f.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View x) {
-                expandedGroups.remove(key);
-                renderTranscript();
-            }
-        });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, dp(6), 0, dp(2));
-        chatLog.addView(f, lp);
-    }
-
-    /** floating chip over the transcript: expands/collapses whichever tool group the viewport sits in */
+    /** Sticky chip stays in the viewport, but belongs to chat content rather than activity root. */
     private void ensureGroupChip() {
-        if (groupChip != null) return;
-        ViewGroup root = findViewById(android.R.id.content);
-        groupChip = tv(12, ON_ACCENT, Typeface.BOLD);
-        groupChip.setBackground(ripple(ACCENT, ACCENT, 20));
-        groupChip.setPadding(dp(16), dp(12), dp(16), dp(12));
-        setButtonA11y(groupChip, uiText(R.string.a11y_hide_commands, 0));
+        if (groupChip != null || chatScrollWrap == null) return;
+        groupChip = tv(12, FG, Typeface.BOLD);
+        groupChip.setGravity(Gravity.CENTER);
+        groupChip.setMinHeight(dp(48));
+        groupChip.setPadding(dp(14), 0, dp(14), 0);
+        groupChip.setBackground(ripple(TOOL_BG, LINE, 24));
+        groupChip.setElevation(dp(2));
         groupChip.setVisibility(View.GONE);
-        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL | Gravity.END);
-        flp.setMargins(0, 0, dp(10), 0);
-        root.addView(groupChip, flp);
-        // keyboard-proof placement: reposition instead of hiding (hiding fought the scroll refresh and flickered)
-        final View rootRef = root;
-        try {
-            root.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
-                private boolean wasIme = false;
-                @Override public void onGlobalLayout() {
-                    try {
-                        android.graphics.Rect r = new android.graphics.Rect();
-                        rootRef.getWindowVisibleDisplayFrame(r);
-                        int imeH = getResources().getDisplayMetrics().heightPixels - r.bottom;
-                        boolean ime = imeH > dp(140);
-                        if (ime == wasIme) return;            // only act on a real change - no layout churn
-                        wasIme = ime;
-                        FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) groupChip.getLayoutParams();
-                        p.gravity = ime ? (Gravity.BOTTOM | Gravity.END) : (Gravity.CENTER_VERTICAL | Gravity.END);
-                        p.setMargins(0, 0, dp(10), ime ? (imeH + dp(96)) : 0);
-                        groupChip.setLayoutParams(p);
-                    } catch (Throwable ignored) { }
-                }
-            });
-        } catch (Throwable ignored) { }
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, dp(48),
+                Gravity.CENTER_VERTICAL | Gravity.END);
+        // Keep this control clear of the 48dp scrollbar hit target on the right edge.
+        lp.setMargins(0, 0, dp(SCROLLBAR_HIT_WIDTH + 12), 0);
+        chatScrollWrap.addView(groupChip, lp);
         groupChip.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                Object tag = groupChip.getTag();
-                if (!(tag instanceof String)) return;
-                String k = (String) tag;
-                if (!expandedGroups.contains(k)) { groupChip.setVisibility(View.GONE); return; }
-                int idx = groupKeys.indexOf(k);
-                final int anchor = (idx >= 0 && idx < groupSpans.size()) ? groupSpans.get(idx)[0] : -1;
-                expandedGroups.remove(k);
-                renderTranscript();
-                if (anchor >= 0) {
-                    chatLog.post(new Runnable() {
-                        @Override public void run() {
-                            if (anchor < chatLog.getChildCount()) {
-                                chatScroll.scrollTo(0, Math.max(0, chatLog.getChildAt(anchor).getTop() - dp(8)));
-                            }
-                        }
-                    });
-                }
+                String key = visibleExpandedGroupKey();
+                if (key == null) { groupChip.setVisibility(View.GONE); return; }
+                collapseToolGroup(key);
             }
         });
     }
 
-    /** show the chip when the viewport is inside a tool group, hide it otherwise */
-    private void updateGroupChip() {
-        if (groupChip == null || chatLog == null || chatScroll == null) return;
-        if (chatScreen != null && chatScreen.getVisibility() != View.VISIBLE) { groupChip.setVisibility(View.GONE); return; }
+    /** Return the expanded group actually under the viewport now; never trust a stale rendered key. */
+    private String visibleExpandedGroupKey() {
+        if (chatLog == null || chatScroll == null) return null;
         int top = chatScroll.getScrollY();
-        int bot = top + chatScroll.getHeight();
-        String hit = null; int hitCount = 0;
-        for (int i = 0; i < groupSpans.size(); i++) {
-            int[] sp = groupSpans.get(i);
-            if (sp[0] >= chatLog.getChildCount()) continue;
-            View head = chatLog.getChildAt(sp[0]);
-            if (head == null || head.getTop() > bot) continue;                    // group starts below the screen
-            View tail = chatLog.getChildAt(Math.min(sp[1], chatLog.getChildCount() - 1));
-            if (tail == null || tail.getBottom() < top) continue;                 // group already scrolled past
-            if (!expandedGroups.contains(groupKeys.get(i))) continue;             // chip only targets an OPEN group
-            hit = groupKeys.get(i); hitCount = sp[2];
+        int bottom = top + chatScroll.getHeight();
+        String hit = null;
+        int largestOverlap = 0;
+        for (int i = 0; i < groupSpans.size() && i < groupKeys.size(); i++) {
+            String key = groupKeys.get(i);
+            if (!expandedGroups.contains(key)) continue;
+            int[] span = groupSpans.get(i);
+            if (span[0] < 0 || span[0] >= chatLog.getChildCount()) continue;
+            View head = chatLog.getChildAt(span[0]);
+            View tail = chatLog.getChildAt(Math.min(span[1], chatLog.getChildCount() - 1));
+            if (head == null || tail == null) continue;
+            int overlap = Math.min(bottom, tail.getBottom()) - Math.max(top, head.getTop());
+            if (overlap > largestOverlap) { hit = key; largestOverlap = overlap; }
         }
-        if (hit == null) { groupChip.setVisibility(View.GONE); return; }
-        // collapse-only chip: it appears while an expanded group sits under the viewport
-        if (!expandedGroups.contains(hit)) { groupChip.setVisibility(View.GONE); return; }
-        groupChip.setText(uiText(R.string.chat_close_commands, hitCount));
-        setButtonA11y(groupChip, uiText(R.string.a11y_hide_commands, hitCount));
-        groupChip.setTag(hit);
+        return hit;
+    }
+
+    private void updateGroupChip() {
+        if (groupChip == null) return;
+        if (screen != 0 || chatScreen == null || !chatScreen.isShown()) {
+            groupChip.setVisibility(View.GONE);
+            return;
+        }
+        String key = visibleExpandedGroupKey();
+        if (key == null) { groupChip.setVisibility(View.GONE); return; }
+        int group = groupKeys.indexOf(key);
+        if (group < 0 || group >= groupSpans.size()) { groupChip.setVisibility(View.GONE); return; }
+        int count = groupSpans.get(group)[2];
+        groupChip.setText(uiText(R.string.chat_close_commands, count));
+        setButtonA11y(groupChip, uiText(R.string.a11y_hide_commands, count));
         groupChip.setVisibility(View.VISIBLE);
+    }
+
+    /** Collapse through the floating control and leave the group summary in view. */
+    private void collapseToolGroup(final String key) {
+        if (key == null || !expandedGroups.remove(key)) return;
+        chatAtBottom = false;
+        renderTranscript();
+        chatLog.post(new Runnable() {
+            @Override public void run() {
+                if (chatLog == null || chatScroll == null) return;
+                int group = groupKeys.indexOf(key);
+                if (group < 0 || group >= groupSpans.size()) return;
+                int anchor = groupSpans.get(group)[0];
+                if (anchor >= 0 && anchor < chatLog.getChildCount()) {
+                    chatScroll.scrollTo(0, Math.max(0, chatLog.getChildAt(anchor).getTop() - dp(8)));
+                }
+            }
+        });
     }
 
     /** Floating bottom pill: stays above composer without changing the transcript viewport. */
@@ -2063,10 +2117,10 @@ public class MainActivity extends Activity {
         jumpChip = tv(12, ON_ACCENT, Typeface.BOLD);
         jumpChip.setGravity(Gravity.CENTER);
         jumpChip.setMinHeight(dp(48));
-        jumpChip.setBackground(ripple(ACCENT, ACCENT, 24));
-        jumpChip.setPadding(dp(16), 0, dp(16), 0);
+        jumpChip.setMinWidth(dp(48));
         jumpChip.setText(uiText(R.string.chat_new_message));
         setButtonA11y(jumpChip, uiText(R.string.a11y_jump_end));
+        styleJumpChip(false);
         jumpChip.setVisibility(View.GONE);
         FrameLayout.LayoutParams jlp = new FrameLayout.LayoutParams(-2, dp(48),
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -2078,10 +2132,21 @@ public class MainActivity extends Activity {
                 jumpAnnounced = false;
                 chatAtBottom = true;
                 renderFrom = Integer.MAX_VALUE;      // re-anchor the window on the newest bubbles
+                renderTo = Integer.MAX_VALUE;
                 jumpChip.setVisibility(View.GONE);
                 renderTranscript(true);
             }
         });
+    }
+
+    /** A quiet down arrow becomes an update pill only when the agent added unseen content. */
+    private void styleJumpChip(boolean hasUpdates) {
+        if (jumpChip == null) return;
+        jumpChip.setTextColor(hasUpdates ? ON_ACCENT : FG);
+        jumpChip.setTextSize(hasUpdates ? 12 : 22);
+        jumpChip.setPadding(hasUpdates ? dp(16) : 0, 0, hasUpdates ? dp(16) : 0, 0);
+        jumpChip.setBackground(ripple(hasUpdates ? ACCENT : TOOL_BG,
+                hasUpdates ? ACCENT : LINE, 24));
     }
 
     /** keep track of whether we are pinned to the newest message */
@@ -2112,13 +2177,16 @@ public class MainActivity extends Activity {
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN:
                         thumbHeld = true;
+                        android.view.ViewParent parent = v.getParent();
+                        if (parent != null) parent.requestDisallowInterceptTouchEvent(true);
                         android.util.Log.i("AIssistant", "thumb drag start");
                         startY = e.getRawY();
                         startScroll = chatScroll.getScrollY();
                         if (thumb != null) thumb.setAlpha(1f);
                         return true;
                     case MotionEvent.ACTION_MOVE: {
-                        int travel = Math.max(1, viewH - thumbHit.getHeight());
+                        int travel = Math.max(1, viewH - thumbHit.getHeight()
+                                - dp(SCROLLBAR_TRACK_INSET * 2));
                         int sy = (int) (startScroll + (e.getRawY() - startY) * maxScroll / travel);
                         chatScroll.scrollTo(0, Math.max(0, Math.min(maxScroll, sy)));
                         return true;
@@ -2126,6 +2194,8 @@ public class MainActivity extends Activity {
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL:
                         thumbHeld = false;
+                        android.view.ViewParent parentEnd = v.getParent();
+                        if (parentEnd != null) parentEnd.requestDisallowInterceptTouchEvent(false);
                         if (thumb != null) thumb.setAlpha(0.62f);
                         updateThumb();
                         return true;
@@ -2143,36 +2213,46 @@ public class MainActivity extends Activity {
         int contentH = chatLog.getMeasuredHeight();
         if (viewH <= 0 || contentH <= viewH + dp(24)) { thumbHit.setVisibility(View.GONE); return; }
         int maxScroll = contentH - viewH;
-        int h = Math.max(dp(48), (int) ((float) viewH * viewH / contentH));
-        int travel = Math.max(1, viewH - h);
-        int top = dp(4) + (int) ((float) Math.max(0, Math.min(maxScroll, chatScroll.getScrollY())) * travel / maxScroll);
+        int trackH = Math.max(1, viewH - dp(SCROLLBAR_TRACK_INSET * 2));
+        int h = Math.min(trackH, Math.max(dp(SCROLLBAR_MIN_HEIGHT),
+                (int) ((float) viewH * viewH / contentH)));
+        int travel = Math.max(1, trackH - h);
+        int top = dp(SCROLLBAR_TRACK_INSET) + (int) ((float) Math.max(0,
+                Math.min(maxScroll, chatScroll.getScrollY())) * travel / maxScroll);
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) thumbHit.getLayoutParams();
-        lp.height = h;
-        lp.topMargin = top;
-        thumbHit.setLayoutParams(lp);
+        boolean sizeChanged = lp.height != h || lp.topMargin != dp(SCROLLBAR_TRACK_INSET);
+        if (sizeChanged) {
+            lp.height = h;
+            lp.topMargin = dp(SCROLLBAR_TRACK_INSET);
+            thumbHit.setLayoutParams(lp);
+        }
+        // Translation keeps the pressed view stable through scroll callbacks; relayout during a
+        // drag can cancel touch delivery on several Android skins.
+        thumbHit.setTranslationY(top - dp(SCROLLBAR_TRACK_INSET));
         thumb.setAlpha(thumbHeld ? 1f : 0.62f);
         thumbHit.setVisibility(View.VISIBLE);
     }
 
-    /** Pill appears only while reader is away from the newest transcript entry. */
+    /** Bottom control always offers a quick return; unseen updates expand it into a labeled pill. */
     private void refreshJumpChip() {
         if (jumpChip == null) return;
         boolean hasBelow = chatScroll != null && chatScroll.getChildCount() > 0
                 && chatScroll.getChildAt(0).getHeight() > chatScroll.getHeight();
-        boolean show = !chatAtBottom && hasBelow && screen == 0 && chatScreen != null && chatScreen.isShown();
+        boolean show = !chatAtBottom && hasBelow && screen == 0
+                && chatScreen != null && chatScreen.isShown();
         if (!show) {
             jumpChip.setVisibility(View.GONE);
             if (chatAtBottom) jumpAnnounced = false;
             return;
         }
-        jumpChip.setText(jumpCount > 0
-                ? uiText(R.string.chat_new_messages, jumpCount)
-                : "\u2193 " + uiText(R.string.chat_jump_down));
-        setButtonA11y(jumpChip, jumpCount > 0
+        boolean hasUpdates = jumpCount > 0;
+        jumpChip.setText(hasUpdates ? uiText(R.string.chat_new_messages, jumpCount) : "\u2193");
+        setButtonA11y(jumpChip, hasUpdates
                 ? uiText(R.string.a11y_jump_latest, jumpCount)
                 : uiText(R.string.a11y_jump_end));
+        styleJumpChip(hasUpdates);
         jumpChip.setVisibility(View.VISIBLE);
-        if (jumpCount > 0 && !jumpAnnounced) {
+        if (hasUpdates && !jumpAnnounced) {
             jumpAnnounced = true;
             jumpChip.announceForAccessibility(uiText(R.string.a11y_new_messages_announcement, jumpCount));
         }

@@ -101,12 +101,11 @@
     <string name="a11y_add_attachment">Add attachment</string>
     <string name="a11y_send_message">Send message</string>
     <string name="a11y_stop_run">Stop current run</string>
-    <string name="chat_load_previous">↑ Load %1$d earlier messages</string>
     <string name="chat_command">Command</string>
     <string name="chat_output">Output</string>
     <string name="chat_continue">▶ Continue · tap</string>
-    <string name="chat_close_commands">▴ Close · %1$d commands</string>
-    <string name="chat_new_messages">↓ %1$d new messages</string>
+    <string name="chat_close_commands">▴ Hide · %1$d commands</string>
+    <string name="chat_new_messages">↓ %1$d new updates</string>
     <string name="chat_new_message">↓ New message</string>
     <string name="chat_empty_title">What would you like to check?</string>
     <string name="chat_setup_title">Set up AI-ssistant</string>
@@ -260,13 +259,12 @@
     <string name="mention_search_hint">Search installed apps…</string>    <string name="settings_thinking_section">THINKING - AUTO PICKS PER TASK</string>
     <string name="menu_clear_chat">Clear this chat</string>
     <string name="menu_floating_overlay">Floating overlay</string>
-    <string name="a11y_load_older">Load %1$d earlier messages</string>
     <string name="a11y_continue_task">Continue this task</string>
     <string name="a11y_show_commands">Show %1$d commands</string>
     <string name="a11y_hide_commands">Hide %1$d commands</string>
-    <string name="a11y_jump_latest">Jump to latest messages, %1$d new messages</string>
+    <string name="a11y_jump_latest">Jump to latest update, %1$d new updates</string>
     <string name="a11y_jump_end">Jump to end of conversation</string>
-    <string name="a11y_new_messages_announcement">%1$d new messages. Tap for latest messages.</string>
+    <string name="a11y_new_messages_announcement">%1$d new updates. Tap for latest updates.</string>
     <string name="chat_command_group_base">%1$d commands</string>
     <string name="chat_command_group_last"> - %1$s</string>
     <string name="chat_command_group_action"> - %1$s</string>
