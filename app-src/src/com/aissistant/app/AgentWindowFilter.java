@@ -3,9 +3,9 @@ package com.aissistant.app;
 /**
  * Defense in depth for shell diagnostics returned to the model.
  *
- * Isolation removes our surfaces before a command runs. This parser handles stale/queued
- * WindowManager output too, including dumps where the package name appears after the block header.
- * It is deliberately not treated as the security boundary: the boundary is the removed window.
+ * Target-window Accessibility never exposes this app's nodes. This parser removes self-owned
+ * entries from shell diagnostics too, including dumps where the package name appears after the
+ * block header. Raw visual capture uses its own short exclusive phase.
  */
 final class AgentWindowFilter {
     private AgentWindowFilter() { }

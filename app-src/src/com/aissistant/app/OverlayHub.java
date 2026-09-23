@@ -19,7 +19,7 @@ final class OverlayHub {
     private static volatile boolean busy = false;
     /** Clean capture window: do not recreate the panel until the current screenshot/dump finishes. */
     private static volatile boolean suppressedForDriving = false;
-    /** True only while a raw global-input command is isolated; normal runs keep overlay usable. */
+    /** True only while a raw coordinate-input command needs the panel to pass touch through. */
     private static volatile boolean agentPassThrough = false;
     /**
      * Strict isolation for an active agent run.  The assistant's own app-owned windows must not
@@ -129,11 +129,22 @@ final class OverlayHub {
         suppressedForDriving = true;
     }
 
+    /** Raw coordinate input cannot hit a user-touchable overlay. Keep it visible but non-touchable. */
+    static void enterRawInputPassThrough() {
+        agentIsolation = false;
+        agentPassThrough = true;
+        suppressedForDriving = false;
+    }
+
     /** Raw command completed; target-window tools keep the overlay interactive between commands. */
     static void leaveAgentIsolation() {
         agentIsolation = false;
         agentPassThrough = false;
         suppressedForDriving = false;
+    }
+
+    static void leaveRawInputPassThrough() {
+        agentPassThrough = false;
     }
 
     /** Terminal cleanup: user can use the overlay normally again. */

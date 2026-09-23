@@ -171,6 +171,13 @@ public final class AgentReliabilityTest {
         check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
                         && !OverlayHub.overlaySuppressedForDriving(),
                 "raw command completion restores normal overlay interaction");
+        OverlayHub.enterRawInputPassThrough();
+        check(OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation()
+                        && !OverlayHub.overlaySuppressedForDriving(),
+                "raw input passes through without detaching the normal overlay lifecycle");
+        OverlayHub.leaveRawInputPassThrough();
+        check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation(),
+                "raw input completion restores overlay interaction");
         OverlayHub.finishAgentRun();
         check(!OverlayHub.agentPassThrough() && !OverlayHub.agentIsolation(),
                 "terminal run cleanup restores normal overlay interaction");
@@ -225,6 +232,9 @@ public final class AgentReliabilityTest {
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
                 "prompt documents stable tool storage layouts");
+        check(prompt.contains("UI primary: call observe_app")
+                        && prompt.contains("Raw fallback receives a short exclusive phase"),
+                "prompt keeps ordinary Android UI on target-window Accessibility");
         check(!low.contains("proven recipes on this phone") && !low.contains("unlocking a feature")
                         && !low.contains("vip camera") && !low.contains("tricky_store"),
                 "prompt has no case-specific route or stale device claim");

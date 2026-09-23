@@ -52,12 +52,12 @@ final class AgentTools {
     private static void addObserveApp(JSONArray tools) throws Exception {
         JSONObject props = new JSONObject();
         props.put("package", new JSONObject().put("type", "string")
-                .put("description", "Optional target package. Empty means active non-AI-ssistant app window."));
+                .put("description", "Target package. Pass exact package whenever another app is being driven; empty only when foreground target is unambiguous."));
         JSONObject params = new JSONObject().put("type", "object").put("properties", props)
                 .put("required", new JSONArray()).put("additionalProperties", false);
         tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
                 .put("name", "observe_app")
-                .put("description", "Observe target app Accessibility window while excluding AI-ssistant overlay windows. Returns node ids for act_app.")
+                .put("description", "Observe target app Accessibility window while excluding AI-ssistant and non-application overlay windows. Returns node ids for act_app.")
                 .put("parameters", params)));
     }
 

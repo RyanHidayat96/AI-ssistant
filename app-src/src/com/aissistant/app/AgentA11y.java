@@ -257,6 +257,11 @@ public class AgentA11y extends AccessibilityService {
         int bestScore = Integer.MIN_VALUE;
         for (AccessibilityWindowInfo window : windows) {
             if (window == null) continue;
+            // Only app windows can be the target. System/overlay/input-method windows are not
+            // valid fallback targets even when they momentarily receive focus.
+            try {
+                if (window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) continue;
+            } catch (Throwable ignored) { continue; }
             AccessibilityNodeInfo root;
             try { root = window.getRoot(); } catch (Throwable t) { root = null; }
             if (root == null) continue;
@@ -264,7 +269,6 @@ public class AgentA11y extends AccessibilityService {
             if (pkg.isEmpty() || pkg.equals(getPackageName())) continue;
             if (!want.isEmpty() && !want.equals(pkg)) continue;
             int score = 0;
-            try { if (window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION) score += 3; } catch (Throwable ignored) { }
             try { if (window.isActive()) score += 8; } catch (Throwable ignored) { }
             try { if (window.isFocused()) score += 4; } catch (Throwable ignored) { }
             if (!want.isEmpty() && want.equals(pkg)) score += 20;

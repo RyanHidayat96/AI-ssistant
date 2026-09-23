@@ -143,12 +143,9 @@ final class OverlayView {
         current = null;
     }
 
-    /**
-     * Legacy name kept for older call sites. New behavior keeps the panel visible for the user,
-     * but removes focus/touch from the agent's path.
-     */
+    /** Legacy focus release for old call sites; normal agent work never detaches the panel. */
     static void standDownForAgent() {
-        prepareForAgent(null, false);
+        releaseFocus();
     }
 
     /**
@@ -177,9 +174,8 @@ final class OverlayView {
     }
 
     /**
-     * Reassert isolation before executing a shell command.  Returns false when the main-thread
-     * barrier did not complete, so callers can fail closed instead of issuing a touch while a
-     * stale panel might still be present.
+     * Hide the panel only for a raw visual capture. Normal shell and Accessibility work must not
+     * use this phase because their target is already filtered away from this app's overlay.
      */
     static boolean ensureAgentIsolation(final Context ctx) {
         OverlayHub.enterAgentIsolation();
@@ -203,23 +199,65 @@ final class OverlayView {
         return completed && ready.get();
     }
 
-    /** Agent is about to drive/read another app. Kept for older call sites. */
-    static void prepareForAgent(final Context ctx, final boolean hideForCapture) {
-        ensureAgentIsolation(ctx);
+    /** Keep overlay visible but make it non-touchable for one raw coordinate-input command. */
+    static boolean beginRawInputPassThrough(final Context ctx) {
+        OverlayHub.enterRawInputPassThrough();
+        final java.util.concurrent.atomic.AtomicBoolean ready =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        boolean completed = onMainAndWait(new Runnable() {
+            @Override public void run() {
+                try {
+                    OverlayView ov = current;
+                    if (ov != null) {
+                        ov.useIme(false);
+                        ov.setAgentPassThrough(true);
+                    }
+                    ready.set(true);
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistant", "overlay raw-input preparation failed: " + t);
+                }
+            }
+        }, 700L);
+        return completed && ready.get();
     }
 
-    /**
-     * End raw-command isolation without remounting the panel. Reattaching on every command made
-     * the panel flash whenever a response arrived; Accessibility actions reattach it safely, and
-     * a quiet run returns to the full chat screen instead.
-     */
+    /** Restore user interaction after a raw coordinate-input command. */
+    static void finishRawInputPassThrough() {
+        OverlayHub.leaveRawInputPassThrough();
+        final Runnable finish = new Runnable() {
+            @Override public void run() {
+                try {
+                    OverlayView ov = current;
+                    if (ov != null) ov.setAgentPassThrough(false);
+                } catch (Throwable t) {
+                    android.util.Log.e("AIssistant", "overlay raw-input finish failed: " + t);
+                }
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            finish.run();
+            return;
+        }
+        new Handler(Looper.getMainLooper()).post(finish);
+    }
+
+    /** Agent is about to drive/read another app. Kept for older call sites. */
+    static void prepareForAgent(final Context ctx, final boolean hideForCapture) {
+        if (hideForCapture) ensureAgentIsolation(ctx);
+        else releaseFocus();
+    }
+
+    /** End a raw visual-capture isolation and restore the same panel instance once. */
     static void finishAgentObservation(final Context ctx) {
         OverlayHub.leaveAgentIsolation();
         final Runnable finish = new Runnable() {
             @Override public void run() {
                 try {
                     OverlayView ov = current;
-                    if (ov != null) ov.setAgentPassThrough(false);
+                    if (ov != null) {
+                        ov.setAgentPassThrough(false);
+                        if (ov.panel == null && !MainActivity.appVisible) ov.attach();
+                    }
                 } catch (Throwable t) {
                     android.util.Log.e("AIssistant", "overlay finish agent observation failed: " + t);
                 } finally {

@@ -4201,26 +4201,40 @@ public class MainActivity extends Activity {
         // Every command receives explicit tool-scope helpers. They keep portable tools structured
         // in the shared cache and bind target/task-specific helpers to this session workspace.
         String exec = toolWorkspaceBootstrap(wd) + cmd;
-        OverlayView.releaseFocus();
+        boolean rawInput = needsRawInputPassThrough(cmd);
+        boolean rawVisual = needsRawVisualIsolation(cmd);
+        if (rawInput || rawVisual) OverlayView.releaseFocus();
         String raw;
-        // Every shell command has access to global device state.  Enter isolation regardless of
-        // its text rather than guessing whether it is a screenshot, UI dump, input injection, or
-        // a wrapped variant.  This keeps the floating surfaces visible to the user between tool
-        // calls but removes them for the full lifetime of every call.
-        boolean isolated = OverlayView.ensureAgentIsolation(this) && AgentBorder.suppressForAgentRun();
+        // Accessibility actions already target another app's node tree and AgentWindowFilter
+        // removes this app from diagnostics. Ordinary shell work must never disturb the user's
+        // panel. Only global coordinate input or visual capture gets a short exclusive phase.
+        boolean isolated = true;
+        if (rawVisual) {
+            isolated = OverlayView.ensureAgentIsolation(this) && AgentBorder.suppressForAgentRun();
+        } else if (rawInput) {
+            isolated = OverlayView.beginRawInputPassThrough(this);
+        }
         if (!isolated) {
-            // Fail closed: a shell command can inject global input or dump window state. Running
-            // it while the UI thread has not confirmed our surfaces are gone would recreate the
-            // exact self-overlay failure this boundary prevents.
+            // Fail closed only for a raw UI phase. The panel must not intercept global input or
+            // leak into an agent-owned screen capture.
             raw = "[AGENT UI ISOLATION NOT READY: command was not executed. "
                     + "Wait for the interface to settle, then retry once.]";
+            if (rawVisual) {
+                try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
+            } else if (rawInput) {
+                try { OverlayView.finishRawInputPassThrough(); } catch (Throwable ignored) { }
+            }
         } else {
             boolean borderOperation = AgentBorder.beginOperation(this, cmd);
             try {
                 raw = RootShell.run(exec, store.timeoutSec());
             } finally {
                 if (borderOperation) AgentBorder.endOperation();
-                try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
+                if (rawVisual) {
+                    try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
+                } else if (rawInput) {
+                    try { OverlayView.finishRawInputPassThrough(); } catch (Throwable ignored) { }
+                }
             }
         }
         String out = withRecovery(foldLong(AgentWindowFilter.hideSelfOverlays(raw, getPackageName())), cmd);
@@ -4266,6 +4280,25 @@ public class MainActivity extends Activity {
     private static boolean isRawSwipe(String cmd) {
         return cmd != null && cmd.toLowerCase(Locale.ENGLISH)
                 .matches("(?s).*\\binput\\s+swipe\\b.*");
+    }
+
+    /** Raw coordinate input needs a touch-through panel; node Accessibility actions do not. */
+    private static boolean needsRawInputPassThrough(String cmd) {
+        if (cmd == null) return false;
+        String c = cmd.toLowerCase(Locale.ENGLISH);
+        return c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
+                || c.matches("(?s).*\\b(sendevent|uinput)\\b.*")
+                || c.matches("(?s).*\\bservice\\s+call\\s+input\\b.*")
+                || c.matches("(?s).*\\bcmd\\s+input\\b.*")
+                || c.matches("(?s).*\\bmonkey\\b.*");
+    }
+
+    /** Raw captures can reveal pixels from app-owned windows, so detach only for their duration. */
+    private static boolean needsRawVisualIsolation(String cmd) {
+        if (cmd == null) return false;
+        String c = cmd.toLowerCase(Locale.ENGLISH);
+        return c.matches("(?s).*\\bscreencap\\b.*")
+                || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
     }
 
     /** turn a raw failure into a next step: concrete hints + ground truth, so the model recovers alone */

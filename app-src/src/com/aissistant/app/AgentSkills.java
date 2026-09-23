@@ -34,10 +34,12 @@ final class AgentSkills {
          + "perubahan kecil yang bisa dibalikin. Jangan berhenti di 'strings match' - itu petunjuk, bukan bukti; "
          + "buktikan dengan perilaku runtime."},
         {"ui-automation", "Kendalikan app lain lewat UI: tap, ketik, scroll, kirim pesan, ambil data.",
-         "Alur: buka app (monkey/am start) -> uiautomator dump untuk lihat node (text/desc/id + bounds) -> "
-         + "tap/ketik (input text pakai %s untuk spasi) -> dump lagi untuk verifikasi. Cocokkan nama sebagian "
+         "Alur: buka app (monkey/am start) -> observe_app dengan package target -> act_app/scroll_app pakai node "
+         + "yang dikembalikan -> observe_app lagi untuk verifikasi. Jalur Accessibility membaca dan bertindak langsung "
+         + "pada target, jadi overlay AI-ssistant tetap milik user dan tidak masuk vision/touch agent. Pakai "
+         + "uiautomator/input hanya bila tidak ada node target; itu fallback eksklusif singkat. Cocokkan nama sebagian "
          + "(kontak, judul, tombol). Kalau ada beberapa kandidat, tanya user sekali lalu lanjut. Selesai satu "
-         + "aksi, selalu ambil state lagi - dump lama bisa basi setelah transisi window."},
+         + "aksi, selalu ambil state lagi - node lama bisa basi setelah transisi window."},
         {"network-web", "Akses jaringan: panggil API, replay alur resmi, baca referensi, proxy/MITM.",
          "curl endpoint (GET/POST, header auth), replay request app, sniff lewat proxy bila perlu, baca referensi "
          + "dari URL resmi (read_reference) untuk format/flag yang belum pasti, dan jangan nebak - verifikasi "

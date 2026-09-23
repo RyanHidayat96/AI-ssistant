@@ -56,9 +56,6 @@ public final class AgentBorder {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
                 activeOperations++;
-                // Accessibility targets nodes directly and filters this package, so the user can
-                // see the panel without putting it back into the agent's target tree.
-                if (!MainActivity.appVisible) OverlayView.show(ac);
                 show(ac);
             } });
             return true;
@@ -195,8 +192,8 @@ public final class AgentBorder {
             lastFocusCheck = now;
             String out = RootShell.run("dumpsys window | grep -m1 mCurrentFocus", 6);
             if (out == null || !out.contains("com.aissistant.app")) return;
-            android.util.Log.i("AIssistant", "overlay held focus - release + pass-through");
-            try { OverlayView.prepareForAgent(ctx, false); } catch (Throwable ignored) { }
+            android.util.Log.i("AIssistant", "overlay held focus - release focus");
+            try { OverlayView.releaseFocus(); } catch (Throwable ignored) { }
         } catch (Throwable ignored) { }
     }
 
