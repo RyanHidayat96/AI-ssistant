@@ -1,6 +1,7 @@
 package com.aissistant.app;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
@@ -24,14 +25,35 @@ import java.util.Locale;
 public class AgentA11y extends AccessibilityService {
     private static final Object LOCK = new Object();
     private static final int MAX_NODES = 180;
+    private static final long CONNECT_WAIT_MS = 1600L;
+    private static final long RECOVERY_WAIT_MS = 3000L;
+    private static final long RECOVERY_PAUSE_MS = 120L;
     private static long lastToken;
     private static HashMap<String, NodeRef> lastNodes = new HashMap<String, NodeRef>();
 
     static volatile AgentA11y live;
+    private static volatile boolean connectedOnce;
 
-    @Override public void onServiceConnected() { live = this; }
+    @Override public void onServiceConnected() {
+        synchronized (LOCK) {
+            live = this;
+            connectedOnce = true;
+            lastToken = 0L;
+            lastNodes = new HashMap<String, NodeRef>();
+            LOCK.notifyAll();
+        }
+        android.util.Log.i("AIssistant", "Accessibility connected");
+    }
 
-    @Override public void onDestroy() { live = null; super.onDestroy(); }
+    @Override public boolean onUnbind(Intent intent) {
+        clearLive(this);
+        return super.onUnbind(intent);
+    }
+
+    @Override public void onDestroy() {
+        clearLive(this);
+        super.onDestroy();
+    }
 
     @Override public void onAccessibilityEvent(AccessibilityEvent e) { /* no polling needed */ }
 
@@ -46,8 +68,8 @@ public class AgentA11y extends AccessibilityService {
     }
 
     static String observe(String packageName) {
-        AgentA11y s = live;
-        if (s == null) return "[accessibility service not enabled]";
+        AgentA11y s = awaitLive(CONNECT_WAIT_MS);
+        if (s == null) return unavailable();
         try {
             Target target = s.target(packageName);
             if (target == null) {
@@ -78,8 +100,8 @@ public class AgentA11y extends AccessibilityService {
     }
 
     static String act(String packageName, String nodeId, String action, String text) {
-        AgentA11y s = live;
-        if (s == null) return "[accessibility service not enabled]";
+        AgentA11y s = awaitLive(CONNECT_WAIT_MS);
+        if (s == null) return unavailable();
         try {
             if (empty(nodeId)) return "[act_app error: missing node id. Run observe_app first.]";
             if (empty(action)) return "[act_app error: missing action.]";
@@ -149,16 +171,16 @@ public class AgentA11y extends AccessibilityService {
      * to the target node, so the user can keep using the visible AI-ssistant overlay.
      */
     static String scrollFor(String packageName, String nodeId, String direction, int durationMs, int intervalMs) {
-        AgentA11y s = live;
-        if (s == null) return "[accessibility service not enabled]";
+        AgentA11y s = awaitLive(CONNECT_WAIT_MS);
+        if (s == null) return unavailable();
         if (empty(nodeId)) return "[scroll_app error: missing node id. Run observe_app first.]";
         String way = direction == null ? "" : direction.trim().toLowerCase(Locale.ENGLISH);
         if (!"forward".equals(way) && !"backward".equals(way))
             return "[scroll_app error: direction must be forward or backward.]";
         if (durationMs < 100 || durationMs > 30000)
             return "[scroll_app error: duration_ms must be 100 to 30000.]";
-        int pause = intervalMs <= 0 ? 450 : intervalMs;
-        if (pause < 80 || pause > 2000)
+        int interval = intervalMs <= 0 ? 450 : intervalMs;
+        if (interval < 80 || interval > 2000)
             return "[scroll_app error: interval_ms must be 80 to 2000.]";
         boolean borderActive = false;
         try {
@@ -174,7 +196,7 @@ public class AgentA11y extends AccessibilityService {
 
             Target initialTarget = s.target(ref.packageName);
             if (initialTarget == null) return "[scroll_app error: target package not visible: " + ref.packageName + "]";
-            AccessibilityNodeInfo initialNode = byPath(initialTarget.root, ref.path);
+            AccessibilityNodeInfo initialNode = resolveScrollable(initialTarget, ref);
             if (initialNode == null) return "[scroll_app error: node changed since observe_app. Run observe_app again.]";
             if (text(initialNode.getPackageName()).startsWith(s.getPackageName()))
                 return "[scroll_app refused: node belongs to AI-ssistant overlay]";
@@ -185,30 +207,38 @@ public class AgentA11y extends AccessibilityService {
             long deadline = started + durationMs;
             int steps = 0;
             String stopped = "duration reached";
+            long reconnectSince = -1L;
             while (android.os.SystemClock.elapsedRealtime() < deadline) {
-                Target target = s.target(ref.packageName);
+                long now = android.os.SystemClock.elapsedRealtime();
+                long remain = deadline - now;
+                AgentA11y current = awaitLive(Math.min(RECOVERY_PAUSE_MS, Math.max(0L, remain)));
+                if (current == null) {
+                    if (reconnectSince < 0L) reconnectSince = now;
+                    if (now - reconnectSince >= RECOVERY_WAIT_MS) {
+                        stopped = "accessibility service reconnecting";
+                        break;
+                    }
+                    pause(Math.min(RECOVERY_PAUSE_MS, Math.max(0L, remain)));
+                    continue;
+                }
+                reconnectSince = -1L;
+                Target target = current.target(ref.packageName);
                 if (target == null) { stopped = "target not visible"; break; }
-                AccessibilityNodeInfo node = byPath(target.root, ref.path);
-                if (node == null) { stopped = "node changed"; break; }
+                AccessibilityNodeInfo node = resolveScrollable(target, ref);
+                if (node == null) { stopped = "scroll target changed"; break; }
                 String nodePackage = text(node.getPackageName());
                 if (nodePackage.startsWith(s.getPackageName())) {
                     stopped = "refused AI-ssistant overlay";
                     break;
                 }
-                AccessibilityNodeInfo scroll = scrollable(node);
-                boolean ok = scroll != null && scroll.performAction("forward".equals(way)
+                boolean ok = node.performAction("forward".equals(way)
                         ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                         : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
                 if (!ok) { stopped = "target cannot scroll further"; break; }
                 steps++;
-                long remain = deadline - android.os.SystemClock.elapsedRealtime();
-                if (remain <= 0) break;
-                try { Thread.sleep(Math.min((long) pause, remain)); }
-                catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    stopped = "interrupted";
-                    break;
-                }
+                long afterActionRemaining = deadline - android.os.SystemClock.elapsedRealtime();
+                if (afterActionRemaining <= 0) break;
+                if (!pause(Math.min((long) interval, afterActionRemaining))) { stopped = "interrupted"; break; }
             }
             long elapsed = android.os.SystemClock.elapsedRealtime() - started;
             return "scroll_app token=" + token + " package=" + ref.packageName + " node=" + nodeId
@@ -235,7 +265,7 @@ public class AgentA11y extends AccessibilityService {
             if (path == null) return "";
             long token = System.currentTimeMillis();
             HashMap<String, NodeRef> refs = new HashMap<String, NodeRef>();
-            refs.put("n0", new NodeRef(target.packageName, path));
+            refs.put("n0", new NodeRef(target.packageName, path, byPath(target.root, path)));
             synchronized (LOCK) {
                 lastToken = token;
                 lastNodes = refs;
@@ -247,6 +277,98 @@ public class AgentA11y extends AccessibilityService {
         } catch (Throwable ignored) {
             return "";
         }
+    }
+
+    /** Accessibility can be rebound by Android while the app process remains alive. Wait briefly
+     * for that normal lifecycle event instead of treating a transient null reference as revoked
+     * user permission. */
+    private static AgentA11y awaitLive(long timeoutMs) {
+        AgentA11y current = live;
+        if (current != null || timeoutMs <= 0L) return current;
+        long deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs;
+        synchronized (LOCK) {
+            while ((current = live) == null) {
+                long remaining = deadline - android.os.SystemClock.elapsedRealtime();
+                if (remaining <= 0L) return null;
+                try { LOCK.wait(Math.min(remaining, 200L)); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+            return current;
+        }
+    }
+
+    private static void clearLive(AgentA11y service) {
+        synchronized (LOCK) {
+            if (live != service) return; // Never let a stale instance clear a newly rebound one.
+            live = null;
+            lastToken = 0L;
+            lastNodes = new HashMap<String, NodeRef>();
+            LOCK.notifyAll();
+        }
+        android.util.Log.i("AIssistant", "Accessibility disconnected");
+    }
+
+    private static String unavailable() {
+        return connectedOnce
+                ? "[accessibility service reconnecting; wait briefly and retry the same target-window action]"
+                : "[accessibility service not enabled]";
+    }
+
+    private static boolean pause(long delayMs) {
+        if (delayMs <= 0L) return true;
+        try {
+            Thread.sleep(delayMs);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** Resolve a scrolling container again after list rows or window hierarchy change. */
+    private static AccessibilityNodeInfo resolveScrollable(Target target, NodeRef ref) {
+        if (target == null || ref == null) return null;
+        AccessibilityNodeInfo node = byPath(target.root, ref.path);
+        AccessibilityNodeInfo scroll = scrollable(node);
+        if (scroll != null) return scroll;
+        scroll = findScrollable(target.root, ref.scrollViewId, ref.scrollClassName, 0);
+        if (scroll != null) return scroll;
+        return ref.hadScrollableAncestor ? firstScrollableNode(target.root, 0) : null;
+    }
+
+    private static AccessibilityNodeInfo findScrollable(AccessibilityNodeInfo node, String wantedId,
+            String wantedClass, int depth) {
+        if (node == null || depth > 18) return null;
+        boolean idMatch = !empty(wantedId) && wantedId.equals(text(node.getViewIdResourceName()));
+        boolean classMatch = empty(wantedId) && !empty(wantedClass)
+                && wantedClass.equals(text(node.getClassName()));
+        if (safe(node, "scroll") && (idMatch || classMatch)) return node;
+        int children;
+        try { children = node.getChildCount(); } catch (Throwable ignored) { children = 0; }
+        for (int i = 0; i < children; i++) {
+            AccessibilityNodeInfo found;
+            try { found = findScrollable(node.getChild(i), wantedId, wantedClass, depth + 1); }
+            catch (Throwable ignored) { found = null; }
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static AccessibilityNodeInfo firstScrollableNode(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 18) return null;
+        if (safe(node, "scroll")) return node;
+        int children;
+        try { children = node.getChildCount(); } catch (Throwable ignored) { children = 0; }
+        for (int i = 0; i < children; i++) {
+            AccessibilityNodeInfo found;
+            try { found = firstScrollableNode(node.getChild(i), depth + 1); }
+            catch (Throwable ignored) { found = null; }
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private Target target(String requestedPackage) {
@@ -287,7 +409,7 @@ public class AgentA11y extends AccessibilityService {
         if (n == null || depth > 14 || b.length() > 60000 || count[0] >= MAX_NODES) return;
         if (visible(n) && useful(n)) {
             String id = "n" + count[0]++;
-            refs.put(id, new NodeRef(packageName, path));
+            refs.put(id, new NodeRef(packageName, path, n));
             b.append(id).append(' ').append(describe(n, path)).append('\n');
         }
         int children;
@@ -418,10 +540,17 @@ public class AgentA11y extends AccessibilityService {
     private static final class NodeRef {
         final String packageName;
         final String path;
+        final String scrollViewId;
+        final String scrollClassName;
+        final boolean hadScrollableAncestor;
 
-        NodeRef(String packageName, String path) {
+        NodeRef(String packageName, String path, AccessibilityNodeInfo node) {
             this.packageName = packageName;
             this.path = path == null ? "" : path;
+            AccessibilityNodeInfo scroll = scrollable(node);
+            this.hadScrollableAncestor = scroll != null;
+            this.scrollViewId = scroll == null ? "" : text(scroll.getViewIdResourceName());
+            this.scrollClassName = scroll == null ? "" : text(scroll.getClassName());
         }
     }
 }
