@@ -53,7 +53,7 @@ public final class AgentReliabilityTest {
 
     private static void testToolValidation() throws Exception {
         JSONArray tools = AgentTools.definitions();
-        check(tools.length() == 8, "all registered tools exposed");
+        check(tools.length() == 9, "all registered tools exposed");
         JSONObject valid = call("run_shell", "{\"command\":\"id\"}");
         check("id".equals(AgentTools.arguments(valid).getString("command")), "valid shell arguments accepted");
         rejects(call("run_shell", "id"), "non-JSON shell arguments rejected");
@@ -64,6 +64,11 @@ public final class AgentReliabilityTest {
                 "target app observation arguments accepted");
         JSONObject act = call("act_app", "{\"node\":\"n1\",\"action\":\"click\"}");
         check("click".equals(AgentTools.arguments(act).getString("action")), "target app action arguments accepted");
+        JSONObject scroll = call("scroll_app", "{\"node\":\"n2\",\"direction\":\"forward\",\"duration_ms\":10000}");
+        check(AgentTools.arguments(scroll).getInt("duration_ms") == 10000,
+                "timed Accessibility scroll arguments accepted");
+        rejects(call("scroll_app", "{\"node\":\"n2\",\"direction\":\"forward\",\"duration_ms\":99}"),
+                "short timed scroll rejected");
         JSONObject evidence = call("read_evidence", "{\"id\":\"e-1-1.txt\",\"offset\":3}");
         check(AgentTools.arguments(evidence).getInt("offset") == 3, "integer evidence offset accepted");
     }
@@ -208,12 +213,18 @@ public final class AgentReliabilityTest {
         String prompt = AgentPrompt.build("/tmp/run", "probe_epoch_ms=1", "sdk=35");
         String low = prompt.toLowerCase();
         check(prompt.contains("list_skills") && prompt.contains("read_reference") && prompt.contains("save_checkpoint")
-                        && prompt.contains("observe_app") && prompt.contains("act_app"),
+                        && prompt.contains("observe_app") && prompt.contains("act_app") && prompt.contains("scroll_app"),
                 "prompt documents registered capabilities");
         check(prompt.contains("ANDROID RECIPE CANDIDATES") && prompt.contains("TOOL INVENTORY SNAPSHOT"),
                 "prompt labels generic candidates and volatile probe");
         check(prompt.contains("CAPABILITY GAP RESOLUTION") && prompt.contains("minimum compatible item/spec/action"),
                 "prompt requires evidence-backed external requirements");
+        check(prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
+                        && prompt.contains("agent_tool_register_shared"),
+                "prompt requires explicit shared and session tool scopes");
+        check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
+                        && prompt.contains("$WD/.tools/<name>"),
+                "prompt documents stable tool storage layouts");
         check(!low.contains("proven recipes on this phone") && !low.contains("unlocking a feature")
                         && !low.contains("vip camera") && !low.contains("tricky_store"),
                 "prompt has no case-specific route or stale device claim");

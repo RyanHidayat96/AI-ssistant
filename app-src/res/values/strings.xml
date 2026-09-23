@@ -16,6 +16,14 @@
     <string name="common_test">TEST</string>
     <string name="common_add">Add</string>
     <string name="common_rename">Rename</string>
+    <string name="startup_permission_accessibility_title">Enable Accessibility</string>
+    <string name="startup_permission_accessibility_message">Enable AI-ssistant in Android Accessibility settings. This lets the agent read and operate the target app while excluding its own overlay.</string>
+    <string name="startup_permission_overlay_title">Allow floating overlay</string>
+    <string name="startup_permission_overlay_message">Allow AI-ssistant to show its live panel while it works in another app.</string>
+    <string name="startup_permission_notifications_title">Allow agent notifications</string>
+    <string name="startup_permission_notifications_message">Allow notifications so AI-ssistant can report progress, required approval, and completed work while another app is open.</string>
+    <string name="startup_permission_open_settings">Open settings</string>
+    <string name="startup_permission_not_now">Not now</string>
     <string name="status_working_device">Working on device · driving apps, running root commands</string>
     <string name="notification_channel_agent">Agent</string>
     <string name="notification_channel_permission">Agent permissions</string>
@@ -324,7 +332,7 @@
     <string name="a11y_edit">Edit</string>
     <string name="a11y_edit_message">Edit message</string>
     <string name="a11y_copy_message">Copy message</string>
-    <string name="chat_copied">Copied</string>
+    <string name="chat_copied">Copied successfully</string>
     <string name="toast_copy_failed">Could not copy message</string>
     <string name="chat_edit_stop_first">Wait until task has stopped before editing a message</string>
     <string name="chat_edit_hint">Editing message — clear to cancel</string>

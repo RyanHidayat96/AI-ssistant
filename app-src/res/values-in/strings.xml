@@ -16,6 +16,14 @@
     <string name="common_test">TES</string>
     <string name="common_add">Tambah</string>
     <string name="common_rename">Ubah nama</string>
+    <string name="startup_permission_accessibility_title">Aktifkan Aksesibilitas</string>
+    <string name="startup_permission_accessibility_message">Aktifkan AI-ssistant di Pengaturan Aksesibilitas Android. Ini membuat agent dapat membaca dan mengoperasikan app target sambil mengecualikan overlay miliknya.</string>
+    <string name="startup_permission_overlay_title">Izinkan overlay mengambang</string>
+    <string name="startup_permission_overlay_message">Izinkan AI-ssistant menampilkan panel langsung saat bekerja di app lain.</string>
+    <string name="startup_permission_notifications_title">Izinkan notifikasi agent</string>
+    <string name="startup_permission_notifications_message">Izinkan notifikasi agar AI-ssistant dapat melaporkan progres, persetujuan yang dibutuhkan, dan tugas selesai saat app lain terbuka.</string>
+    <string name="startup_permission_open_settings">Buka pengaturan</string>
+    <string name="startup_permission_not_now">Nanti saja</string>
     <string name="status_working_device">Bekerja di perangkat · mengoperasikan app, menjalankan perintah root</string>
     <string name="notification_channel_agent">Agent</string>
     <string name="notification_channel_permission">Izin agent</string>
@@ -324,7 +332,7 @@
     <string name="a11y_edit">Ubah</string>
     <string name="a11y_edit_message">Ubah pesan</string>
     <string name="a11y_copy_message">Salin pesan</string>
-    <string name="chat_copied">Tersalin</string>
+    <string name="chat_copied">Copy berhasil</string>
     <string name="toast_copy_failed">Pesan tidak dapat disalin</string>
     <string name="chat_edit_stop_first">Tunggu tugas benar-benar berhenti sebelum mengubah pesan</string>
     <string name="chat_edit_hint">Mengubah pesan — hapus teks untuk batal</string>

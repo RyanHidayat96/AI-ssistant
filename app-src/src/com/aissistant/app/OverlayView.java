@@ -209,25 +209,21 @@ final class OverlayView {
     }
 
     /**
-     * Restore panel after one raw command. The next raw command must isolate again; target-window
-     * Accessibility actions cannot target this overlay because its package is filtered out.
+     * End raw-command isolation without remounting the panel. Reattaching on every command made
+     * the panel flash whenever a response arrived; Accessibility actions reattach it safely, and
+     * a quiet run returns to the full chat screen instead.
      */
     static void finishAgentObservation(final Context ctx) {
-        // The command has already finished. The next command has to enter isolation again before
-        // it can execute, so restoring this user-visible panel cannot become a raw-input target.
         OverlayHub.leaveAgentIsolation();
         final Runnable finish = new Runnable() {
             @Override public void run() {
                 try {
                     OverlayView ov = current;
-                    if (ov == null) {
-                        if (ctx != null && !MainActivity.appVisible && canDraw(ctx)) OverlayView.show(ctx);
-                        return;
-                    }
-                    ov.setAgentPassThrough(false);
-                    if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
+                    if (ov != null) ov.setAgentPassThrough(false);
                 } catch (Throwable t) {
                     android.util.Log.e("AIssistant", "overlay finish agent observation failed: " + t);
+                } finally {
+                    try { AgentBorder.restoreForActiveOperation(ctx); } catch (Throwable ignored) { }
                 }
             }
         };
@@ -238,16 +234,14 @@ final class OverlayView {
         new Handler(Looper.getMainLooper()).post(finish);
     }
 
-    /** End a run: the user may interact with the panel again only after input driving is over. */
+    /** End a run without reviving a detached panel; AgentBorder returns to full chat after idle. */
     static void finishAgentRun(final Context ctx) {
         OverlayHub.finishAgentRun();
         final Runnable finish = new Runnable() {
             @Override public void run() {
                 try {
                     OverlayView ov = current;
-                    if (ov == null) return;
-                    ov.setAgentPassThrough(false);
-                    if (ov.panel == null && (ctx == null || canDraw(ctx))) ov.attach();
+                    if (ov != null) ov.setAgentPassThrough(false);
                 } catch (Throwable t) {
                     android.util.Log.e("AIssistant", "overlay finish agent run failed: " + t);
                 }
@@ -426,8 +420,10 @@ final class OverlayView {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(round(TOOL_BG, LINE, 12));
-        row.setPadding(dp(8), dp(4), dp(6), dp(4));
+        // Same composer shell and action geometry as full AI-ssistant chat screen.
+        row.setBackground(round(SURFACE, LINE, 28));
+        row.setPadding(dp(2), dp(2), dp(3), dp(2));
+        row.setMinimumHeight(dp(52));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(widthPx(), -2);
         rlp.setMargins(0, dp(8), 0, 0);
         row.setLayoutParams(rlp);
@@ -436,11 +432,13 @@ final class OverlayView {
         input.setHint(mainAlive() ? text(R.string.overlay_input_hint) : text(R.string.overlay_open_app_hint));
         input.setHintTextColor(MUTED);
         input.setTextColor(FG);
-        input.setTextSize(13);
+        input.setTextSize(16);
+        input.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        input.setMinLines(1);
         input.setMaxLines(3);
-        input.setMinHeight(dp(40));
+        input.setMinHeight(dp(52));
         input.setBackground(null);
-        input.setPadding(dp(4), dp(6), dp(6), dp(6));
+        input.setPadding(dp(6), dp(6), dp(6), dp(6));
         input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT
                 | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);

@@ -40,6 +40,7 @@ public class AgentService extends Service {
             android.util.Log.i("AIssistant", "service start: appVisible=" + MainActivity.appVisible
                     + " canDraw=" + OverlayView.canDraw(this));
             if (!MainActivity.appVisible && OverlayView.canDraw(this)) OverlayView.show(this);
+            if (!MainActivity.appVisible) AgentBorder.showForBackgroundOperation(this);
         } catch (Throwable ignored) { }
         return START_NOT_STICKY;
     }
@@ -47,6 +48,7 @@ public class AgentService extends Service {
     @Override public void onDestroy() {
         clearPermissionRequired(this);
         try { OverlayView.hide(); } catch (Throwable ignored) { }
+        try { AgentBorder.hide(); } catch (Throwable ignored) { }
         super.onDestroy();
     }
 
@@ -166,4 +168,3 @@ public class AgentService extends Service {
         }
     }
 }
-

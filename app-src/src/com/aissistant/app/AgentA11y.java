@@ -106,10 +106,14 @@ public class AgentA11y extends AccessibilityService {
             boolean ok;
             if ("click".equals(act)) {
                 AccessibilityNodeInfo c = clickable(node);
-                ok = c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                if (c == null) return "[act_app refused: node is not clickable]";
+                AgentBorder.pulseAccessibilityOperation(s);
+                ok = c.performAction(AccessibilityNodeInfo.ACTION_CLICK);
             } else if ("long_click".equals(act)) {
+                AgentBorder.pulseAccessibilityOperation(s);
                 ok = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
             } else if ("focus".equals(act)) {
+                AgentBorder.pulseAccessibilityOperation(s);
                 ok = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
             } else if ("set_text".equals(act)) {
                 AccessibilityNodeInfo edit = editable(node);
@@ -117,13 +121,18 @@ public class AgentA11y extends AccessibilityService {
                 Bundle b = new Bundle();
                 b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text == null ? "" : text);
                 edit.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                AgentBorder.pulseAccessibilityOperation(s);
                 ok = edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b);
             } else if ("scroll_forward".equals(act)) {
                 AccessibilityNodeInfo scroll = scrollable(node);
-                ok = scroll != null && scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                if (scroll == null) return "[act_app refused: node is not scrollable]";
+                AgentBorder.pulseAccessibilityOperation(s);
+                ok = scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
             } else if ("scroll_backward".equals(act)) {
                 AccessibilityNodeInfo scroll = scrollable(node);
-                ok = scroll != null && scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+                if (scroll == null) return "[act_app refused: node is not scrollable]";
+                AgentBorder.pulseAccessibilityOperation(s);
+                ok = scroll.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
             } else {
                 return "[act_app error: unsupported action " + act
                         + ". Use click, long_click, focus, set_text, scroll_forward, scroll_backward.]";
@@ -132,6 +141,111 @@ public class AgentA11y extends AccessibilityService {
                     + " action=" + act + " ok=" + ok + "\n" + describe(node, ref.path);
         } catch (Throwable t) {
             return "act_app failed: " + t;
+        }
+    }
+
+    /**
+     * Repeats a node scroll for a bounded duration. Unlike `input swipe`, this action is delivered
+     * to the target node, so the user can keep using the visible AI-ssistant overlay.
+     */
+    static String scrollFor(String packageName, String nodeId, String direction, int durationMs, int intervalMs) {
+        AgentA11y s = live;
+        if (s == null) return "[accessibility service not enabled]";
+        if (empty(nodeId)) return "[scroll_app error: missing node id. Run observe_app first.]";
+        String way = direction == null ? "" : direction.trim().toLowerCase(Locale.ENGLISH);
+        if (!"forward".equals(way) && !"backward".equals(way))
+            return "[scroll_app error: direction must be forward or backward.]";
+        if (durationMs < 100 || durationMs > 30000)
+            return "[scroll_app error: duration_ms must be 100 to 30000.]";
+        int pause = intervalMs <= 0 ? 450 : intervalMs;
+        if (pause < 80 || pause > 2000)
+            return "[scroll_app error: interval_ms must be 80 to 2000.]";
+        boolean borderActive = false;
+        try {
+            NodeRef ref;
+            long token;
+            synchronized (LOCK) {
+                ref = lastNodes.get(nodeId.trim());
+                token = lastToken;
+            }
+            if (ref == null) return "[scroll_app error: stale or unknown node id " + nodeId + ". Run observe_app first.]";
+            if (!empty(packageName) && !packageName.trim().equals(ref.packageName))
+                return "[scroll_app refused: node belongs to " + ref.packageName + ", not " + packageName + "]";
+
+            Target initialTarget = s.target(ref.packageName);
+            if (initialTarget == null) return "[scroll_app error: target package not visible: " + ref.packageName + "]";
+            AccessibilityNodeInfo initialNode = byPath(initialTarget.root, ref.path);
+            if (initialNode == null) return "[scroll_app error: node changed since observe_app. Run observe_app again.]";
+            if (text(initialNode.getPackageName()).startsWith(s.getPackageName()))
+                return "[scroll_app refused: node belongs to AI-ssistant overlay]";
+            if (scrollable(initialNode) == null) return "[scroll_app refused: node is not scrollable]";
+            borderActive = AgentBorder.beginAccessibilityOperation(s);
+
+            long started = android.os.SystemClock.elapsedRealtime();
+            long deadline = started + durationMs;
+            int steps = 0;
+            String stopped = "duration reached";
+            while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                Target target = s.target(ref.packageName);
+                if (target == null) { stopped = "target not visible"; break; }
+                AccessibilityNodeInfo node = byPath(target.root, ref.path);
+                if (node == null) { stopped = "node changed"; break; }
+                String nodePackage = text(node.getPackageName());
+                if (nodePackage.startsWith(s.getPackageName())) {
+                    stopped = "refused AI-ssistant overlay";
+                    break;
+                }
+                AccessibilityNodeInfo scroll = scrollable(node);
+                boolean ok = scroll != null && scroll.performAction("forward".equals(way)
+                        ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                        : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+                if (!ok) { stopped = "target cannot scroll further"; break; }
+                steps++;
+                long remain = deadline - android.os.SystemClock.elapsedRealtime();
+                if (remain <= 0) break;
+                try { Thread.sleep(Math.min((long) pause, remain)); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    stopped = "interrupted";
+                    break;
+                }
+            }
+            long elapsed = android.os.SystemClock.elapsedRealtime() - started;
+            return "scroll_app token=" + token + " package=" + ref.packageName + " node=" + nodeId
+                    + " direction=" + way + " elapsed_ms=" + elapsed + " steps=" + steps + " stopped=" + stopped
+                    + "\nAI-ssistant overlay excluded.";
+        } catch (Throwable t) {
+            return "scroll_app failed: " + t;
+        } finally {
+            if (borderActive) AgentBorder.endOperation();
+        }
+    }
+
+    /**
+     * Redirect ordinary raw swipes only when Accessibility already exposes a real scroll target.
+     * Canvas/game UIs without a scroll node retain their raw-input fallback.
+     */
+    static String rawSwipeRedirect() {
+        AgentA11y s = live;
+        if (s == null) return "";
+        try {
+            Target target = s.target("");
+            if (target == null) return "";
+            String path = firstScrollablePath(target.root, "", 0);
+            if (path == null) return "";
+            long token = System.currentTimeMillis();
+            HashMap<String, NodeRef> refs = new HashMap<String, NodeRef>();
+            refs.put("n0", new NodeRef(target.packageName, path));
+            synchronized (LOCK) {
+                lastToken = token;
+                lastNodes = refs;
+            }
+            return "[RAW SCROLL NOT EXECUTED: target package " + target.packageName
+                    + " has Accessibility scroll node n0. Use scroll_app with package=\"" + target.packageName
+                    + "\", node=\"n0\", direction=\"forward\" or \"backward\", and requested duration_ms. "
+                    + "This keeps AI-ssistant overlay visible and excluded from agent UI access.]";
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
@@ -214,6 +328,20 @@ public class AgentA11y extends AccessibilityService {
         for (int i = 0; i < 8 && n != null; i++) {
             try { if (n.isScrollable()) return n; } catch (Throwable ignored) { }
             try { n = n.getParent(); } catch (Throwable t) { return null; }
+        }
+        return null;
+    }
+
+    private static String firstScrollablePath(AccessibilityNodeInfo n, String path, int depth) {
+        if (n == null || depth > 14) return null;
+        if (safe(n, "scroll")) return path;
+        int children;
+        try { children = n.getChildCount(); } catch (Throwable t) { children = 0; }
+        for (int i = 0; i < children; i++) {
+            AccessibilityNodeInfo child;
+            try { child = n.getChild(i); } catch (Throwable t) { child = null; }
+            String found = firstScrollablePath(child, path.isEmpty() ? String.valueOf(i) : path + "." + i, depth + 1);
+            if (found != null) return found;
         }
         return null;
     }

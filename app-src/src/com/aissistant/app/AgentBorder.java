@@ -30,12 +30,17 @@ import android.view.WindowInsets;
 public final class AgentBorder {
 
     private static final Handler H = new Handler(Looper.getMainLooper());
+    private static final long RETURN_TO_MAIN_DELAY_MS = 2000L;
 
     private static View view;
     private static WindowManager wm;
     private static Pulse pulse;
-    /** Number of commands currently controlling or observing another app. Main-thread only. */
+    /** Delayed handoff gives sequential agent actions a chance to continue in target app. */
+    private static Runnable pendingReturnToMain;
+    /** Number of target-app actions in flight. Main-thread only. */
     private static int activeOperations;
+    /** True from first target action until the owning agent run finishes. Main-thread only. */
+    private static boolean targetAppSession;
 
     private AgentBorder() { }
 
@@ -43,14 +48,52 @@ public final class AgentBorder {
     public static boolean beginOperation(Context ctx, String cmd) {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
-            if (!drivesTargetApp(c)) return false;
-            // A border is still an application overlay. During a strict agent run it would leak
-            // into screenshots/window dumps and participate in obscuring-opacity input checks.
-            if (OverlayHub.agentIsolation()) return false;
+            if (!controlsTargetApp(c)) return false;
             android.util.Log.i("AIssistant", "border operation start: "
                     + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
             H.post(new Runnable() { @Override public void run() {
+                cancelQueuedReturnToMain();
+                targetAppSession = true;
+                activeOperations++;
+                // Accessibility targets nodes directly and filters this package, so the user can
+                // see the panel without putting it back into the agent's target tree.
+                if (!MainActivity.appVisible) OverlayView.show(ac);
+                show(ac);
+            } });
+            return true;
+        } catch (Throwable ignored) { }
+        return false;
+    }
+
+    /** Main activity is now behind an app while an action remains in flight. */
+    public static void showForBackgroundOperation(final Context ctx) {
+        if (ctx == null) return;
+        final Context ac = ctx.getApplicationContext();
+        H.post(new Runnable() { @Override public void run() { show(ac); } });
+    }
+
+    /** Recreate edge only if target-app action still runs after UI isolation ends. */
+    public static void restoreForActiveOperation(Context ctx) {
+        showForBackgroundOperation(ctx);
+    }
+
+    /** User returned to AI-ssistant; keep run state but remove duplicate visual chrome. */
+    public static void hideForForegroundApp() {
+        H.post(new Runnable() { @Override public void run() {
+            cancelQueuedReturnToMain();
+            drop();
+        } });
+    }
+
+    /** Begin a target-window Accessibility action. This path never performs raw screen input. */
+    public static boolean beginAccessibilityOperation(Context ctx) {
+        try {
+            if (ctx == null || OverlayHub.agentIsolation()) return false;
+            final Context ac = ctx.getApplicationContext();
+            H.post(new Runnable() { @Override public void run() {
+                cancelQueuedReturnToMain();
+                targetAppSession = true;
                 activeOperations++;
                 show(ac);
             } });
@@ -59,11 +102,20 @@ public final class AgentBorder {
         return false;
     }
 
+    /** Short visual hold for one-click Accessibility actions; repeated calls merge into one pulse. */
+    public static boolean pulseAccessibilityOperation(Context ctx) {
+        if (!beginAccessibilityOperation(ctx)) return false;
+        H.postDelayed(new Runnable() { @Override public void run() { endOperation(); } }, 800L);
+        return true;
+    }
+
     /** End one command previously admitted by {@link #beginOperation(Context, String)}. */
     public static void endOperation() {
         H.post(new Runnable() { @Override public void run() {
             if (activeOperations > 0) activeOperations--;
-            if (activeOperations == 0) drop();
+            if (activeOperations == 0) {
+                drop();
+            }
         } });
     }
 
@@ -100,24 +152,29 @@ public final class AgentBorder {
                 || c.matches("(?s).*\\buiautomator\\s+dump\\b.*");
     }
 
+    /** UI state reads still isolate overlay, but do not claim user app is being operated. */
+    private static boolean controlsTargetApp(String c) {
+        return c.matches("(?s).*\\bmonkey\\b.*")
+                || c.matches("(?s).*\\bam\\s+start\\b.*")
+                || c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
+                || c.matches("(?s).*\\b(sendevent|uinput)\\b.*")
+                || c.matches("(?s).*\\bservice\\s+call\\s+input\\b.*")
+                || c.matches("(?s).*\\bcmd\\s+(activity|input)\\b.*");
+    }
+
     private static boolean observesTargetScreen(String c) {
         return c.matches("(?s).*\\b(screencap|uiautomator)\\b.*")
                 || c.matches("(?s).*\\bdumpsys\\s+(window|activity|input|accessibility|surfaceflinger)\\b.*");
     }
 
-    /**
-     * Synchronously remove this secondary app-owned surface before an agent command. Returning
-     * false lets the caller fail closed if the main thread is unavailable instead of injecting
-     * touch through a stale full-screen SAW window.
-     */
+    /** Synchronize raw-command transition. Border remains only for an in-flight target action. */
     static boolean suppressForAgentRun() {
         final java.util.concurrent.atomic.AtomicBoolean done =
                 new java.util.concurrent.atomic.AtomicBoolean(false);
         boolean completed = onMainAndWait(new Runnable() {
             @Override public void run() {
                 try {
-                    activeOperations = 0;
-                    drop();
+                    if (activeOperations == 0 || MainActivity.appVisible) drop();
                     done.set(true);
                 } catch (Throwable t) {
                     android.util.Log.e("AIssistant", "border isolate failed: " + t);
@@ -148,7 +205,35 @@ public final class AgentBorder {
         H.post(new Runnable() { @Override public void run() {
             activeOperations = 0;
             drop();
+            // Keep the target app in front while the model is still deciding its next step.
+            // Returning after every click/scroll made MainActivity steal foreground from a live
+            // target session. Only terminal run cleanup may hand control back to the full chat.
+            boolean returnToMain = targetAppSession;
+            targetAppSession = false;
+            if (returnToMain) scheduleReturnToMain();
         } });
+    }
+
+    /** One quiet interval means user no longer needs target app in front; restore full chat. */
+    private static void scheduleReturnToMain() {
+        cancelQueuedReturnToMain();
+        if (MainActivity.appVisible) return;
+        pendingReturnToMain = new Runnable() {
+            @Override public void run() {
+                pendingReturnToMain = null;
+                if (activeOperations != 0 || MainActivity.appVisible) return;
+                MainActivity host = MainActivity.instance;
+                if (host != null) host.returnToMainAfterTargetOperation();
+            }
+        };
+        H.postDelayed(pendingReturnToMain, RETURN_TO_MAIN_DELAY_MS);
+    }
+
+    /** Any next target action wins over queued idle handoff. */
+    private static void cancelQueuedReturnToMain() {
+        if (pendingReturnToMain == null) return;
+        H.removeCallbacks(pendingReturnToMain);
+        pendingReturnToMain = null;
     }
 
     private static boolean onMainAndWait(final Runnable work, long timeoutMs) {
@@ -177,8 +262,9 @@ public final class AgentBorder {
 
     private static void show(Context ctx) {
         try {
-            // The operation can finish before its queued show work reaches the main thread.
-            if (activeOperations <= 0 || OverlayHub.agentIsolation()) return;
+            // This edge is secure, non-touchable and hidden from Accessibility. It exists only
+            // while a target-app action is in flight; model thinking and screen reads stay dark.
+            if (activeOperations <= 0 || MainActivity.appVisible) return;
             if (view != null) { if (pulse != null) pulse.bump(); return; }
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return;

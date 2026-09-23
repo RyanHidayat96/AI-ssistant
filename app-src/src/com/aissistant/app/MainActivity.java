@@ -299,6 +299,14 @@ public class MainActivity extends Activity {
     /** Locale changes recreate this activity. Keep an already-unlocked in-process session intact. */
     private boolean changingLanguage;
     private static volatile boolean unlockAfterLanguageChange;
+    /** Startup prerequisite dialog; only one settings handoff may be pending at a time. */
+    private AlertDialog startupPermissionDialog;
+    private boolean startupPermissionCheckQueued;
+
+    private static final int STARTUP_NEEDS_NONE = 0;
+    private static final int STARTUP_NEEDS_ACCESSIBILITY = 1;
+    private static final int STARTUP_NEEDS_OVERLAY = 2;
+    private static final int STARTUP_NEEDS_NOTIFICATIONS = 3;
 
     // ==================== lifecycle ====================
 
@@ -409,6 +417,7 @@ public class MainActivity extends Activity {
         try {
             android.util.Log.i("AIssistant", "onStop: busy=" + busy + " canDraw=" + OverlayView.canDraw(this));
             if (busy && OverlayView.canDraw(this)) { seedOverlay(); OverlayView.show(this); }
+            if (busy) AgentBorder.showForBackgroundOperation(this);
         } catch (Throwable ignored) { }
         persist();
     }
@@ -431,6 +440,7 @@ public class MainActivity extends Activity {
                 toast(uiText(R.string.toast_mic_permission_denied));
             }
         }
+        scheduleStartupPermissionCheck();
     }
 
     @Override
@@ -451,6 +461,7 @@ public class MainActivity extends Activity {
         boolean returningFromOverlay = overlaySessionActive();
         if (returningFromOverlay) lockOnForeground = false;
         try { OverlayView.hide(); } catch (Throwable ignored) { }
+        try { AgentBorder.hideForForegroundApp(); } catch (Throwable ignored) { }
         if (lockOnForeground && !busy && store != null && store.appLockEnabled()) {
             ui.post(new Runnable() {
                 @Override public void run() {
@@ -458,6 +469,7 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        scheduleStartupPermissionCheck();
     }
 
     @Override
@@ -479,6 +491,109 @@ public class MainActivity extends Activity {
         if (screen == 3) { showSettings(); return; }
         if (screen != 0) { showChat(); return; }
         super.onBackPressed();
+    }
+
+    /** Check again on every foreground entry. Settings may have changed while this app was away. */
+    private void scheduleStartupPermissionCheck() {
+        if (startupPermissionCheckQueued) return;
+        startupPermissionCheckQueued = true;
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                startupPermissionCheckQueued = false;
+                showStartupPermissionDialogIfNeeded();
+            }
+        }, 300L);
+    }
+
+    /** Automation needs these three capabilities; mic, contacts, and calls stay just-in-time. */
+    private int missingStartupRequirement() {
+        if (!agentAccessibilityEnabled()) return STARTUP_NEEDS_ACCESSIBILITY;
+        if (!OverlayView.canDraw(this)) return STARTUP_NEEDS_OVERLAY;
+        if (!agentNotificationsEnabled()) return STARTUP_NEEDS_NOTIFICATIONS;
+        return STARTUP_NEEDS_NONE;
+    }
+
+    private boolean agentAccessibilityEnabled() {
+        if (AgentA11y.ready()) return true;
+        try {
+            String enabled = android.provider.Settings.Secure.getString(getContentResolver(),
+                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (enabled == null || enabled.trim().isEmpty()) return false;
+            android.content.ComponentName service = new android.content.ComponentName(this, AgentA11y.class);
+            String full = service.flattenToString();
+            String shortName = service.flattenToShortString();
+            for (String name : enabled.split(":")) {
+                String item = name == null ? "" : name.trim();
+                if (full.equals(item) || shortName.equals(item)) return true;
+            }
+        } catch (Throwable ignored) { }
+        return false;
+    }
+
+    private boolean agentNotificationsEnabled() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) return false;
+            if (android.os.Build.VERSION.SDK_INT >= 24) {
+                Object service = getSystemService(NOTIFICATION_SERVICE);
+                return !(service instanceof android.app.NotificationManager)
+                        || ((android.app.NotificationManager) service).areNotificationsEnabled();
+            }
+        } catch (Throwable ignored) { }
+        return true;
+    }
+
+    private void showStartupPermissionDialogIfNeeded() {
+        if (isFinishing() || lockVisible || !appUnlocked || busy) return;
+        if (android.os.Build.VERSION.SDK_INT >= 17 && isDestroyed()) return;
+        if (startupPermissionDialog != null && startupPermissionDialog.isShowing()) return;
+        final int need = missingStartupRequirement();
+        if (need == STARTUP_NEEDS_NONE) return;
+
+        int title = R.string.startup_permission_accessibility_title;
+        int message = R.string.startup_permission_accessibility_message;
+        if (need == STARTUP_NEEDS_OVERLAY) {
+            title = R.string.startup_permission_overlay_title;
+            message = R.string.startup_permission_overlay_message;
+        } else if (need == STARTUP_NEEDS_NOTIFICATIONS) {
+            title = R.string.startup_permission_notifications_title;
+            message = R.string.startup_permission_notifications_message;
+        }
+        startupPermissionDialog = new AlertDialog.Builder(this)
+                .setTitle(uiText(title))
+                .setMessage(uiText(message))
+                .setNegativeButton(R.string.startup_permission_not_now, null)
+                .setPositiveButton(R.string.startup_permission_open_settings,
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface dialog, int which) {
+                                openStartupPermissionSettings(need);
+                            }
+                        })
+                .create();
+        startupPermissionDialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(DialogInterface dialog) {
+                startupPermissionDialog = null;
+            }
+        });
+        startupPermissionDialog.show();
+    }
+
+    private void openStartupPermissionSettings(int need) {
+        try {
+            Intent settings;
+            if (need == STARTUP_NEEDS_ACCESSIBILITY) {
+                settings = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            } else if (need == STARTUP_NEEDS_OVERLAY) {
+                settings = OverlayView.permissionIntent(this);
+            } else {
+                settings = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
+            }
+            startActivity(settings);
+        } catch (Throwable t) {
+            toast(uiText(R.string.toast_open_settings_failed, t));
+        }
     }
 
     /** automation hooks: `--es run "<script>"` asks for in-app approval before executing as root. */
@@ -712,6 +827,7 @@ public class MainActivity extends Activity {
         Intent next = deferredIntent;
         deferredIntent = null;
         if (next != null) handleIntent(next);
+        scheduleStartupPermissionCheck();
     }
 
     private boolean canUseFingerprint() {
@@ -1864,7 +1980,9 @@ public class MainActivity extends Activity {
         }
 
         String stamp = fmtStamp(t);
-        if (!stamp.isEmpty() && !note) {
+        if (!note && !tool) {
+            addBubbleMeta(row, user, stamp, text, bubbleIndex);
+        } else if (!stamp.isEmpty() && !note) {
             TextView s = tv(11, STAMP, Typeface.NORMAL);
             s.setText(stamp);
             LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-2, -2);
@@ -1872,29 +1990,37 @@ public class MainActivity extends Activity {
             if (!note && user) slp.gravity = Gravity.END;
             row.addView(s, slp);
         }
-        if (!note && !tool) addBubbleActions(row, user, text, bubbleIndex);
         chatLog.addView(row);
     }
 
-    /** Compact per-message actions: icon-only, full touch targets, never steal text selection. */
-    private void addBubbleActions(LinearLayout row, boolean user, final String text, final int bubbleIndex) {
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(user ? Gravity.END : Gravity.START);
+    /** Timestamp and actions share one compact footer immediately below each chat bubble. */
+    private void addBubbleMeta(LinearLayout row, boolean user, String stamp,
+                               final String text, final int bubbleIndex) {
+        LinearLayout meta = new LinearLayout(this);
+        meta.setOrientation(LinearLayout.HORIZONTAL);
+        meta.setGravity((user ? Gravity.END : Gravity.START) | Gravity.CENTER_VERTICAL);
+        if (!TextUtils.isEmpty(stamp)) {
+            TextView time = tv(11, STAMP, Typeface.NORMAL);
+            time.setText(stamp);
+            LinearLayout.LayoutParams timeLp = new LinearLayout.LayoutParams(-2, -2);
+            timeLp.gravity = Gravity.CENTER_VERTICAL;
+            timeLp.setMargins(user ? 0 : dp(2), 0, dp(3), 0);
+            meta.addView(time, timeLp);
+        }
         if (user && !busy) {
-            actions.addView(bubbleAction(R.drawable.ic_edit_20, uiText(R.string.a11y_edit_message),
+            meta.addView(bubbleAction(R.drawable.ic_edit_20, uiText(R.string.a11y_edit_message),
                     new View.OnClickListener() {
                         @Override public void onClick(View v) { beginMessageEdit(bubbleIndex, text); }
                     }));
         }
-        actions.addView(bubbleAction(R.drawable.ic_copy_20, uiText(R.string.a11y_copy_message),
+        meta.addView(bubbleAction(R.drawable.ic_copy_20, uiText(R.string.a11y_copy_message),
                 new View.OnClickListener() {
                     @Override public void onClick(View v) { copyMessage(text); }
                 }));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(40));
         lp.gravity = user ? Gravity.END : Gravity.START;
-        lp.setMargins(user ? 0 : dp(2), dp(1), user ? dp(2) : 0, 0);
-        row.addView(actions, lp);
+        lp.setMargins(user ? 0 : dp(2), 0, user ? dp(2) : 0, 0);
+        row.addView(meta, lp);
     }
 
     private ImageButton bubbleAction(int drawable, String label, View.OnClickListener listener) {
@@ -1915,7 +2041,10 @@ public class MainActivity extends Activity {
             android.content.ClipboardManager clipboard =
                     (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("message", text));
+            String copied = text == null ? "" : text;
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                    uiText(R.string.app_name), copied));
+            if (!clipboard.hasPrimaryClip()) throw new IllegalStateException("clipboard write failed");
             toast(uiText(R.string.chat_copied));
         } catch (Throwable error) {
             toast(uiText(R.string.toast_copy_failed));
@@ -3148,7 +3277,10 @@ public class MainActivity extends Activity {
             boolean panelGone = false;
             boolean borderGone = false;
             try { panelGone = OverlayView.beginAgentRun(this); } catch (Throwable ignored) { }
-            try { borderGone = AgentBorder.suppressForAgentRun(); } catch (Throwable ignored) { }
+            try {
+                // A prompt alone never lights the border. It appears only during target actions.
+                borderGone = AgentBorder.suppressForAgentRun();
+            } catch (Throwable ignored) { }
             if (!panelGone || !borderGone) {
                 android.util.Log.e("AIssistant", "agent isolation not ready: panel="
                         + panelGone + " border=" + borderGone);
@@ -3157,6 +3289,7 @@ public class MainActivity extends Activity {
             // The panel is visual-only during target-app control. Release it only after the
             // whole run ends, never in the gap between two injected UI commands.
             try { OverlayView.finishAgentRun(this); } catch (Throwable ignored) { }
+            try { AgentBorder.hide(); } catch (Throwable ignored) { }
         }
         ui.post(new Runnable() {
             @Override public void run() { refreshSendBtn(); }
@@ -3395,6 +3528,19 @@ public class MainActivity extends Activity {
                 }
             }
         });
+    }
+
+    /** Agent has been idle outside this app for two seconds; restore full chat without ending run. */
+    void returnToMainAfterTargetOperation() {
+        if (appVisible || isFinishing()
+                || (android.os.Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+        try { OverlayView.hide(); } catch (Throwable ignored) { }
+        try {
+            startActivity(new Intent(this, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        } catch (Throwable t) {
+            android.util.Log.w("AIssistant", "return after target operation failed: " + t);
+        }
     }
 
     /** floating panel: it needs the "draw over other apps" permission (a Settings toggle) */
@@ -3686,6 +3832,9 @@ public class MainActivity extends Activity {
             return AgentA11y.observe(args.optString("package", ""));
         if ("act_app".equals(name))
             return AgentA11y.act(args.optString("package", ""), args.getString("node"), args.getString("action"), args.optString("text", ""));
+        if ("scroll_app".equals(name))
+            return AgentA11y.scrollFor(args.optString("package", ""), args.getString("node"),
+                    args.getString("direction"), args.getInt("duration_ms"), args.optInt("interval_ms", 450));
         if ("list_skills".equals(name)) return AgentSkills.list();
         if ("read_skill".equals(name)) return AgentSkills.read(args.getString("name"));
         if ("read_reference".equals(name)) return ReferenceReader.read(args.getString("url"));
@@ -3937,6 +4086,9 @@ public class MainActivity extends Activity {
                   + " for D in /data/adb/ai-ssistant/tools /data/data/com.aissistant.app/files/tools /data/local/ai-ssistant/tools; do"
                   + "   probe \"$D\" && { T=\"$D\"; break; }; done;"
                   + " [ -n \"$T\" ] || T=/data/local/ai-ssistant/tools;"
+                  + " mkdir -p \"$WDIR/.tools\" \"$T/shared\"; chmod 700 \"$WDIR/.tools\" \"$T/shared\" 2>/dev/null;"
+                  + " [ -f \"$T/agent-tools.md\" ] || printf '# AI-ssistant shared tool registry\\n' > \"$T/agent-tools.md\";"
+                  + " [ -f \"$T/tool-index.tsv\" ] || printf '# name\\tversion\\tabi\\texecutable\\tcontext\\n' > \"$T/tool-index.tsv\";"
                   + " printf 'CACHE=%s\\n' \"$T\"";
             String out = RootShell.run(script, 25);
             // the persistent shell appends its own sentinel, so pull the path out with a pattern
@@ -3985,6 +4137,14 @@ public class MainActivity extends Activity {
             if (echoCommand) addBubble("tool", "$ " + cmd);
             addBubble("tool", blocked);
             return blocked;
+        }
+        if (isRawSwipe(cmd)) {
+            String redirected = AgentA11y.rawSwipeRedirect();
+            if (!redirected.isEmpty()) {
+                if (echoCommand) addBubble("tool", "$ " + cmd);
+                addBubble("tool", redirected);
+                return redirected;
+            }
         }
         String cat = permissionCategory(cmd);
         boolean gated = cat != null;
@@ -4038,8 +4198,9 @@ public class MainActivity extends Activity {
         runCounts.put(cmd, n + 1);
         final String wd = workDir();
         if (echoCommand) addBubble("tool", "$ " + cmd);
-        // every command starts inside THIS session's workspace; $WD is exported for the model
-        String exec = "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + toolsDir() + "; " + cmd;
+        // Every command receives explicit tool-scope helpers. They keep portable tools structured
+        // in the shared cache and bind target/task-specific helpers to this session workspace.
+        String exec = toolWorkspaceBootstrap(wd) + cmd;
         OverlayView.releaseFocus();
         String raw;
         // Every shell command has access to global device state.  Enter isolation regardless of
@@ -4054,9 +4215,11 @@ public class MainActivity extends Activity {
             raw = "[AGENT UI ISOLATION NOT READY: command was not executed. "
                     + "Wait for the interface to settle, then retry once.]";
         } else {
+            boolean borderOperation = AgentBorder.beginOperation(this, cmd);
             try {
                 raw = RootShell.run(exec, store.timeoutSec());
             } finally {
+                if (borderOperation) AgentBorder.endOperation();
                 try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
             }
         }
@@ -4064,6 +4227,25 @@ public class MainActivity extends Activity {
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
+    }
+
+    /** Shell prologue that gives every agent command one strict location per tool scope. */
+    private String toolWorkspaceBootstrap(String wd) {
+        String tools = toolsDir();
+        return "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + tools
+                + "; export TOOL_SESSION=\"$WD/.tools\"; mkdir -p \"$TOOL_SESSION\" \"$TOOLS/shared\"; "
+                + "agent_tool_part() { case \"$1\" in ''|*[!A-Za-z0-9._+-]*) echo 'tool scope: invalid name/version/ABI' >&2; return 2;; esac; }; "
+                + "agent_tool_shared() { [ \"$#\" -eq 3 ] || { echo 'usage: agent_tool_shared name version abi' >&2; return 2; }; "
+                + "agent_tool_part \"$1\" && agent_tool_part \"$2\" && agent_tool_part \"$3\" || return $?; "
+                + "D=\"$TOOLS/shared/$1/$2/$3\"; mkdir -p \"$D\" && chmod 700 \"$D\" && printf '%s\\n' \"$D\"; }; "
+                + "agent_tool_session() { [ \"$#\" -eq 1 ] || { echo 'usage: agent_tool_session name' >&2; return 2; }; "
+                + "agent_tool_part \"$1\" || return $?; D=\"$TOOL_SESSION/$1\"; "
+                + "mkdir -p \"$D\" && chmod 700 \"$D\" && printf '%s\\n' \"$D\"; }; "
+                + "agent_tool_register_shared() { [ \"$#\" -eq 5 ] || { echo 'usage: agent_tool_register_shared name version abi executable context' >&2; return 2; }; "
+                + "agent_tool_part \"$1\" && agent_tool_part \"$2\" && agent_tool_part \"$3\" && agent_tool_part \"$5\" || return $?; "
+                + "[ -x \"$4\" ] || { echo 'tool register: executable test failed' >&2; return 1; }; "
+                + "printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >> \"$TOOLS/tool-index.tsv\"; "
+                + "printf '%s | %s | %s | %s | %s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >> \"$TOOLS/agent-tools.md\"; }; ";
     }
 
     /** Fresh state probes are safe to repeat; mutation commands keep the existing replay guard. */
@@ -4078,6 +4260,12 @@ public class MainActivity extends Activity {
                 + "pm\\s+(path|list|dump)|logcat\\s+-d|uiautomator\\s+dump|grep|find|ls|stat|file|md5sum|"
                 + "sha256sum|readlink|test|id|uname|df|du|head|tail|wc|xxd|hexdump|strings|readelf|"
                 + "unzip\\s+-l|zipinfo|aapt|aapt2|sqlite3\\s+.*select)\\b.*");
+    }
+
+    /** Standard app lists expose a target Accessibility scroll action; avoid raw touch hit-testing there. */
+    private static boolean isRawSwipe(String cmd) {
+        return cmd != null && cmd.toLowerCase(Locale.ENGLISH)
+                .matches("(?s).*\\binput\\s+swipe\\b.*");
     }
 
     /** turn a raw failure into a next step: concrete hints + ground truth, so the model recovers alone */
@@ -4479,7 +4667,9 @@ public class MainActivity extends Activity {
                         + "apktool jadx baksmali smali frida-server keytool apksigner zipalign; do c=$(command -v $b 2>/dev/null); "
                         + "[ -z \"$c\" ] && [ -x $P/$b ] && c=$P/$b; [ -n \"$c\" ] && echo \"$b=$c\"; done | tr '\\n' ' '; echo; "
                         + "echo \"android=$(getprop ro.build.version.release) root=$(test -d /data/adb/ksu && echo KernelSU || echo other)\"; "
-                        + "ls -la " + toolsDir() + " " + toolsDir() + "/tools 2>/dev/null | head -60; "
+                        + "ls -la " + toolsDir() + " " + toolsDir() + "/shared 2>/dev/null | head -80; "
+                        + "if [ -f " + toolsDir() + "/tool-index.tsv ]; then head -c 4000 "
+                        + toolsDir() + "/tool-index.tsv; fi; "
                         + "if [ -f " + toolsDir() + "/agent-tools.md ]; then head -c 4000 "
                         + toolsDir() + "/agent-tools.md; fi";
                 String out = RootShell.run(cmd, 30);
