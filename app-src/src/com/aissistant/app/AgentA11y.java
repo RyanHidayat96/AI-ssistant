@@ -1,6 +1,8 @@
 package com.aissistant.app;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.Context;
+import android.content.Intent;
 import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Bundle;
@@ -67,14 +69,37 @@ public class AgentA11y extends AccessibilityService {
                 : "target-window accessibility: disabled; enable AI-ssistant in Android Accessibility settings";
     }
 
+    /** When the target window vanished, relaunch it once and give it a moment. Usual cause: the
+     *  target's own gate / anti-tamper closed its activity, so focus fell to whatever app was last used. */
+    private static void relaunchTarget(Context ctx, String pkg) {
+        try {
+            Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (i == null) return;
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+        } catch (Throwable ignored) { }
+    }
+
+    private static void sleepQuiet(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException ignored) { }
+    }
+
     static String observe(String packageName) {
         AgentA11y s = awaitLive(CONNECT_WAIT_MS);
         if (s == null) return unavailable();
         try {
             Target target = s.target(packageName);
             if (target == null) {
-                return "[target app window not found: " + (empty(packageName) ? "foreground app" : packageName)
-                        + ". Open the target app or pass its package name. AI-ssistant overlay windows were ignored.]";
+                if (!empty(packageName)) {
+                    relaunchTarget(s, packageName);
+                    sleepQuiet(1500);
+                    target = s.target(packageName);
+                }
+                if (target == null) {
+                    return "[target app window not found: " + (empty(packageName) ? "foreground app" : packageName)
+                            + ". Relaunched once and it still is not visible. Do NOT poll focus in a loop: if the "
+                            + "target closes itself, switch to the static (jadx/apktool) or hook (frida) route.]";
+                }
             }
             long token = System.currentTimeMillis();
             HashMap<String, NodeRef> refs = new HashMap<String, NodeRef>();
@@ -117,7 +142,14 @@ public class AgentA11y extends AccessibilityService {
                 return "[act_app refused: node belongs to " + ref.packageName + ", not " + packageName + "]";
             }
             Target target = s.target(ref.packageName);
-            if (target == null) return "[act_app error: target package not visible: " + ref.packageName + "]";
+            if (target == null) {
+                relaunchTarget(s, ref.packageName);
+                sleepQuiet(1500);
+                Target again = s.target(ref.packageName);
+                if (again == null) return "[act_app error: " + ref.packageName + " closed its own window. Relaunched "
+                        + "once; if it keeps closing, use the static/hook route instead of chasing focus.]";
+                target = again;
+            }
             AccessibilityNodeInfo node = byPath(target.root, ref.path);
             if (node == null) return "[act_app error: node changed since observe_app. Run observe_app again.]";
             String nodePackage = text(node.getPackageName());
@@ -195,7 +227,13 @@ public class AgentA11y extends AccessibilityService {
                 return "[scroll_app refused: node belongs to " + ref.packageName + ", not " + packageName + "]";
 
             Target initialTarget = s.target(ref.packageName);
-            if (initialTarget == null) return "[scroll_app error: target package not visible: " + ref.packageName + "]";
+            if (initialTarget == null) {
+                relaunchTarget(s, ref.packageName);
+                sleepQuiet(1500);
+                initialTarget = s.target(ref.packageName);
+                if (initialTarget == null) return "[scroll_app error: " + ref.packageName + " closed its own window. "
+                        + "Relaunched once; if it keeps closing, use the static/hook route instead of chasing focus.]";
+            }
             AccessibilityNodeInfo initialNode = resolveScrollable(initialTarget, ref);
             if (initialNode == null) return "[scroll_app error: node changed since observe_app. Run observe_app again.]";
             if (text(initialNode.getPackageName()).startsWith(s.getPackageName()))
