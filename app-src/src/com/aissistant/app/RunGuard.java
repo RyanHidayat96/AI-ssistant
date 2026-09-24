@@ -17,8 +17,8 @@ final class RunGuard {
     private final Map<String, Integer> failureFamilies = new LinkedHashMap<String, Integer>();
     private static final Pattern PAGED_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+(?:,\\d+)?)p['\\\"]?");
     private static final Pattern LITERAL_SEARCH = Pattern.compile("\\b(?:grep|rg)\\b");
-    private static final int STATIC_ARTIFACT_NUDGE_AFTER = 12;
-    private static final int STATIC_ARTIFACT_REPORT_AFTER = 24;
+    private static final int STATIC_ARTIFACT_NUDGE_AFTER = 8;
+    private static final int STATIC_ARTIFACT_REPORT_AFTER = 16;
     private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices, consecutiveEmptyLiteralSearches;
     /** Cumulative read-only artifact work since last target interaction; prevents analysis becoming task avoidance. */
     private int staticArtifactReads;
@@ -126,8 +126,9 @@ final class RunGuard {
         if (action == null) return false;
         String low = action.toLowerCase(Locale.US);
         boolean artifact = low.contains(".apk") || low.contains(".dex") || low.contains(".smali")
-                || low.contains(".so") || low.contains("jadxout") || low.contains("apktool")
-                || low.contains("baksmali") || low.contains("/sources/");
+                || low.contains(".so") || low.contains("jadx") || low.contains("apktool")
+                || low.contains("baksmali") || low.contains("/sources") || low.contains("$wd/dec")
+                || low.contains("/dec/") || low.contains(" dec/");
         if (!artifact) return false;
         if (low.matches("(?s).*\\b(sed\\s+-i|tee|cp|mv|rm|chmod|chown|zipalign|apksigner|install|uninstall|apktool\\s+b|smali\\s+assemble)\\b.*")
                 || low.matches("(?s).*[^0-9]>{1,2}\\s*(?!/dev/null\\b).*")) return false;

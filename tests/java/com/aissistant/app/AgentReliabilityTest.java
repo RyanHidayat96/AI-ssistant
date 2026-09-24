@@ -215,13 +215,13 @@ public final class AgentReliabilityTest {
         for (int i = 3; i < 5; i++) guard.observe("grep -rl \"derived-value\" sources", "");
         check(guard.reportOnly(), "empty literal searches stop before a representation loop");
         guard.reset();
-        for (int i = 0; i < 12; i++) {
-            note = guard.observe("grep gate /tmp/task/jadxout/sources/Target.java", "fact-" + i);
+        for (int i = 0; i < 8; i++) {
+            note = guard.observe("grep gate $WD/dec/sources/Target.java", "fact-" + i);
         }
         check(note.contains("read-only artifact checks"),
                 "artifact investigation requires an action branch before it drifts");
-        for (int i = 12; i < 24; i++) {
-            guard.observe("sed -n '1,80p' /tmp/task/jadxout/sources/Target.java", "fact-" + i);
+        for (int i = 8; i < 16; i++) {
+            guard.observe("sed -n '1,80p' $WD/dec/sources/Target.java", "fact-" + i);
         }
         check(guard.reportOnly(), "artifact investigation has a bounded analysis pass");
         guard.reset();
@@ -257,7 +257,8 @@ public final class AgentReliabilityTest {
                         && prompt.contains("agent_tool_register_shared"),
                 "prompt requires explicit shared and session tool scopes");
         check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site")
-                        && prompt.contains("Artifact investigation must earn a next action"),
+                        && prompt.contains("Artifact investigation must earn a next action")
+                        && prompt.contains("resource id"),
                 "prompt requires mapped artifact evidence to produce an action branch");
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),

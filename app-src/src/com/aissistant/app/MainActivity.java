@@ -283,6 +283,9 @@ public class MainActivity extends Activity {
     private String runTaskText;
     /** Target UI baselines collected in this run; static artifact work must follow one when relevant. */
     private final java.util.Set<String> observedTargetUi = new java.util.HashSet<String>();
+    /** Resource ids seen in the target UI; source investigation starts from these rather than broad scans. */
+    private final java.util.Set<String> targetUiAnchors = new java.util.LinkedHashSet<String>();
+    private boolean targetSourceAnchorLocated;
     /** when the current run started, so the finish notice can say how long it took */
     private long runStartMs;
     /** the overlay needs a way back into the activity's own send path */
@@ -3374,6 +3377,8 @@ public class MainActivity extends Activity {
         guardHits.clear();
         repeatGuardTotal = 0;
         observedTargetUi.clear();
+        targetUiAnchors.clear();
+        targetSourceAnchorLocated = false;
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
@@ -3502,6 +3507,8 @@ public class MainActivity extends Activity {
         guardHits.clear();
         repeatGuardTotal = 0;
         observedTargetUi.clear();
+        targetUiAnchors.clear();
+        targetSourceAnchorLocated = false;
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
@@ -3872,7 +3879,10 @@ public class MainActivity extends Activity {
         if ("observe_app".equals(name)) {
             String pkg = args.optString("package", "").trim().toLowerCase(Locale.US);
             String result = AgentA11y.observe(pkg);
-            if (pkg.equals(mentionedTargetPackage())) observedTargetUi.add(pkg);
+            if (pkg.equals(mentionedTargetPackage())) {
+                observedTargetUi.add(pkg);
+                collectTargetUiAnchors(result);
+            }
             return result;
         }        if ("act_app".equals(name))
             return AgentA11y.act(args.optString("package", ""), args.getString("node"), args.getString("action"), args.optString("text", ""));
@@ -4216,7 +4226,17 @@ public class MainActivity extends Activity {
             if (echoCommand) addBubble("tool", "$ " + cmd);
             addBubble("tool", blocked);
             return blocked;
-        }        String cat = permissionCategory(cmd);
+        }
+        if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
+                && !targetSourceAnchorLocated && isTargetSourceRead(cmd) && !usesTargetUiAnchor(cmd)) {
+            String blocked = "[TARGET SOURCE ANCHOR REQUIRED: target UI already exposed "
+                    + sourceAnchorSummary() + ". Search one of those exact IDs in the decompiled source first. "
+                    + "That result must locate a listener, route, or state predicate before broad source paging or decoding.]";
+            if (echoCommand) addBubble("tool", "$ " + cmd);
+            addBubble("tool", blocked);
+            return blocked;
+        }
+        String cat = permissionCategory(cmd);
         boolean gated = cat != null;
         if (gated && autoApprove) {
             audit(cat, "ALLOW-AUTO", cmd);
@@ -4313,6 +4333,9 @@ public class MainActivity extends Activity {
             }
         }
         String out = withRecovery(foldLong(AgentWindowFilter.hideSelfOverlays(raw, getPackageName())), cmd);
+        if (isTargetSourceRead(cmd) && usesTargetUiAnchor(cmd) && hasUsableSourceResult(out)) {
+            targetSourceAnchorLocated = true;
+        }
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
@@ -4338,6 +4361,45 @@ public class MainActivity extends Activity {
                 + "[ -x \"$4\" ] || { echo 'tool register: executable test failed' >&2; return 1; }; "
                 + "printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >> \"$TOOLS/tool-index.tsv\"; "
                 + "printf '%s | %s | %s | %s | %s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >> \"$TOOLS/agent-tools.md\"; }; ";
+    }
+
+    /** Collects target resource names from Accessibility output without treating UI text as executable input. */
+    private void collectTargetUiAnchors(String observation) {
+        if (observation == null) return;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                "\\bid=[^\\s/]+/([A-Za-z0-9_]+)").matcher(observation);
+        while (matcher.find() && targetUiAnchors.size() < 8) targetUiAnchors.add(matcher.group(1).toLowerCase(Locale.US));
+    }
+
+    /** Source reads after a UI baseline must begin at a concrete visible resource id, never a whole-file dump. */
+    private static boolean isTargetSourceRead(String command) {
+        if (command == null) return false;
+        String low = command.toLowerCase(Locale.US);
+        boolean sourcePath = low.contains("/sources") || low.contains("$wd/dec") || low.contains("jadxout");
+        if (!sourcePath) return false;
+        return low.matches("(?s).*\\b(cat|sed|awk|grep|rg)\\b.*");
+    }
+
+    private boolean usesTargetUiAnchor(String command) {
+        if (targetUiAnchors.isEmpty() || command == null) return false;
+        String low = command.toLowerCase(Locale.US);
+        for (String anchor : targetUiAnchors) if (low.contains(anchor)) return true;
+        return false;
+    }
+
+    private String sourceAnchorSummary() {
+        StringBuilder ids = new StringBuilder();
+        for (String id : targetUiAnchors) {
+            if (ids.length() > 0) ids.append(", ");
+            ids.append(id);
+            if (ids.length() > 96) break;
+        }
+        return ids.length() == 0 ? "the current target UI ids" : "UI ids: " + ids;
+    }
+
+    private static boolean hasUsableSourceResult(String result) {
+        String low = result == null ? "" : result.trim().toLowerCase(Locale.US);
+        return !low.isEmpty() && !low.contains("no such file") && !low.matches("(?s).*\\[exit\\s+1\\].*");
     }
 
     /** Returns the named package that needs a current UI baseline, or empty when static inspection is appropriate. */
@@ -4713,6 +4775,8 @@ public class MainActivity extends Activity {
         guardHits.clear();
         repeatGuardTotal = 0;
         observedTargetUi.clear();
+        targetUiAnchors.clear();
+        targetSourceAnchorLocated = false;
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
