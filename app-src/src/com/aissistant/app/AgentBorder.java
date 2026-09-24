@@ -30,17 +30,19 @@ import android.view.WindowInsets;
 public final class AgentBorder {
 
     private static final Handler H = new Handler(Looper.getMainLooper());
-    private static final long RETURN_TO_MAIN_DELAY_MS = 2000L;
+    private static final long FOLLOWUP_TARGET_IDLE_RETURN_MS = 3000L;
 
     private static View view;
     private static WindowManager wm;
     private static Pulse pulse;
-    /** Delayed handoff gives sequential agent actions a chance to continue in target app. */
+    /** Idle handoff returns chat only after a completed target-app action is quiet. */
     private static Runnable pendingReturnToMain;
     /** Number of target-app actions in flight. Main-thread only. */
     private static int activeOperations;
     /** True from first target action until the owning agent run finishes. Main-thread only. */
     private static boolean targetAppSession;
+    /** At least one click, input, or scroll has happened in this target-app session. */
+    private static boolean targetOperationCompleted;
 
     private AgentBorder() { }
 
@@ -49,12 +51,14 @@ public final class AgentBorder {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             if (!controlsTargetApp(c)) return false;
+            final boolean launch = launchesTargetApp(c);
             android.util.Log.i("AIssistant", "border operation start: "
                     + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
             H.post(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
+                if (!launch) targetOperationCompleted = true;
                 activeOperations++;
                 show(ac);
             } });
@@ -80,6 +84,10 @@ public final class AgentBorder {
         H.post(new Runnable() { @Override public void run() {
             cancelQueuedReturnToMain();
             drop();
+            if (activeOperations == 0) {
+                targetAppSession = false;
+                targetOperationCompleted = false;
+            }
         } });
     }
 
@@ -91,6 +99,7 @@ public final class AgentBorder {
             H.post(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
+                targetOperationCompleted = true;
                 activeOperations++;
                 show(ac);
             } });
@@ -106,15 +115,17 @@ public final class AgentBorder {
         return true;
     }
 
-    /** End one target-app action, remove the edge, then hand back to the chat after a quiet gap. */
+    /** End one target-app action and remove only its visual indicator.
+     *
+     * Opening a target alone never schedules a handoff. A completed target action gets three
+     * seconds for a follow-up action before the session page returns.
+     */
     public static void endOperation() {
         H.post(new Runnable() { @Override public void run() {
             if (activeOperations > 0) activeOperations--;
             if (activeOperations == 0) {
                 drop();
-                // A model can continue with another app action immediately. That action calls
-                // beginOperation/beginAccessibilityOperation and cancels this handoff.
-                scheduleReturnToMain();
+                if (targetOperationCompleted) scheduleReturnToMain();
             }
         } });
     }
@@ -162,6 +173,13 @@ public final class AgentBorder {
                 || c.matches("(?s).*\\bcmd\\s+(activity|input)\\b.*");
     }
 
+    /** Starting a target immediately is necessary; the first input/gesture waits after launch. */
+    private static boolean launchesTargetApp(String c) {
+        return c.matches("(?s).*\\bmonkey\\b.*")
+                || c.matches("(?s).*\\bam\\s+start\\b.*")
+                || c.matches("(?s).*\\bcmd\\s+activity\\b.*");
+    }
+
     private static boolean observesTargetScreen(String c) {
         return c.matches("(?s).*\\b(screencap|uiautomator)\\b.*")
                 || c.matches("(?s).*\\bdumpsys\\s+(window|activity|input|accessibility|surfaceflinger)\\b.*");
@@ -200,32 +218,52 @@ public final class AgentBorder {
         } catch (Throwable ignored) { }
     }
 
-    /** Terminal cleanup for stop, error, or completed run. */
+    /** Stop current target visuals without changing the foreground app. */
     public static void hide() {
         H.post(new Runnable() { @Override public void run() {
             activeOperations = 0;
             drop();
-            // Keep the terminal fallback for a target session that ended without a final
-            // endOperation callback. Usual handoff is scheduled as soon as its border drops.
-            boolean returnToMain = targetAppSession;
-            targetAppSession = false;
-            if (returnToMain) scheduleReturnToMain();
         } });
     }
 
-    /** One quiet interval means user no longer needs target app in front; restore full chat. */
+    /**
+     * The worker has conclusively finished.  This is the only point at which returning the
+     * session page is safe: no later model turn can still need the target app in front.
+     */
+    public static void finishRun() {
+        H.post(new Runnable() { @Override public void run() {
+            activeOperations = 0;
+            drop();
+            boolean returnToMain = targetAppSession;
+            if (returnToMain && targetOperationCompleted) scheduleReturnToMain();
+            else if (!targetOperationCompleted) targetAppSession = false;
+        } });
+    }
+
+    /** Return to the session only after a completed target action is quiet for three seconds. */
     private static void scheduleReturnToMain() {
         cancelQueuedReturnToMain();
-        if (MainActivity.appVisible) return;
+        if (MainActivity.appVisible) {
+            targetAppSession = false;
+            targetOperationCompleted = false;
+            return;
+        }
         pendingReturnToMain = new Runnable() {
             @Override public void run() {
                 pendingReturnToMain = null;
-                if (activeOperations != 0 || MainActivity.appVisible) return;
+                if (activeOperations != 0) return;
+                if (MainActivity.appVisible) {
+                    targetAppSession = false;
+                    targetOperationCompleted = false;
+                    return;
+                }
+                targetAppSession = false;
+                targetOperationCompleted = false;
                 MainActivity host = MainActivity.instance;
                 if (host != null) host.returnToMainAfterTargetOperation();
             }
         };
-        H.postDelayed(pendingReturnToMain, RETURN_TO_MAIN_DELAY_MS);
+        H.postDelayed(pendingReturnToMain, FOLLOWUP_TARGET_IDLE_RETURN_MS);
     }
 
     /** Any next target action wins over queued idle handoff. */

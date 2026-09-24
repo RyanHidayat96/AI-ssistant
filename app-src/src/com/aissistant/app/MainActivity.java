@@ -1516,6 +1516,32 @@ public class MainActivity extends Activity {
                 autoLoadOlderIfNeeded();
             }
         });
+        // A collapsed command group can make the rendered tail shorter than the viewport. In
+        // that state ScrollView has no position change to report, so a normal upward drag would
+        // never reach the pagination listener. Treat an upward gesture at the older edge as the
+        // same request for one older page, while leaving ordinary scrolling untouched.
+        chatScroll.setOnTouchListener(new View.OnTouchListener() {
+            private float downY;
+            private boolean requestedOlder;
+            @Override public boolean onTouch(View v, MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downY = e.getY();
+                        requestedOlder = false;
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (!requestedOlder && e.getY() < downY - dp(12)) {
+                            requestedOlder = requestOlderFromGesture();
+                        }
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        requestedOlder = false;
+                        break;
+                }
+                return false;
+            }
+        });
         chatScroll.setVerticalScrollBarEnabled(false);     // our own thumb is draggable, the stock bar is not
         chatScrollWrap = new FrameLayout(this);
         chatScrollWrap.addView(chatScroll, new FrameLayout.LayoutParams(-1, -1));
@@ -1863,6 +1889,16 @@ public class MainActivity extends Activity {
         if (screen != 0 || chatScreen == null || !chatScreen.isShown()) return;
         if (chatScroll.getScrollY() > dp(OLDER_PRELOAD_DISTANCE)) return;
         loadOlder();
+    }
+
+    /** Fallback for an upward drag when a compact/collapsed tail cannot physically scroll. */
+    private boolean requestOlderFromGesture() {
+        if (loadingOlder || renderFrom <= 0 || chatScroll == null || chatLog == null) return false;
+        if (screen != 0 || chatScreen == null || !chatScreen.isShown()) return false;
+        if (chatScroll.getScrollY() > dp(OLDER_PRELOAD_DISTANCE)) return false;
+        chatAtBottom = false;
+        loadOlder();
+        return true;
     }
 
     private void tagTranscriptRow(int index, int bubbleIndex) {
@@ -3282,7 +3318,7 @@ public class MainActivity extends Activity {
             // The panel is visual-only during target-app control. Release it only after the
             // whole run ends, never in the gap between two injected UI commands.
             try { OverlayView.finishAgentRun(this); } catch (Throwable ignored) { }
-            try { AgentBorder.hide(); } catch (Throwable ignored) { }
+            try { AgentBorder.finishRun(); } catch (Throwable ignored) { }
         }
         ui.post(new Runnable() {
             @Override public void run() { refreshSendBtn(); }
@@ -3523,8 +3559,14 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Agent has been idle outside this app for two seconds; restore full chat without ending run. */
+    /** Target app was quiet for its configured handoff interval; restore the session page. */
     void returnToMainAfterTargetOperation() {
+        // Never pull the chat back to the front while the agent is still driving another app:
+        // that yanks the target window away mid-run (the agent then "cannot" act because the target is gone).
+        // This callback fires three seconds after a completed target action. Never interrupt an
+        // action still in flight.
+        if (OverlayHub.overlaySuppressedForDriving()) return;
+        try { AgentBorder.hide(); } catch (Throwable ignored) { }
         if (appVisible || isFinishing()
                 || (android.os.Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
         try { OverlayView.hide(); } catch (Throwable ignored) { }

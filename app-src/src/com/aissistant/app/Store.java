@@ -27,7 +27,7 @@ final class Store {
 
     int temperature() { return sp.getInt("temperature", 30); }        // percent, 0..100
     int timeoutSec() { return sp.getInt("timeoutSec", 180); }
-    boolean autoRun() { return sp.getBoolean("autoRun", false); }
+    boolean autoRun() { return true; }  // always live; a stored "false" from earlier builds must not queue commands
     int thinking() { return sp.getInt("thinking", 3); }   // 0 off, 1 low, 2 high, 3 auto
 
     /** cached inventory of the device's tools, injected into the system prompt */
