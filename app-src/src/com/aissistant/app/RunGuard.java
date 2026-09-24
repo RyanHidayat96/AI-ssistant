@@ -3,6 +3,8 @@ package com.aissistant.app;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Bounds repeated work and asks for capability triage before an agent mistakes a recurring failure for progress. */
 final class RunGuard {
@@ -13,7 +15,9 @@ final class RunGuard {
     };
     /** Counts one error class across different checks; it nudges triage but never proves a task impossible. */
     private final Map<String, Integer> failureFamilies = new LinkedHashMap<String, Integer>();
-    private int repeated, calls, consecutiveEvidenceReads;
+    private static final Pattern ONE_LINE_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+)p['\\\"]?");
+    private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices;
+    private String microSliceFamily = "";
     private boolean exhausted;
 
     void reset() {
@@ -22,6 +26,8 @@ final class RunGuard {
         repeated = 0;
         calls = 0;
         consecutiveEvidenceReads = 0;
+        consecutiveMicroSlices = 0;
+        microSliceFamily = "";
         exhausted = false;
     }
 
@@ -35,7 +41,23 @@ final class RunGuard {
         repeated = result.equals(previous) ? repeated + 1 : 0;
         boolean evidenceRead = key.trim().startsWith("read_evidence");
         consecutiveEvidenceReads = evidenceRead ? consecutiveEvidenceReads + 1 : 0;
+        String microFamily = oneLineSliceFamily(key);
+        if (!microFamily.isEmpty() && microFamily.equals(microSliceFamily)) {
+            consecutiveMicroSlices++;
+        } else {
+            microSliceFamily = microFamily;
+            consecutiveMicroSlices = microFamily.isEmpty() ? 0 : 1;
+        }
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
+        if (consecutiveMicroSlices >= 6) {
+            exhausted = true;
+            return triage + "\n[RUNTIME: six sequential one-line slices from the same text pipeline produced fragments, not a decision. "
+                    + "Stop line-by-line paging. State the current hypothesis and facts, then on resume use one bounded coherent excerpt or a structural query tied to that hypothesis. No further tools this run.]";
+        }
+        if (consecutiveMicroSlices == 4) {
+            return triage + "\n[RUNTIME: four sequential one-line slices from the same text pipeline. Do not keep paging individual lines. "
+                    + "Use a bounded coherent excerpt or a structural query that can resolve the current hypothesis, then synthesize the finding.]";
+        }
         if (consecutiveEvidenceReads >= 4) {
             exhausted = true;
             return triage + "\n[RUNTIME: four consecutive historical-evidence retrievals add context but no fresh observation. "
@@ -62,6 +84,15 @@ final class RunGuard {
                     + "command success alone does not verify the outcome.]";
         }
         return triage;
+    }
+
+    /** Detect line-by-line paging while allowing a bounded source/text excerpt to continue normally. */
+    private static String oneLineSliceFamily(String action) {
+        if (action == null) return "";
+        String low = action.toLowerCase(Locale.US);
+        Matcher m = ONE_LINE_SED.matcher(low);
+        if (!m.find()) return "";
+        return low.substring(0, m.start(1)) + "#" + low.substring(m.end(1));
     }
 
     private String capabilityTriage(String family) {

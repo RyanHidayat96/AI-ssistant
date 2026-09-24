@@ -4451,9 +4451,14 @@ public class MainActivity extends Activity {
             int nl = s.indexOf('\n', i);
             String line = nl < 0 ? s.substring(i) : s.substring(i, nl);
             if (line.length() > 300) {
-                for (int k = 0; k < line.length(); k += 200) {
-                    sb.append(line, k, Math.min(line.length(), k + 200)).append('\n');
-                }
+                // One giant symbol/string is usually transport noise. Keep both semantic ends rather
+                // than turning it into dozens of fake "lines" that invite the model to page one at a time.
+                int head = 180;
+                int tail = 140;
+                sb.append(line, 0, head)
+                        .append(" … [long line ").append(line.length()).append(" chars omitted] … ")
+                        .append(line, line.length() - tail, line.length());
+                if (nl >= 0) sb.append('\n');
             } else if (!line.isEmpty() || nl >= 0) {
                 sb.append(line);
                 if (nl >= 0) sb.append('\n');

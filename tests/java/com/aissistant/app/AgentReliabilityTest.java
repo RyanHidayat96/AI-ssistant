@@ -198,6 +198,15 @@ public final class AgentReliabilityTest {
         guard.observe("read_evidence {\"id\":\"e-1-1.txt\"}", "historical");
         check(guard.reportOnly(), "evidence retrieval chain switches to final report");
         guard.reset();
+        for (int i = 0; i < 4; i++) {
+            note = guard.observe("grep relevant file | sed -n '" + (110 + i) + "p'", "fragment");
+        }
+        check(note.contains("sequential one-line slices"), "micro-paged text receives a focused nudge");
+        for (int i = 4; i < 6; i++) {
+            note = guard.observe("grep relevant file | sed -n '" + (110 + i) + "p'", "fragment");
+        }
+        check(guard.reportOnly(), "micro-paged text stops before it becomes a long loop");
+        guard.reset();
         check(!guard.reportOnly(), "new run resets guard state");
     }
 
