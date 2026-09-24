@@ -373,4 +373,5 @@
   <string name="a11y_service_desc">Lets the AI-ssistant agent read and operate the UI of other apps (no screenshots).</string>
     <string name="runtime_loop_report">Runtime stopped the loop: too many model turns without a result. The agent must report from the evidence it already has.</string>
     <string name="runtime_silent_loop_report">Runtime stopped the silent loop: internal context kept growing with no new session output. The agent must report from the existing evidence.</string>
+    <string name="runtime_still_working">Working - step %1$d. No new output yet, still going.</string>
 </resources>

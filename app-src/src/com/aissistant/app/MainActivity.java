@@ -4093,7 +4093,7 @@ public class MainActivity extends Activity {
             final int thinkBase = store.thinking();
             boolean escalate = false;
             int silentTurns = 0;
-            final int maxAgentTurns = 120;
+            final int maxAgentTurns = 1000;                     // effectively unlimited; RunGuard bounds real loops
             // The full raw output is archived. Every new observation is executed fresh.
             for (int step = 1; !stop; step++) {
                 if (step > maxAgentTurns) {
@@ -4250,10 +4250,10 @@ public class MainActivity extends Activity {
                     if (stop) break;
                     int bubblesAfterTurn = bubbleCount();
                     silentTurns = bubblesAfterTurn == bubblesBeforeTurn ? silentTurns + 1 : 0;
-                    if (silentTurns >= 3) {
-                        loopBroken = true;
-                        reportOnly = true;
-                        addBubble("note", uiText(R.string.runtime_silent_loop_report));
+                    if (silentTurns >= 25) {                          // a quiet turn is not a failure: only cut a truly dead run
+                        // A quiet stretch is not a failure: show what is happening and keep working.
+                        addBubble("note", uiText(R.string.runtime_still_working, step));
+                        silentTurns = 0;
                     }
                     continue;
                 }
@@ -4274,10 +4274,10 @@ public class MainActivity extends Activity {
                 }
                 int bubblesAfterTurn = bubbleCount();
                 silentTurns = bubblesAfterTurn == bubblesBeforeTurn ? silentTurns + 1 : 0;
-                if (silentTurns >= 3) {
-                    loopBroken = true;
-                    reportOnly = true;
-                    addBubble("note", uiText(R.string.runtime_silent_loop_report));
+                if (silentTurns >= 25) {                          // a quiet turn is not a failure: only cut a truly dead run
+                    // A quiet stretch is not a failure: show what is happening and keep working.
+                    addBubble("note", uiText(R.string.runtime_still_working, step));
+                    silentTurns = 0;
                 }
             }
             if (!brokeEarly && !stop && loopBroken) {
