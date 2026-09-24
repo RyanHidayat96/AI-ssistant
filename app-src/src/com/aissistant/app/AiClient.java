@@ -436,7 +436,7 @@ final class AiClient {
             }
 
             if (sse) {
-                if ((!done && finishReason.isEmpty()) || "length".equals(finishReason)
+                if ((!done && finishReason.isEmpty()) || ("length".equals(finishReason) && content.length() == 0)
                         || "content_filter".equals(finishReason)) {
                     out.error = "incomplete model response (" + (finishReason.isEmpty()
                             ? "stream disconnected" : finishReason) + "); no commands were executed";
@@ -461,7 +461,7 @@ final class AiClient {
             JSONObject message = null;
             if (choices != null && choices.length() > 0 && choices.optJSONObject(0) != null) {
                 String finish = choices.optJSONObject(0).optString("finish_reason", "");
-                if ("length".equals(finish) || "content_filter".equals(finish)) {
+                if (("length".equals(finish) && out.text != null && out.text.length() == 0) || "content_filter".equals(finish)) {
                     out.error = "incomplete model response (" + finish + "); no commands were executed";
                     return out;
                 }

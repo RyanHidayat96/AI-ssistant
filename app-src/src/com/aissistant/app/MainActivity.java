@@ -3901,6 +3901,14 @@ public class MainActivity extends Activity {
         throw new IllegalArgumentException("Unknown tool");
     }
 
+    private boolean isToolRuntimeFix(String cmd) {
+        if (cmd == null) return false;
+        String c = cmd.toLowerCase(java.util.Locale.ENGLISH);
+        return c.contains("libz") || c.contains("/tools") || c.contains("ld_library_path")
+                || c.contains("ldd ") || c.contains("which ") || c.contains("linker")
+                || c.contains("cannot link") || c.contains("soname") || c.contains("/lib/");
+    }
+
     private void agentLoop() {
         boolean runErrored = false;
         try {
@@ -4233,7 +4241,7 @@ public class MainActivity extends Activity {
             return blocked;
         }
         if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
-                && isPostBaselineArtifactDetour(cmd)) {
+                && isPostBaselineArtifactDetour(cmd) && !isToolRuntimeFix(cmd)) {
             String blocked = "[UI GATE ROUTE REQUIRED: target UI already identifies the gate. "
                     + "Package metadata, archive inventory, hashes, AAPT, and tool-runtime discovery add no next decision here. "
                     + "If source is not decoded yet, run one direct decode/decompile from the known artifact; otherwise query a visible UI ID with line numbers. "
