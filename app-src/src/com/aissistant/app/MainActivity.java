@@ -191,6 +191,8 @@ public class MainActivity extends Activity {
     /** hard safety valve across every duplicate command in one run */
     private int repeatGuardTotal = 0;
     private static final int REPEAT_CACHE_AFTER = 3;
+    /** Same command already has cached evidence; three ignored redirects end tool use for this run. */
+    private static final int REPEAT_SAME_COMMAND_STOP_AFTER = 3;
     private static final int REPEAT_RUNAWAY_LIMIT = 12;
     private volatile boolean loopBroken = false;
     /** guard stopped the run: give the model one last turn to write the conclusion, with no tools */
@@ -4236,15 +4238,20 @@ public class MainActivity extends Activity {
                         + "Use cached output below, write a conclusion, and do not call this tool path again.\n"
                         + "CACHED OUTPUT:\n" + cached + "]";
             }
-            if (hits + 1 == 3) {
-                addBubble("note", uiText(R.string.runtime_repeat_change, firstLine(cmd)));
+            if (hits + 1 >= REPEAT_SAME_COMMAND_STOP_AFTER) {
+                loopBroken = true;
+                reportOnly = true;
+                addBubble("note", uiText(R.string.runtime_runaway, hits + 1, firstLine(cmd)));
+                return "[RUNAWAY LOOP STOPPED: this exact command was blocked " + (hits + 1)
+                        + " times after its cached result. No further tools are allowed this run. "
+                        + "State verified facts, remaining uncertainty, and one materially different next action for a later run.\n"
+                        + "CACHED OUTPUT:\n" + cached + "]";
             }
             return "[DUPLICATE COMMAND BLOCKED: this exact command already ran " + REPEAT_CACHE_AFTER
                     + " times. It was NOT executed again. Cached output follows.\nCACHED OUTPUT:\n"
                     + cached
-                    + "\nNEXT ACTION REQUIRED: do not run this command again. Pick a different method now: "
-                    + "narrow extraction with `grep -aoE`, page specific lines with `sed -n`, inspect identity with "
-                    + "`ls -l`/`file`/hash, use `readelf`/`unzip -l`, or conclude from current evidence.]";
+                    + "\nNEXT ACTION REQUIRED: do not run this command again. Change the representation, capability, "
+                    + "or observation that can resolve the current hypothesis.]";
         }
         runCounts.put(cmd, n + 1);
         final String wd = workDir();
