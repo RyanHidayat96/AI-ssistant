@@ -20,6 +20,7 @@ $sources = @(
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentPrompt.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentSkills.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentTools.java"),
+  (Join-Path $Root "app-src\src\com\aissistant\app\ToolPolicy.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\AgentWindowFilter.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\OverlayHub.java"),
   (Join-Path $Root "app-src\src\com\aissistant\app\ChatBranch.java"),

@@ -26,6 +26,7 @@ public final class AgentReliabilityTest {
     public static void main(String[] args) throws Exception {
         testAppLockHashing();
         testToolValidation();
+        testToolAcquisitionGuardClassifiers();
         testMemory();
         testMessageBranch();
         testOverlayWindowMask();
@@ -73,6 +74,17 @@ public final class AgentReliabilityTest {
                 "short timed scroll rejected");
         JSONObject evidence = call("read_evidence", "{\"id\":\"e-1-1.txt\",\"offset\":3}");
         check(AgentTools.arguments(evidence).getInt("offset") == 3, "integer evidence offset accepted");
+    }
+
+    private static void testToolAcquisitionGuardClassifiers() {
+        check(ToolPolicy.toolAcquisitionAttempt("curl -L https://example.invalid/jdk.tar.gz -o jdk.tar.gz"),
+                "tool downloads require cache inventory first");
+        check(ToolPolicy.toolAcquisitionAttempt("pkg install python"),
+                "package installs require cache inventory first");
+        check(!ToolPolicy.toolAcquisitionAttempt("curl -L https://example.invalid/data.json -o data.json"),
+                "ordinary data downloads are not mistaken for tool acquisition");
+        check(ToolPolicy.usesToolInventory("agent_tool_list; agent_tool_find python3"),
+                "tool inventory commands are recognized");
     }
 
     private static void testMemory() throws Exception {
@@ -277,7 +289,8 @@ public final class AgentReliabilityTest {
                 "prompt labels generic candidates and volatile probe");
         check(prompt.contains("CAPABILITY GAP RESOLUTION") && prompt.contains("minimum compatible item/spec/action"),
                 "prompt requires evidence-backed external requirements");
-        check(prompt.contains("agent_tool_list") && prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
+        check(prompt.contains("agent_tool_list") && prompt.contains("agent_tool_find") && prompt.contains("agent_tool_require")
+                        && prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
                         && prompt.contains("agent_tool_register_shared"),
                 "prompt requires explicit shared and session tool scopes");
         check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site")

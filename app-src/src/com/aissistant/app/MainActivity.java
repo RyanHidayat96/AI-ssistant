@@ -262,6 +262,8 @@ public class MainActivity extends Activity {
     private String editingSessionId = "";
     /** once the shared-dir warning was shown for this run */
     private boolean foreignTmpWarned;
+    /** tool acquisition must first inspect persistent cache and registry */
+    private boolean toolInventorySeen;
     private final List<JSONObject> messages = new ArrayList<>();
     private final List<String> pending = new ArrayList<>();
 
@@ -3514,6 +3516,7 @@ public class MainActivity extends Activity {
         runOutputs.clear();
         guardHits.clear();
         repeatGuardTotal = 0;
+        toolInventorySeen = false;
         observedTargetUi.clear();
         targetUiAnchors.clear();
         targetSourceAnchorLocated = false;
@@ -3645,6 +3648,7 @@ public class MainActivity extends Activity {
         runOutputs.clear();
         guardHits.clear();
         repeatGuardTotal = 0;
+        toolInventorySeen = false;
         observedTargetUi.clear();
         targetUiAnchors.clear();
         targetSourceAnchorLocated = false;
@@ -4303,10 +4307,12 @@ public class MainActivity extends Activity {
                   + " mkdir -p \"$WDIR/.tools\" \"$T/shared\"; chmod 700 \"$WDIR/.tools\" \"$T/shared\" 2>/dev/null;"
                   + " [ -f \"$T/agent-tools.md\" ] || printf '# AI-ssistant shared tool registry\\n' > \"$T/agent-tools.md\";"
                   + " [ -f \"$T/tool-index.tsv\" ] || printf '# name\\tversion\\tabi\\texecutable\\tcontext\\n' > \"$T/tool-index.tsv\";"
+                  + " P=/data/data/com.termux/files/usr/bin;"
                   + " { printf '# kind\\tname\\tpath\\tlaunch_context\\n';"
                   + " [ -x \"$T/jdk/bin/java\" ] && printf 'runtime\\tjava\\t%s\\tjava wrapper sets LD_LIBRARY_PATH=$T/tlib\\n' \"$T/jdk/bin/java\";"
                   + " for F in \"$T/bin/\"* \"$T/shared/\"*/*/*; do [ -f \"$F\" ] && [ -x \"$F\" ] && printf 'executable\\t%s\\t%s\\tPATH preloaded; verify once before use\\n' \"${F##*/}\" \"$F\"; done;"
                   + " for F in \"$T/\"*.jar \"$T/lib/\"*.jar \"$T/shared/\"*/*/*.jar; do [ -f \"$F\" ] && printf 'java-archive\\t%s\\t%s\\tinvoke through java wrapper; verify once before use\\n' \"${F##*/}\" \"$F\"; done;"
+                  + " [ -d \"$P\" ] && for F in \"$P/\"python3 \"$P/\"node \"$P/\"apktool \"$P/\"smali \"$P/\"baksmali \"$P/\"apksigner \"$P/\"zipalign \"$P/\"frida-server; do [ -f \"$F\" ] && [ -x \"$F\" ] && printf 'termux\\t%s\\t%s\\tTermux user-space; verify context before use\\n' \"${F##*/}\" \"$F\"; done;"
                   + " } > \"$T/tool-candidates.tsv\";"
                   + " printf 'CACHE=%s\\n' \"$T\"";
             String out = RootShell.run(script, 25);
@@ -4346,6 +4352,16 @@ public class MainActivity extends Activity {
     /** `echoCommand` is false when the user-visible bubble already contains the exact command. */
     private String executeCommand(String cmd, boolean echoCommand) {
         cmd = normalizeKnownToolInvocation(cmd);
+        if (ToolPolicy.usesToolInventory(cmd)) toolInventorySeen = true;
+        if (!toolInventorySeen && ToolPolicy.toolAcquisitionAttempt(cmd)) {
+            String blocked = "[TOOL CACHE CHECK REQUIRED: this command appears to acquire/install tooling. "
+                    + "It was NOT executed. Run agent_tool_list or agent_tool_find <name> first, reuse any "
+                    + "available $TOOLS/Termux candidate, then acquire only a missing compatible tool into "
+                    + "$TOOLS/shared/<name>/<version>/<abi> and register it.]";
+            if (echoCommand) addBubble("tool", "$ " + cmd);
+            addBubble("tool", blocked);
+            return blocked;
+        }
         if (touchesForeignTmp(cmd)) {
             String blocked = "[WORKSPACE ISOLATION: this command points outside this session workspace ("
                     + workDir() + "). It was NOT executed. Use current-session artifacts or obtain a fresh, "
@@ -4535,8 +4551,22 @@ public class MainActivity extends Activity {
         String tools = toolsDir();
         return "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + tools
                 + "; export TOOL_SESSION=\"$WD/.tools\"; mkdir -p \"$TOOL_SESSION\" \"$TOOLS/shared\"; "
-                + "export PATH=\"$TOOLS/bin:$TOOLS/jdk/bin:$PATH\"; for D in \"$TOOLS/shared/\"*/*; do [ -d \"$D\" ] && PATH=\"$D:$PATH\"; done; export PATH; "
+                + "TERMUX_BIN=/data/data/com.termux/files/usr/bin; BASE_PATH=\"$PATH\"; PATH=\"$TOOLS/bin:$TOOLS/jdk/bin\"; "
+                + "for D in \"$TOOLS/shared/\"*/*/* \"$TOOLS/shared/\"*/*; do [ -d \"$D\" ] && PATH=\"$PATH:$D\"; done; "
+                + "[ -d \"$TERMUX_BIN\" ] && PATH=\"$PATH:$TERMUX_BIN\"; PATH=\"$PATH:$BASE_PATH\"; export PATH TERMUX_BIN; "
+                + "agent_tool_find() { N=\"$1\"; [ \"$N\" = python ] && N=python3; "
+                + "[ \"$N\" = java ] && [ -x \"$TOOLS/jdk/bin/java\" ] && { printf '%s\\n' \"$TOOLS/jdk/bin/java\"; return 0; }; "
+                + "for F in \"$TOOLS/bin/$N\" \"$TOOLS/shared/\"*/*/*/\"$N\" \"$TERMUX_BIN/$N\" /system/bin/\"$N\" /system/xbin/\"$N\" /vendor/bin/\"$N\"; do [ -x \"$F\" ] && { printf '%s\\n' \"$F\"; return 0; }; done; return 1; }; "
+                + "agent_tool_require() { P=$(agent_tool_find \"$1\") || { echo \"$1: not found. Run agent_tool_list before acquisition.\" >&2; return 127; }; printf '%s\\n' \"$P\"; }; "
                 + "java() { J=\"$TOOLS/jdk/bin/java\"; [ -x \"$J\" ] || { command java \"$@\"; return; }; mkdir -p \"$WD/tmp\"; case \"$1:$2\" in -jar:*jadx*-all.jar) shift 2; LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" \"$J\" -Djava.io.tmpdir=\"$WD/tmp\" -cp \"$TOOLS/lib/jadx-1.5.6-all.jar\" jadx.cli.JadxCLI \"$@\";; *) LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" \"$J\" -Djava.io.tmpdir=\"$WD/tmp\" \"$@\";; esac; }; "
+                + "python3() { P=$(agent_tool_find python3) || { echo 'python3: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
+                + "python() { python3 \"$@\"; }; "
+                + "node() { P=$(agent_tool_find node) || { echo 'node: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
+                + "apktool() { P=$(agent_tool_find apktool) || { echo 'apktool: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
+                + "smali() { P=$(agent_tool_find smali) || { echo 'smali: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
+                + "baksmali() { P=$(agent_tool_find baksmali) || { echo 'baksmali: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
+                + "apksigner() { P=$(agent_tool_find apksigner) || { echo 'apksigner: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
+                + "zipalign() { P=$(agent_tool_find zipalign) || { echo 'zipalign: not found. Run agent_tool_list before acquisition.' >&2; return 127; }; \"$P\" \"$@\"; }; "
                 + "agent_tool_list() { echo 'REGISTERED TOOLS:'; cat \"$TOOLS/tool-index.tsv\" 2>/dev/null; echo 'LOCAL CANDIDATES (verify selected candidate once):'; cat \"$TOOLS/tool-candidates.tsv\" 2>/dev/null; }; "
                 + "agent_tool_part() { case \"$1\" in ''|*[!A-Za-z0-9._+-]*) echo 'tool scope: invalid name/version/ABI' >&2; return 2;; esac; }; "
                 + "agent_tool_shared() { [ \"$#\" -eq 3 ] || { echo 'usage: agent_tool_shared name version abi' >&2; return 2; }; "
@@ -5009,6 +5039,7 @@ public class MainActivity extends Activity {
         runOutputs.clear();
         guardHits.clear();
         repeatGuardTotal = 0;
+        toolInventorySeen = false;
         observedTargetUi.clear();
         targetUiAnchors.clear();
         targetSourceAnchorLocated = false;
