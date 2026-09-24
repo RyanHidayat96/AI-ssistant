@@ -3956,6 +3956,9 @@ public class MainActivity extends Activity {
                 }
                 streamReset();
                 if (stop) break;
+                if (reply.retries > 0) {
+                    addBubble("note", uiText(R.string.runtime_provider_retry, reply.retries));
+                }
                 if (reply.promptTokens + reply.completionTokens > 0) {
                     lastUsage = tok(reply.promptTokens) + "\u2192" + tok(reply.completionTokens) + " tok";
                 }
@@ -4124,6 +4127,11 @@ public class MainActivity extends Activity {
                   + " mkdir -p \"$WDIR/.tools\" \"$T/shared\"; chmod 700 \"$WDIR/.tools\" \"$T/shared\" 2>/dev/null;"
                   + " [ -f \"$T/agent-tools.md\" ] || printf '# AI-ssistant shared tool registry\\n' > \"$T/agent-tools.md\";"
                   + " [ -f \"$T/tool-index.tsv\" ] || printf '# name\\tversion\\tabi\\texecutable\\tcontext\\n' > \"$T/tool-index.tsv\";"
+                  + " { printf '# kind\\tname\\tpath\\tlaunch_context\\n';"
+                  + " [ -x \"$T/jdk/bin/java\" ] && printf 'runtime\\tjava\\t%s\\tjava wrapper sets LD_LIBRARY_PATH=$T/tlib\\n' \"$T/jdk/bin/java\";"
+                  + " for F in \"$T/bin/\"* \"$T/shared/\"*/*/*; do [ -f \"$F\" ] && [ -x \"$F\" ] && printf 'executable\\t%s\\t%s\\tPATH preloaded; verify once before use\\n' \"${F##*/}\" \"$F\"; done;"
+                  + " for F in \"$T/\"*.jar \"$T/lib/\"*.jar \"$T/shared/\"*/*/*.jar; do [ -f \"$F\" ] && printf 'java-archive\\t%s\\t%s\\tinvoke through java wrapper; verify once before use\\n' \"${F##*/}\" \"$F\"; done;"
+                  + " } > \"$T/tool-candidates.tsv\";"
                   + " printf 'CACHE=%s\\n' \"$T\"";
             String out = RootShell.run(script, 25);
             // the persistent shell appends its own sentinel, so pull the path out with a pattern
@@ -4283,6 +4291,9 @@ public class MainActivity extends Activity {
         String tools = toolsDir();
         return "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + tools
                 + "; export TOOL_SESSION=\"$WD/.tools\"; mkdir -p \"$TOOL_SESSION\" \"$TOOLS/shared\"; "
+                + "export PATH=\"$TOOLS/bin:$TOOLS/jdk/bin:$PATH\"; for D in \"$TOOLS/shared/\"*/*; do [ -d \"$D\" ] && PATH=\"$D:$PATH\"; done; export PATH; "
+                + "java() { if [ -x \"$TOOLS/jdk/bin/java\" ]; then LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" \"$TOOLS/jdk/bin/java\" \"$@\"; else command java \"$@\"; fi; }; "
+                + "agent_tool_list() { echo 'REGISTERED TOOLS:'; cat \"$TOOLS/tool-index.tsv\" 2>/dev/null; echo 'LOCAL CANDIDATES (verify selected candidate once):'; cat \"$TOOLS/tool-candidates.tsv\" 2>/dev/null; }; "
                 + "agent_tool_part() { case \"$1\" in ''|*[!A-Za-z0-9._+-]*) echo 'tool scope: invalid name/version/ABI' >&2; return 2;; esac; }; "
                 + "agent_tool_shared() { [ \"$#\" -eq 3 ] || { echo 'usage: agent_tool_shared name version abi' >&2; return 2; }; "
                 + "agent_tool_part \"$1\" && agent_tool_part \"$2\" && agent_tool_part \"$3\" || return $?; "
@@ -4735,7 +4746,8 @@ public class MainActivity extends Activity {
                         + "apktool jadx baksmali smali frida-server keytool apksigner zipalign; do c=$(command -v $b 2>/dev/null); "
                         + "[ -z \"$c\" ] && [ -x $P/$b ] && c=$P/$b; [ -n \"$c\" ] && echo \"$b=$c\"; done | tr '\\n' ' '; echo; "
                         + "echo \"android=$(getprop ro.build.version.release) root=$(test -d /data/adb/ksu && echo KernelSU || echo other)\"; "
-                        + "ls -la " + toolsDir() + " " + toolsDir() + "/shared 2>/dev/null | head -80; "
+                        + "echo 'TOOL CANDIDATES (verify selected candidate once):'; if [ -f " + toolsDir()
+                        + "/tool-candidates.tsv ]; then head -c 6000 " + toolsDir() + "/tool-candidates.tsv; fi; "
                         + "if [ -f " + toolsDir() + "/tool-index.tsv ]; then head -c 4000 "
                         + toolsDir() + "/tool-index.tsv; fi; "
                         + "if [ -f " + toolsDir() + "/agent-tools.md ]; then head -c 4000 "

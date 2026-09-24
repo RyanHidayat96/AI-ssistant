@@ -36,6 +36,10 @@ final class AiClient {
         int promptTokens;
         int cacheHitTokens;
         int completionTokens;
+        /** Number of safe transport retries completed before this result. */
+        int retries;
+        /** A streamed response already reached the UI; replaying it could duplicate work. */
+        boolean responseStarted;
     }
 
     private AiClient() { }
@@ -191,6 +195,55 @@ final class AiClient {
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int thinking, int timeoutSec,
                           int maxTokens, StreamCb cb, boolean minimal) {
+        final int maxRetries = 2;
+        Reply last = null;
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            if (cancelled) {
+                Reply stopped = new Reply();
+                stopped.error = "stopped";
+                stopped.retries = attempt;
+                return stopped;
+            }
+            last = completeOnce(baseUrl, apiKey, model, messages, tools, temperature, thinking,
+                    timeoutSec, maxTokens, cb, minimal);
+            last.retries = attempt;
+            if (!shouldRetryTransient(last) || attempt == maxRetries) return last;
+            android.util.Log.i("AIssistant", "temporary provider transport failure; retry "
+                    + (attempt + 1) + "/" + maxRetries + ": " + last.error);
+            if (!waitForRetry(350L * (attempt + 1))) return last;
+        }
+        return last == null ? new Reply() : last;
+    }
+
+    /** Retry only before response text or tool calls reach the UI; replaying a started stream is unsafe. */
+    static boolean shouldRetryTransient(Reply reply) {
+        if (reply == null || reply.ok || reply.responseStarted || cancelled) return false;
+        String error = reply.error == null ? "" : reply.error.toLowerCase(java.util.Locale.ENGLISH);
+        if (error.startsWith("http 408") || error.startsWith("http 429")
+                || error.startsWith("http 500") || error.startsWith("http 502")
+                || error.startsWith("http 503") || error.startsWith("http 504")) return true;
+        return error.contains("unexpected end of stream")
+                || error.contains("connection reset")
+                || error.contains("broken pipe")
+                || error.contains("connection refused")
+                || error.contains("connection timed out")
+                || error.contains("network is unreachable")
+                || error.contains("unable to resolve host")
+                || error.contains("eofexception");
+    }
+
+    private static boolean waitForRetry(long millis) {
+        long until = System.currentTimeMillis() + Math.max(0L, millis);
+        while (!cancelled && System.currentTimeMillis() < until) {
+            try { Thread.sleep(Math.min(80L, Math.max(1L, until - System.currentTimeMillis()))); }
+            catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return false; }
+        }
+        return !cancelled;
+    }
+
+    private static Reply completeOnce(String baseUrl, String apiKey, String model, JSONArray messages,
+                                      JSONArray tools, double temperature, int thinking, int timeoutSec,
+                                      int maxTokens, StreamCb cb, boolean minimal) {
         Reply out = new Reply();
         HttpURLConnection conn = null;
         try {
@@ -340,12 +393,14 @@ final class AiClient {
                 String think = pr instanceof String ? (String) pr : "";
                 if (!piece.isEmpty()) content.append(piece);
                 if (!think.isEmpty()) reasoning.append(think);
+                if (!piece.isEmpty() || !think.isEmpty()) out.responseStarted = true;
                 if ((!piece.isEmpty() || !think.isEmpty()) && cb != null) {
                     cb.onDelta(content.toString(), reasoning.toString());
                 }
 
                 JSONArray tcs = delta.optJSONArray("tool_calls");
                 if (tcs != null) {
+                    if (tcs.length() > 0) out.responseStarted = true;
                     for (int i = 0; i < tcs.length(); i++) {
                         JSONObject d = tcs.optJSONObject(i);
                         if (d == null) continue;

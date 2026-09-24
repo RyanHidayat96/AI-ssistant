@@ -241,6 +241,7 @@
     <string name="runtime_no_model">Belum ada model dipilih. Buka ⋮ → Model &amp; provider, tambahkan provider dan model, lalu pilih model.</string>
     <string name="runtime_limit_reached">Batas eksekusi tercapai; agent menyiapkan hasil dan bukti yang tersedia.</string>
     <string name="runtime_image_retry">Model menolak gambar — dicoba ulang hanya dengan path file</string>
+    <string name="runtime_provider_retry">Koneksi provider sempat terganggu — dilanjutkan otomatis (%1$d kali coba ulang)</string>
     <string name="runtime_loop_stopped">Tugas dihentikan karena perintah berulang — kirim “lanjut” untuk jalur baru</string>
     <string name="runtime_input_continuing">Masukan Anda belum diproses · melanjutkan otomatis</string>
     <string name="runtime_queued">Masuk antrean (auto-run mati): %1$s</string>

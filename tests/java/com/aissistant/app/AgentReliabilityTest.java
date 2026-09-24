@@ -241,6 +241,14 @@ public final class AgentReliabilityTest {
     }
 
     private static void testStreamingResponses() throws Exception {
+        AiClient.Reply transientReply = new AiClient.Reply();
+        transientReply.error = "java.io.IOException: unexpected end of stream";
+        check(AiClient.shouldRetryTransient(transientReply), "unstarted transient transport failure is retried");
+        transientReply.responseStarted = true;
+        check(!AiClient.shouldRetryTransient(transientReply), "started stream is never replayed");
+        transientReply.responseStarted = false;
+        transientReply.error = "HTTP 401: invalid key";
+        check(!AiClient.shouldRetryTransient(transientReply), "credential errors are not retried");
         AtomicInteger request = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/chat/completions", exchange -> respond(exchange, request.incrementAndGet()));
