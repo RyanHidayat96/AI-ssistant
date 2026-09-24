@@ -198,14 +198,22 @@ public final class AgentReliabilityTest {
         guard.observe("read_evidence {\"id\":\"e-1-1.txt\"}", "historical");
         check(guard.reportOnly(), "evidence retrieval chain switches to final report");
         guard.reset();
-        for (int i = 0; i < 4; i++) {
-            note = guard.observe("grep relevant file | sed -n '" + (110 + i) + "p'", "fragment");
+        for (int i = 0; i < 3; i++) {
+            note = guard.observe("wc -l; grep relevant file | sed -n '" + (i * 60 + 1) + "," + (i * 60 + 60) + "p'", "fragment");
         }
-        check(note.contains("sequential one-line slices"), "micro-paged text receives a focused nudge");
-        for (int i = 4; i < 6; i++) {
-            note = guard.observe("grep relevant file | sed -n '" + (110 + i) + "p'", "fragment");
+        check(note.contains("sequential paged slices"), "micro-paged text receives a focused nudge");
+        for (int i = 3; i < 5; i++) {
+            note = guard.observe("grep relevant file | sed -n '" + (i * 60 + 1) + "," + (i * 60 + 60) + "p'", "fragment");
         }
         check(guard.reportOnly(), "micro-paged text stops before it becomes a long loop");
+        guard.reset();
+        for (int i = 0; i < 3; i++) {
+            note = guard.observe("grep -rl \"derived-value\" sources", "");
+        }
+        check(note.contains("literal searches produced no match"),
+                "empty literal searches nudge source-to-derived mapping");
+        for (int i = 3; i < 5; i++) guard.observe("grep -rl \"derived-value\" sources", "");
+        check(guard.reportOnly(), "empty literal searches stop before a representation loop");
         guard.reset();
         check(!guard.reportOnly(), "new run resets guard state");
     }
@@ -235,9 +243,11 @@ public final class AgentReliabilityTest {
                 "prompt labels generic candidates and volatile probe");
         check(prompt.contains("CAPABILITY GAP RESOLUTION") && prompt.contains("minimum compatible item/spec/action"),
                 "prompt requires evidence-backed external requirements");
-        check(prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
+        check(prompt.contains("agent_tool_list") && prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
                         && prompt.contains("agent_tool_register_shared"),
                 "prompt requires explicit shared and session tool scopes");
+        check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site"),
+                "prompt requires mapping derived artifact values to their source");
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
                 "prompt documents stable tool storage layouts");

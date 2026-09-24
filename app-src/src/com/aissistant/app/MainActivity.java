@@ -3882,6 +3882,9 @@ public class MainActivity extends Activity {
         boolean runErrored = false;
         try {
             taskMemory = new AgentMemory(getFilesDir(), cur == null ? "default" : cur.optString("id", "default"));
+            // The prompt must contain the cache selected by ensureWorkDir(), not an async snapshot
+            // from the old/default location. This runs on the worker, never the UI thread.
+            refreshToolProbeNow();
             JSONObject sys = new JSONObject();
             sys.put("role", "system");
             sys.put("content", systemPrompt());
@@ -4120,9 +4123,14 @@ public class MainActivity extends Activity {
                   + "   rm -f \"$D/.probe\" 2>/dev/null; cp /system/bin/echo \"$D/.probe\" 2>/dev/null || return 1;"
                   + "   chmod 700 \"$D/.probe\" 2>/dev/null || return 1;"
                   + "   R=$(\"$D/.probe\" ok 2>/dev/null); rm -f \"$D/.probe\" 2>/dev/null; [ \"$R\" = ok ]; };"
+                  + " has_tools() { D=\"$1\"; [ -x \"$D/jdk/bin/java\" ] && return 0;"
+                  + "   [ -s \"$D/tool-index.tsv\" ] && grep -qv '^#' \"$D/tool-index.tsv\" 2>/dev/null && return 0;"
+                  + "   for F in \"$D/bin/\"* \"$D/shared/\"*/*/*; do [ -f \"$F\" ] && return 0; done; return 1; };"
                   + " T='';"
                   + " for D in /data/adb/ai-ssistant/tools /data/data/com.aissistant.app/files/tools /data/local/ai-ssistant/tools; do"
-                  + "   probe \"$D\" && { T=\"$D\"; break; }; done;"
+                  + "   probe \"$D\" && has_tools \"$D\" && { T=\"$D\"; break; }; done;"
+                  + " if [ -z \"$T\" ]; then for D in /data/adb/ai-ssistant/tools /data/data/com.aissistant.app/files/tools /data/local/ai-ssistant/tools; do"
+                  + "   probe \"$D\" && { T=\"$D\"; break; }; done; fi;"
                   + " [ -n \"$T\" ] || T=/data/local/ai-ssistant/tools;"
                   + " mkdir -p \"$WDIR/.tools\" \"$T/shared\"; chmod 700 \"$WDIR/.tools\" \"$T/shared\" 2>/dev/null;"
                   + " [ -f \"$T/agent-tools.md\" ] || printf '# AI-ssistant shared tool registry\\n' > \"$T/agent-tools.md\";"
@@ -4744,23 +4752,27 @@ public class MainActivity extends Activity {
         long age = System.currentTimeMillis() - store.toolProbeAt();
         if (!force && age < 5L * 60 * 1000 && !store.toolProbe().isEmpty()) return;
         new Thread(new Runnable() {
-            @Override public void run() {
-                String cmd = "echo probe_epoch_ms=" + System.currentTimeMillis()
-                        + "; P=/data/data/com.termux/files/usr/bin; for b in java python3 node curl wget unzip zip tar dd "
-                        + "sqlite3 strings xxd base64 openssl nc busybox toybox iw wpa_cli tcpdump nmap ffmpeg tesseract "
-                        + "apktool jadx baksmali smali frida-server keytool apksigner zipalign; do c=$(command -v $b 2>/dev/null); "
-                        + "[ -z \"$c\" ] && [ -x $P/$b ] && c=$P/$b; [ -n \"$c\" ] && echo \"$b=$c\"; done | tr '\\n' ' '; echo; "
-                        + "echo \"android=$(getprop ro.build.version.release) root=$(test -d /data/adb/ksu && echo KernelSU || echo other)\"; "
-                        + "echo 'TOOL CANDIDATES (verify selected candidate once):'; if [ -f " + toolsDir()
-                        + "/tool-candidates.tsv ]; then head -c 6000 " + toolsDir() + "/tool-candidates.tsv; fi; "
-                        + "if [ -f " + toolsDir() + "/tool-index.tsv ]; then head -c 4000 "
-                        + toolsDir() + "/tool-index.tsv; fi; "
-                        + "if [ -f " + toolsDir() + "/agent-tools.md ]; then head -c 4000 "
-                        + toolsDir() + "/agent-tools.md; fi";
-                String out = RootShell.run(cmd, 30);
-                if (out != null && out.length() > 8) store.setToolProbe(out.trim());
-            }
+            @Override public void run() { refreshToolProbeNow(); }
         }).start();
+    }
+
+    /** Collect after ensureWorkDir() on the agent worker, so the system prompt sees the real cache. */
+    private void refreshToolProbeNow() {
+        String cache = toolsDir();
+        String cmd = "echo probe_epoch_ms=" + System.currentTimeMillis()
+                + "; P=/data/data/com.termux/files/usr/bin; for b in java python3 node curl wget unzip zip tar dd "
+                + "sqlite3 strings xxd base64 openssl nc busybox toybox iw wpa_cli tcpdump nmap ffmpeg tesseract "
+                + "apktool jadx baksmali smali frida-server keytool apksigner zipalign; do c=$(command -v $b 2>/dev/null); "
+                + "[ -z \"$c\" ] && [ -x $P/$b ] && c=$P/$b; [ -n \"$c\" ] && echo \"$b=$c\"; done | tr '\\n' ' '; echo; "
+                + "echo \"android=$(getprop ro.build.version.release) root=$(test -d /data/adb/ksu && echo KernelSU || echo other)\"; "
+                + "echo 'TOOL CANDIDATES (verify selected candidate once):'; "
+                + "[ -x " + cache + "/jdk/bin/java ] && echo 'runtime java=" + cache + "/jdk/bin/java (java wrapper sets LD_LIBRARY_PATH)'; "
+                + "for F in " + cache + "/bin/* " + cache + "/shared/*/*/*; do [ -f \"$F\" ] && [ -x \"$F\" ] && echo \"executable ${F##*/}=$F (PATH preloaded; verify once)\"; done; "
+                + "for F in " + cache + "/*.jar " + cache + "/lib/*.jar " + cache + "/shared/*/*/*.jar; do [ -f \"$F\" ] && echo \"java-archive ${F##*/}=$F (invoke through java wrapper)\"; done; "
+                + "if [ -f " + cache + "/tool-index.tsv ]; then head -c 4000 " + cache + "/tool-index.tsv; fi; "
+                + "if [ -f " + cache + "/agent-tools.md ]; then head -c 4000 " + cache + "/agent-tools.md; fi";
+        String out = RootShell.run(cmd, 30);
+        if (out != null && out.length() > 8) store.setToolProbe(out.trim());
     }
 
     private String systemPrompt() {

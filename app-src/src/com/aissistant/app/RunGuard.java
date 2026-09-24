@@ -15,8 +15,9 @@ final class RunGuard {
     };
     /** Counts one error class across different checks; it nudges triage but never proves a task impossible. */
     private final Map<String, Integer> failureFamilies = new LinkedHashMap<String, Integer>();
-    private static final Pattern ONE_LINE_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+)p['\\\"]?");
-    private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices;
+    private static final Pattern PAGED_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+(?:,\\d+)?)p['\\\"]?");
+    private static final Pattern LITERAL_SEARCH = Pattern.compile("\\b(?:grep|rg)\\b");
+    private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices, consecutiveEmptyLiteralSearches;
     private String microSliceFamily = "";
     private boolean exhausted;
 
@@ -27,6 +28,7 @@ final class RunGuard {
         calls = 0;
         consecutiveEvidenceReads = 0;
         consecutiveMicroSlices = 0;
+        consecutiveEmptyLiteralSearches = 0;
         microSliceFamily = "";
         exhausted = false;
     }
@@ -48,14 +50,27 @@ final class RunGuard {
             microSliceFamily = microFamily;
             consecutiveMicroSlices = microFamily.isEmpty() ? 0 : 1;
         }
+        consecutiveEmptyLiteralSearches = emptyLiteralSearch(key, result)
+                ? consecutiveEmptyLiteralSearches + 1 : 0;
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
-        if (consecutiveMicroSlices >= 6) {
+        if (consecutiveEmptyLiteralSearches >= 5) {
             exhausted = true;
-            return triage + "\n[RUNTIME: six sequential one-line slices from the same text pipeline produced fragments, not a decision. "
-                    + "Stop line-by-line paging. State the current hypothesis and facts, then on resume use one bounded coherent excerpt or a structural query tied to that hypothesis. No further tools this run.]";
+            return triage + "\n[RUNTIME: five literal searches produced no match. Stop searching the same representation. "
+                    + "State the current facts and use source-to-derived mapping or one structural/runtime observation on resume. "
+                    + "No further tools this run.]";
         }
-        if (consecutiveMicroSlices == 4) {
-            return triage + "\n[RUNTIME: four sequential one-line slices from the same text pipeline. Do not keep paging individual lines. "
+        if (consecutiveEmptyLiteralSearches == 3) {
+            return triage + "\n[RUNTIME: three literal searches produced no match. A decoded, indexed, or normalized value "
+                    + "may not occur verbatim in the source. Stop literal searching; map the derived value to its source "
+                    + "location or make one structural/runtime observation.]";
+        }
+        if (consecutiveMicroSlices >= 5) {
+            exhausted = true;
+            return triage + "\n[RUNTIME: five sequential paged slices from the same text pipeline produced fragments, not a decision. "
+                    + "Stop paging output. State the current hypothesis and facts, then on resume use one bounded coherent excerpt or a structural query tied to that hypothesis. No further tools this run.]";
+        }
+        if (consecutiveMicroSlices == 3) {
+            return triage + "\n[RUNTIME: three sequential paged slices from the same text pipeline. Do not keep paging output. "
                     + "Use a bounded coherent excerpt or a structural query that can resolve the current hypothesis, then synthesize the finding.]";
         }
         if (consecutiveEvidenceReads >= 4) {
@@ -86,13 +101,35 @@ final class RunGuard {
         return triage;
     }
 
-    /** Detect line-by-line paging while allowing a bounded source/text excerpt to continue normally. */
+    /** Detect sequential output paging while allowing a bounded source/text excerpt to continue normally. */
     private static String oneLineSliceFamily(String action) {
         if (action == null) return "";
         String low = action.toLowerCase(Locale.US);
-        Matcher m = ONE_LINE_SED.matcher(low);
+        Matcher m = PAGED_SED.matcher(low);
         if (!m.find()) return "";
-        return low.substring(0, m.start(1)) + "#" + low.substring(m.end(1));
+        // Drop a leading counting/banner clause so `wc -l; producer | sed …` stays in the
+        // same family as the producer alone. The selected range is deliberately normalized.
+        int boundary = low.lastIndexOf(';', m.start(1));
+        String prefix = low.substring(boundary + 1, m.start(1)).trim();
+        return prefix + "#" + low.substring(m.end(1));
+    }
+
+    /** A sequence of no-match grep/rg searches is usually a representation mistake, not new evidence. */
+    private static boolean emptyLiteralSearch(String action, String output) {
+        if (action == null || !LITERAL_SEARCH.matcher(action.toLowerCase(Locale.US)).find()) return false;
+        String result = output == null ? "" : output.trim();
+        if (result.isEmpty()) return true;
+        boolean diagnosticsOnly = false;
+        for (String line : result.split("\\r?\\n")) {
+            String value = line.trim();
+            if (value.isEmpty() || value.startsWith("===")
+                    || value.matches("(?i)\\[exit\\s+1\\]") || value.matches("(?i)exit\\s*=\\s*1")) {
+                diagnosticsOnly = true;
+                continue;
+            }
+            return false;
+        }
+        return diagnosticsOnly;
     }
 
     private String capabilityTriage(String family) {
