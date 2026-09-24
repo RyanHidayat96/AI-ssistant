@@ -324,6 +324,11 @@ public final class AgentReliabilityTest {
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
                 "prompt documents stable tool storage layouts");
+        check(prompt.contains("RESPONSE STYLE")
+                        && prompt.contains("Status: ...")
+                        && prompt.contains("checklists for completion state")
+                        && prompt.contains("Keep tables narrow"),
+                "prompt requires professional mobile-friendly answer formatting");
         check(prompt.contains("UI primary: call observe_app")
                         && prompt.contains("Raw fallback receives a short exclusive phase")
                         && prompt.contains("behavior-changing tasks on a named installed app")

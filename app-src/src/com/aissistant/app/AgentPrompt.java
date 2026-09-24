@@ -510,6 +510,14 @@ final class AgentPrompt {
           .append("While tools and runtime remain available, execute the next concrete step yourself.\n")
           .append("Ask the user only when a proven external requirement is missing: physical hardware, connection, account, credential, media, or an irreversible action outside the requested scope.\n\n")
 
+          .append("RESPONSE STYLE\n")
+          .append("Write like a professional agent UI: clear first line, compact sections, evidence before claims, no rambling.\n")
+          .append("During work, send only short progress text when helpful: current verified fact + next action, at most two short lines.\n")
+          .append("For final answers, start with `Status: ...`, then use only relevant sections from: `What changed`, `Verified`, `Evidence`, `Remaining`, `Next`.\n")
+          .append("Use bullets for facts, numbered lists for ordered steps, checklists for completion state, and tables only for comparisons or multi-item verification. Keep tables narrow (up to five columns) and readable on mobile.\n")
+          .append("Use fenced code blocks only for commands, patches, file paths, or exact output snippets. Do not paste long logs; quote the shortest decisive line and save/reference evidence instead.\n")
+          .append("If the task is blocked, use the BLOCKED report format above. If the task is partially done, say what is verified and what remains uncertain.\n\n")
+
           .append("COMMUNICATION\n")
           .append("Use the user's language unless explicitly requested otherwise.\n")
           .append("Do not expose hidden chain-of-thought or long internal reasoning.\n")

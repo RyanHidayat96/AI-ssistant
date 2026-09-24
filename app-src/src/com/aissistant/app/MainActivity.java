@@ -200,6 +200,7 @@ public class MainActivity extends Activity {
     /** a whole-filesystem scan gets exactly one warning per run */
     private volatile boolean deepScanWarned = false;
     private volatile boolean stuckRun = false;   // guard tripped: think at max for the rest of the run
+    private static final String ROLE_AGENT_PROGRESS = "agent_progress";
 
     /** tool runs the user expanded in the transcript: keys are "sessionId:firstBubbleIndex" */
     private final java.util.Set<String> expandedGroups = new java.util.HashSet<>();
@@ -2098,6 +2099,7 @@ public class MainActivity extends Activity {
         boolean user = "user".equals(role);
         boolean tool = "tool".equals(role);
         boolean note = "note".equals(role);
+        boolean progress = ROLE_AGENT_PROGRESS.equals(role);
         int topMargin = (prevRole == null || !prevRole.equals(role)) ? dp(14) : dp(6);
 
         LinearLayout row = new LinearLayout(this);
@@ -2115,6 +2117,16 @@ public class MainActivity extends Activity {
             n.setGravity(Gravity.CENTER);
             n.setPadding(dp(4), dp(2), dp(4), dp(2));
             row.addView(n, new LinearLayout.LayoutParams(-2, -2));
+        } else if (progress) {
+            TextView p = tv(13, MUTED, Typeface.NORMAL);
+            String shown = text.length() > 1200 ? "\u2026" + text.substring(text.length() - 1200) : text;
+            p.setText(markdownText(shown));
+            p.setTextIsSelectable(true);
+            p.setLineSpacing(dp(2), 1f);
+            p.setBackground(round(TOOL_BG, LINE, 16));
+            p.setPadding(dp(12), dp(8), dp(12), dp(8));
+            p.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.86f));
+            row.addView(p, new LinearLayout.LayoutParams(-2, -2));
         } else if (tool) {
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
@@ -2163,7 +2175,7 @@ public class MainActivity extends Activity {
         }
 
         String stamp = fmtStamp(t);
-        if (!note && !tool) {
+        if (!note && !tool && !progress) {
             addBubbleMeta(row, user, stamp, text, bubbleIndex);
         } else if (!stamp.isEmpty() && !note) {
             TextView s = tv(11, STAMP, Typeface.NORMAL);
@@ -2258,6 +2270,16 @@ public class MainActivity extends Activity {
             if (fenced) {
                 out.append(line);
             } else {
+                if (isMarkdownTableStart(lines, n)) {
+                    int end = n + 2;
+                    while (end < lines.length && isMarkdownTableRow(lines[end])) end++;
+                    int start = out.length();
+                    out.append(renderMarkdownTable(lines, n, end));
+                    styleCode(out, start, out.length());
+                    n = end - 1;
+                    if (n < lines.length - 1) out.append('\n');
+                    continue;
+                }
                 int start = out.length();
                 int heading = 0;
                 while (heading < line.length() && line.charAt(heading) == '#') heading++;
@@ -2267,9 +2289,33 @@ public class MainActivity extends Activity {
                         out.setSpan(new StyleSpan(Typeface.BOLD), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                         out.setSpan(new RelativeSizeSpan(1.16f), start, out.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                     }
+                } else if (trim.startsWith("- [ ] ") || trim.startsWith("* [ ] ")
+                        || trim.startsWith("- [x] ") || trim.startsWith("* [x] ")
+                        || trim.startsWith("- [X] ") || trim.startsWith("* [X] ")) {
+                    boolean checked = trim.charAt(3) == 'x' || trim.charAt(3) == 'X';
+                    int markStart = out.length();
+                    out.append(checked ? "\u2713 " : "\u2610 ");
+                    out.setSpan(new ForegroundColorSpan(checked ? COMMAND : MUTED), markStart, out.length(),
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    appendInlineMarkdown(out, trim.substring(6));
                 } else if (line.startsWith("- ") || line.startsWith("* ")) {
                     out.append("\u2022 ");
                     appendInlineMarkdown(out, line.substring(2));
+                } else if (trim.matches("\\d+[.)]\\s+.*")) {
+                    int dot = trim.indexOf('.');
+                    int paren = trim.indexOf(')');
+                    int sep = dot < 0 ? paren : (paren < 0 ? dot : Math.min(dot, paren));
+                    int prefixStart = out.length();
+                    out.append(trim, 0, sep + 1).append(' ');
+                    out.setSpan(new ForegroundColorSpan(ACCENT), prefixStart, out.length(),
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    appendInlineMarkdown(out, trim.substring(sep + 1).trim());
+                } else if (trim.startsWith("> ")) {
+                    int barStart = out.length();
+                    out.append("\u2502 ");
+                    out.setSpan(new ForegroundColorSpan(ACCENT), barStart, out.length(),
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    appendInlineMarkdown(out, trim.substring(2));
                 } else {
                     appendInlineMarkdown(out, line);
                 }
@@ -2306,6 +2352,88 @@ public class MainActivity extends Activity {
             out.append(line.charAt(i));
             i++;
         }
+    }
+
+    private static boolean isMarkdownTableStart(String[] lines, int index) {
+        return index + 1 < lines.length
+                && isMarkdownTableRow(lines[index])
+                && isMarkdownTableSeparator(lines[index + 1]);
+    }
+
+    private static boolean isMarkdownTableRow(String line) {
+        if (line == null) return false;
+        String t = line.trim();
+        if (!t.contains("|")) return false;
+        int pipes = 0;
+        for (int i = 0; i < t.length(); i++) if (t.charAt(i) == '|') pipes++;
+        return pipes >= 2;
+    }
+
+    private static boolean isMarkdownTableSeparator(String line) {
+        if (!isMarkdownTableRow(line)) return false;
+        String t = line.trim();
+        int hyphens = 0;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c == '-') hyphens++;
+            else if (c != '|' && c != ':' && c != ' ') return false;
+        }
+        return hyphens >= 3;
+    }
+
+    private static String renderMarkdownTable(String[] lines, int start, int end) {
+        java.util.List<String[]> rows = new java.util.ArrayList<String[]>();
+        int cols = 0;
+        for (int i = start; i < end; i++) {
+            if (i == start + 1 && isMarkdownTableSeparator(lines[i])) continue;
+            String[] cells = markdownTableCells(lines[i]);
+            cols = Math.max(cols, cells.length);
+            rows.add(cells);
+        }
+        if (rows.isEmpty() || cols == 0) return "";
+        int[] widths = new int[cols];
+        for (String[] row : rows) {
+            for (int i = 0; i < cols; i++) {
+                String cell = i < row.length ? row[i] : "";
+                widths[i] = Math.max(widths[i], Math.min(28, cell.length()));
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        for (int r = 0; r < rows.size(); r++) {
+            String[] row = rows.get(r);
+            if (r > 0) out.append('\n');
+            for (int c = 0; c < cols; c++) {
+                if (c > 0) out.append("  ");
+                String cell = c < row.length ? row[c] : "";
+                if (cell.length() > 28) cell = cell.substring(0, 27) + "\u2026";
+                out.append(padRight(cell, widths[c]));
+            }
+            if (r == 0 && rows.size() > 1) {
+                out.append('\n');
+                for (int c = 0; c < cols; c++) {
+                    if (c > 0) out.append("  ");
+                    for (int k = 0; k < widths[c]; k++) out.append('\u2500');
+                }
+            }
+        }
+        return out.toString();
+    }
+
+    private static String[] markdownTableCells(String line) {
+        String t = line == null ? "" : line.trim();
+        if (t.startsWith("|")) t = t.substring(1);
+        if (t.endsWith("|")) t = t.substring(0, t.length() - 1);
+        String[] raw = t.split("\\|", -1);
+        String[] cells = new String[raw.length];
+        for (int i = 0; i < raw.length; i++) cells[i] = raw[i].trim().replaceAll("\\s+", " ");
+        return cells;
+    }
+
+    private static String padRight(String text, int width) {
+        String t = text == null ? "" : text;
+        StringBuilder out = new StringBuilder(t);
+        while (out.length() < width) out.append(' ');
+        return out.toString();
     }
 
     private void styleCode(SpannableStringBuilder out, int start, int end) {
@@ -3377,6 +3505,43 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** Codex-like progress: one compact agent bubble is updated during tool work, not duplicated. */
+    private void updateAgentProgress(final String text) {
+        final String shown = text == null ? "" : text.trim();
+        if (shown.isEmpty()) return;
+        try {
+            OverlayHub.setStatus(firstLine(shown));
+            OverlayHub.setBusy(busy);
+        } catch (Throwable ignored) { }
+        boolean created = false;
+        synchronized (lock) {
+            try {
+                JSONArray b = bubblesOf(cur);
+                JSONObject last = b.length() == 0 ? null : b.optJSONObject(b.length() - 1);
+                if (last != null && ROLE_AGENT_PROGRESS.equals(last.optString("role", ""))) {
+                    last.put("text", shown);
+                    last.put("t", System.currentTimeMillis());
+                } else {
+                    JSONObject o = new JSONObject();
+                    o.put("role", ROLE_AGENT_PROGRESS);
+                    o.put("text", shown);
+                    o.put("t", System.currentTimeMillis());
+                    b.put(o);
+                    created = true;
+                    if (jrnl != null && cur != null) jrnl.append(cur.optString("id", ""), o);
+                }
+            } catch (Throwable ignored) { }
+        }
+        if (created) {
+            try { OverlayHub.line(mirrorLine(ROLE_AGENT_PROGRESS, shown)); } catch (Throwable ignored) { }
+            bubbleTick++;
+            if (bubbleTick >= 10) { bubbleTick = 0; persist(); }
+        }
+        ui.post(new Runnable() {
+            @Override public void run() { renderTranscript(); }
+        });
+    }
+
     // ==================== send + agent loop ====================
 
     private void onSend() {
@@ -3773,6 +3938,7 @@ public class MainActivity extends Activity {
         if ("user".equals(role)) return "> " + t;
         if ("tool".equals(role)) return t.startsWith("$") ? t : "| " + t;
         if ("note".equals(role)) return "\u00b7 " + t;
+        if (ROLE_AGENT_PROGRESS.equals(role)) return "\u00b7 " + t;
         return t;
     }
 
@@ -4187,7 +4353,11 @@ public class MainActivity extends Activity {
                 String visible = stripFences(reply.text).trim();
                 if (finalTurn && visible.isEmpty()) visible = "Eksekusi dihentikan. Hasil akhir belum terverifikasi; "
                         + "bukti langkah sebelumnya tersimpan di percakapan.";
-                if (!visible.isEmpty()) { addBubble("assistant", visible); lastAssistantSaid = visible; }
+                if (!visible.isEmpty()) {
+                    if (!finalTurn && (hasToolCalls || !cmds.isEmpty())) updateAgentProgress(visible);
+                    else addBubble("assistant", visible);
+                    lastAssistantSaid = visible;
+                }
 
                 try {
                     JSONObject am = new JSONObject();
