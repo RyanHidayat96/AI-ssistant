@@ -286,6 +286,7 @@ public class MainActivity extends Activity {
     /** Resource ids seen in the target UI; source investigation starts from these rather than broad scans. */
     private final java.util.Set<String> targetUiAnchors = new java.util.LinkedHashSet<String>();
     private boolean targetSourceAnchorLocated;
+    private int targetSourceAnchorAttempts;
     /** when the current run started, so the finish notice can say how long it took */
     private long runStartMs;
     /** the overlay needs a way back into the activity's own send path */
@@ -3379,6 +3380,7 @@ public class MainActivity extends Activity {
         observedTargetUi.clear();
         targetUiAnchors.clear();
         targetSourceAnchorLocated = false;
+        targetSourceAnchorAttempts = 0;
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
@@ -3509,6 +3511,7 @@ public class MainActivity extends Activity {
         observedTargetUi.clear();
         targetUiAnchors.clear();
         targetSourceAnchorLocated = false;
+        targetSourceAnchorAttempts = 0;
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
@@ -4230,8 +4233,15 @@ public class MainActivity extends Activity {
         if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
                 && !targetSourceAnchorLocated && isTargetSourceRead(cmd) && !usesTargetUiAnchor(cmd)) {
             String blocked = "[TARGET SOURCE ANCHOR REQUIRED: target UI already exposed "
-                    + sourceAnchorSummary() + ". Search one of those exact IDs in the decompiled source first. "
-                    + "That result must locate a listener, route, or state predicate before broad source paging or decoding.]";
+                    + sourceAnchorSummary() + ". Search one of those exact IDs with a line-number query in the decompiled source first. "
+                    + "A path-only match is not enough: it must locate a listener, route, or state predicate before other source reads.]";
+            if (echoCommand) addBubble("tool", "$ " + cmd);
+            addBubble("tool", blocked);
+            return blocked;
+        }
+        if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage) && isWholeSourceDump(cmd)) {
+            String blocked = "[BOUNDED SOURCE READ REQUIRED: a whole decompiled source file was not read. "
+                    + "Use a UI-id line-number query first, then read only the nearby lines needed to choose one action.]";
             if (echoCommand) addBubble("tool", "$ " + cmd);
             addBubble("tool", blocked);
             return blocked;
@@ -4333,8 +4343,11 @@ public class MainActivity extends Activity {
             }
         }
         String out = withRecovery(foldLong(AgentWindowFilter.hideSelfOverlays(raw, getPackageName())), cmd);
-        if (isTargetSourceRead(cmd) && usesTargetUiAnchor(cmd) && hasUsableSourceResult(out)) {
-            targetSourceAnchorLocated = true;
+        if (isTargetSourceRead(cmd) && usesTargetUiAnchor(cmd)) {
+            targetSourceAnchorAttempts++;
+            if (hasLineNumberedSourceResult(out) || targetSourceAnchorAttempts >= 2) {
+                targetSourceAnchorLocated = true;
+            }
         }
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
@@ -4347,7 +4360,7 @@ public class MainActivity extends Activity {
         return "cd " + wd + " 2>/dev/null; export WD=" + wd + "; export TOOLS=" + tools
                 + "; export TOOL_SESSION=\"$WD/.tools\"; mkdir -p \"$TOOL_SESSION\" \"$TOOLS/shared\"; "
                 + "export PATH=\"$TOOLS/bin:$TOOLS/jdk/bin:$PATH\"; for D in \"$TOOLS/shared/\"*/*; do [ -d \"$D\" ] && PATH=\"$D:$PATH\"; done; export PATH; "
-                + "java() { if [ -x \"$TOOLS/jdk/bin/java\" ]; then LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" \"$TOOLS/jdk/bin/java\" \"$@\"; else command java \"$@\"; fi; }; "
+                + "java() { J=\"$TOOLS/jdk/bin/java\"; [ -x \"$J\" ] || { command java \"$@\"; return; }; mkdir -p \"$WD/tmp\"; case \"$1:$2\" in -jar:*jadx*-all.jar) shift 2; LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" \"$J\" -Djava.io.tmpdir=\"$WD/tmp\" -cp \"$TOOLS/lib/jadx-1.5.6-all.jar\" jadx.cli.JadxCLI \"$@\";; *) LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" \"$J\" -Djava.io.tmpdir=\"$WD/tmp\" \"$@\";; esac; }; "
                 + "agent_tool_list() { echo 'REGISTERED TOOLS:'; cat \"$TOOLS/tool-index.tsv\" 2>/dev/null; echo 'LOCAL CANDIDATES (verify selected candidate once):'; cat \"$TOOLS/tool-candidates.tsv\" 2>/dev/null; }; "
                 + "agent_tool_part() { case \"$1\" in ''|*[!A-Za-z0-9._+-]*) echo 'tool scope: invalid name/version/ABI' >&2; return 2;; esac; }; "
                 + "agent_tool_shared() { [ \"$#\" -eq 3 ] || { echo 'usage: agent_tool_shared name version abi' >&2; return 2; }; "
@@ -4397,9 +4410,16 @@ public class MainActivity extends Activity {
         return ids.length() == 0 ? "the current target UI ids" : "UI ids: " + ids;
     }
 
-    private static boolean hasUsableSourceResult(String result) {
-        String low = result == null ? "" : result.trim().toLowerCase(Locale.US);
-        return !low.isEmpty() && !low.contains("no such file") && !low.matches("(?s).*\\[exit\\s+1\\].*");
+    /** A source filename is only a lead; line-number output identifies the anchor's actual call-site. */
+    private static boolean hasLineNumberedSourceResult(String result) {
+        String value = result == null ? "" : result.trim();
+        return value.matches("(?s).*:[0-9]+:.*") && !value.toLowerCase(Locale.US).contains("no such file");
+    }
+
+    private static boolean isWholeSourceDump(String command) {
+        if (command == null) return false;
+        String low = command.toLowerCase(Locale.US);
+        return low.matches("(?s).*\\bcat\\s+[^;|\\r\\n]*\\.(java|kt|smali)\\b.*");
     }
 
     /** Returns the named package that needs a current UI baseline, or empty when static inspection is appropriate. */
@@ -4777,6 +4797,7 @@ public class MainActivity extends Activity {
         observedTargetUi.clear();
         targetUiAnchors.clear();
         targetSourceAnchorLocated = false;
+        targetSourceAnchorAttempts = 0;
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
