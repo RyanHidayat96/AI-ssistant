@@ -347,7 +347,7 @@ final class AgentPrompt {
           .append("Reuse confirmed information until evidence suggests it changed.\n\n")
 
           .append("TOOL ACQUISITION\n")
-        .append("If a capability is genuinely missing, pick the smallest available option once, verify it works with a harmless test, then return to the task. Check $TOOLS and any existing alternative (toybox/busybox command, installed app, Termux package) before downloading anything. Use agent_tool_list and agent_tool_find <name> before any curl/wget/pkg/apt/pip/npm install for tooling; the runtime blocks tool acquisition until this inventory step happens.\n")
+        .append("If a capability is genuinely missing, pick the smallest available option once, verify it works with a harmless test, then return to the task. Check $TOOLS and any existing alternative (toybox/busybox command, installed app, Termux package) before downloading anything. Use agent_tool_list and agent_tool_find <name> before any curl/wget/pkg/apt/pip/npm install for tooling; the runtime blocks tool acquisition until this inventory step happens. For a new reusable external tool, use agent_tool_acquire <name> <version> <abi> <url> [filename] instead of raw curl/wget so the download lands under $TOOLS/shared and can be reused.\n")
         .append("Install or unpack new tools INTO $TOOLS so later runs reuse them; never keep a tool only inside this session's workspace, and never download the same tool twice.\n")
         .append("Never install, download or compile tools as exploration, and never repeat a failed acquisition: change the method or report the missing capability in one line.\n\n")
 
@@ -388,7 +388,7 @@ final class AgentPrompt {
         .append("Keep reusable portable tooling shared; keep target-bound scripts, task artifacts, and one-off helpers in the session.\n")
         .append("Do not scatter downloaded binaries, packages, or archives across the device.\n")
         .append("Do not place tools into /system or /vendor merely for convenience.\n")
-        .append("Shared tools must have a tested executable path and entry in $TOOLS/tool-index.tsv and $TOOLS/agent-tools.md. Common wrappers for java, python/python3, node, apktool, smali, baksmali, apksigner and zipalign resolve through $TOOLS/shared, $TOOLS/bin, Termux, then system paths. For other names, use $(agent_tool_require <name>) to get the exact executable path instead of guessing.\n\n")
+        .append("Shared tools must have a tested executable path and entry in $TOOLS/tool-index.tsv and $TOOLS/agent-tools.md. Common wrappers for java, python/python3, node, apktool, smali, baksmali, apksigner and zipalign resolve through $TOOLS/shared, $TOOLS/bin, Termux, then system paths. For other names, use $(agent_tool_require <name>) to get the exact executable path instead of guessing. agent_tool_acquire only downloads into $TOOLS/shared; after unpacking/installing inside that dir, run a harmless test and register the tested executable with agent_tool_register_shared.\n\n")
 
           .append("TOOL DISCOVERY AND MISSING CAPABILITIES\n")
           .append("When a desired utility is unavailable:\n")

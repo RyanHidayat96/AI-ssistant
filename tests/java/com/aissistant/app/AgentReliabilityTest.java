@@ -83,6 +83,8 @@ public final class AgentReliabilityTest {
                 "package installs require cache inventory first");
         check(!ToolPolicy.toolAcquisitionAttempt("curl -L https://example.invalid/data.json -o data.json"),
                 "ordinary data downloads are not mistaken for tool acquisition");
+        check(!ToolPolicy.toolAcquisitionAttempt("agent_tool_acquire weirdtool 1.0 arm64 https://example.invalid/weirdtool.tgz"),
+                "managed tool acquisition is already routed through the cache gate");
         check(ToolPolicy.usesToolInventory("agent_tool_list; agent_tool_find python3"),
                 "tool inventory commands are recognized");
     }
@@ -290,6 +292,7 @@ public final class AgentReliabilityTest {
         check(prompt.contains("CAPABILITY GAP RESOLUTION") && prompt.contains("minimum compatible item/spec/action"),
                 "prompt requires evidence-backed external requirements");
         check(prompt.contains("agent_tool_list") && prompt.contains("agent_tool_find") && prompt.contains("agent_tool_require")
+                        && prompt.contains("agent_tool_acquire")
                         && prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
                         && prompt.contains("agent_tool_register_shared"),
                 "prompt requires explicit shared and session tool scopes");
