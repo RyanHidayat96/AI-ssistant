@@ -18,7 +18,7 @@ final class RunGuard {
     private static final Pattern PAGED_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+(?:,\\d+)?)p['\\\"]?");
     private static final Pattern LITERAL_SEARCH = Pattern.compile("\\b(?:grep|rg)\\b");
     private static final int STATIC_ARTIFACT_NUDGE_AFTER = 8;
-    private static final int STATIC_ARTIFACT_REPORT_AFTER = 16;
+    private static final int STATIC_ARTIFACT_PIVOT_AFTER = 16;
     private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices, consecutiveEmptyLiteralSearches;
     private int consecutiveHelperAttempts, sameHelperFailureCount;
     /** Cumulative read-only artifact work since last target interaction; prevents analysis becoming task avoidance. */
@@ -91,7 +91,7 @@ final class RunGuard {
             helperFailureFamily = "";
         }
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
-        if (sameHelperFailureCount >= 15) {
+        if (sameHelperFailureCount >= 3) {
             exhausted = true;
             return triage + "\n[RUNTIME: the same transformed-artifact helper failure (" + helperFailureFamily
                     + ") occurred three times. Stop debugging the helper. Do not decode the whole table or "
@@ -105,7 +105,7 @@ final class RunGuard {
                     + "unless one tiny valid sample is proven first. Pivot now to the target UI/source anchor, "
                     + "candidate call-site, or runtime behavior test.]";
         }
-        if (consecutiveHelperAttempts >= 1000) {
+        if (consecutiveHelperAttempts >= 8) {
             exhausted = true;
             return triage + "\n[RUNTIME: eight consecutive helper/decode attempts occurred without target interaction "
                     + "or a verified action branch. Stop helper work. State verified facts and the smallest direct "
@@ -116,12 +116,13 @@ final class RunGuard {
                     + "yields a decision tied to the requested behavior. Use the current target UI/source anchor "
                     + "or make one runtime observation instead of expanding the helper.]";
         }
-        if (staticArtifactReads >= STATIC_ARTIFACT_REPORT_AFTER) {
-            exhausted = true;
-            return triage + "\n[RUNTIME: " + STATIC_ARTIFACT_REPORT_AFTER
-                    + " read-only artifact checks occurred without another target interaction. Stop inspection now. "
-                    + "State the verified gate, strongest source/runtime facts, and one bounded action or decisive test for resume. "
-                    + "No further tools this run.]";
+        if (staticArtifactReads == STATIC_ARTIFACT_PIVOT_AFTER
+                || (staticArtifactReads > STATIC_ARTIFACT_PIVOT_AFTER && staticArtifactReads % 8 == 0)) {
+            return triage + "\n[RUNTIME: " + staticArtifactReads
+                    + " read-only artifact checks occurred without another target interaction. This is a pivot guard, not a stop. "
+                    + "Do not final-report and do not ask the user to continue. "
+                    + "The next tool must be one direct progress action: target UI observation, focused listener/gate decompile, "
+                    + "smali/resource patch, runtime hook/test, build/install/verify, or a proven concrete blocker.]";
         }
         if (staticArtifactReads == STATIC_ARTIFACT_NUDGE_AFTER) {
             return triage + "\n[RUNTIME: " + STATIC_ARTIFACT_NUDGE_AFTER

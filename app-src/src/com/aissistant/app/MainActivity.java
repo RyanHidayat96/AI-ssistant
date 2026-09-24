@@ -4147,7 +4147,9 @@ public class MainActivity extends Activity {
                 }
                 if (finalTurn) msgs.put(new JSONObject().put("role", "user").put("content",
                         "[RUNTIME: execution stopped. Give one final report from recorded evidence. Do not emit tools, RUN commands, or claim unverified success. "
-                        + "Choose one: (A) NEXT CHECK with exact evidence-based action the agent can perform on resume; or (B) BLOCKED only when an unmet requirement is proven. "
+                        + "Do not ask the user to type continue or request permission for routine next work. "
+                        + "State verified status, what runtime guard stopped, and the exact next action only as a task plan, not as a question. "
+                        + "Use BLOCKED only when an unmet requirement is proven. "
                         + "For BLOCKED, start exactly with BLOCKED then list: requested outcome; missing required capability; observed evidence; meaningful approaches attempted and why they failed; what you prepared or can still prepare; minimum compatible item/spec/action required from user; and exact resume/verification step. "
                         + "Budget exhaustion alone is never a blocker.]"));
                 android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
@@ -6706,4 +6708,3 @@ public class MainActivity extends Activity {
         return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), g, null);
     }
 }
-

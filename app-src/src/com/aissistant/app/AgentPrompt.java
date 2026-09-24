@@ -505,6 +505,11 @@ final class AgentPrompt {
           .append("Avoid being too aggressive: do not mutate many unrelated things before understanding the problem.\n")
           .append("Rapidly reduce uncertainty, perform targeted actions, and verify the real outcome.\n\n")
 
+          .append("CONTINUATION BEHAVIOR\n")
+          .append("Do not ask the user to reply continue merely because you found a next step or one route needs more work.\n")
+          .append("While tools and runtime remain available, execute the next concrete step yourself.\n")
+          .append("Ask the user only when a proven external requirement is missing: physical hardware, connection, account, credential, media, or an irreversible action outside the requested scope.\n\n")
+
           .append("COMMUNICATION\n")
           .append("Use the user's language unless explicitly requested otherwise.\n")
           .append("Do not expose hidden chain-of-thought or long internal reasoning.\n")

@@ -253,10 +253,10 @@
     <string name="voice_failed">Microphone failed: %1$s</string>
     <string name="runtime_stale_session">Old session cleaned when app opened · %1$s</string>
     <string name="runtime_no_model">No model selected. Open ⋮ → Models &amp; providers, add provider and model, then select it.</string>
-    <string name="runtime_limit_reached">Execution limit reached; agent is preparing result and available evidence.</string>
+    <string name="runtime_limit_reached">Runtime paused a loop; agent is preparing status from available evidence.</string>
     <string name="runtime_image_retry">Model refused image — retried with file path only</string>
     <string name="runtime_provider_retry">Temporary provider connection issue — resumed automatically (%1$d retry)</string>
-    <string name="runtime_loop_stopped">Run stopped because command loop repeated — send “continue” for a new path</string>
+    <string name="runtime_loop_stopped">Command loop paused; agent is preparing a new path from available evidence</string>
     <string name="runtime_input_continuing">Your input has not been processed · continuing automatically</string>
     <string name="runtime_queued">Queued (auto-run is off): %1$s</string>
     <string name="runtime_rejected">Rejected · %1$s · %2$s</string>

@@ -245,14 +245,16 @@ public final class AgentReliabilityTest {
         check(guard.reportOnly(), "empty literal searches stop before a representation loop");
         guard.reset();
         for (int i = 0; i < 8; i++) {
-            note = guard.observe("grep gate $WD/dec/sources/Target.java", "fact-" + i);
+            note = guard.observe("grep gate $WD/dec/sources/Target" + i + ".java", "fact-" + i);
         }
         check(note.contains("read-only artifact checks"),
                 "artifact investigation requires an action branch before it drifts");
         for (int i = 8; i < 16; i++) {
-            guard.observe("sed -n '1,80p' $WD/dec/sources/Target.java", "fact-" + i);
+            note = guard.observe("grep gate $WD/dec/sources/Target" + i + ".java", "fact-" + i);
         }
-        check(guard.reportOnly(), "artifact investigation has a bounded analysis pass");
+        check(note.contains("pivot guard") && note.contains("do not ask the user to continue"),
+                "artifact investigation pivots into a direct action instead of asking to continue");
+        check(!guard.reportOnly(), "artifact investigation stays runnable after the pivot guard");
         guard.reset();
         guard.observe("python decrypt_str2.py jadx_out/sources/AbstractC1520.java", "ERR: list index out of range");
         note = guard.observe("java DecryptStrings jadx_out/sources/AbstractC1520.java",
