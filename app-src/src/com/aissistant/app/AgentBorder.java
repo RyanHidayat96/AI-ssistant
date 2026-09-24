@@ -43,7 +43,7 @@ public final class AgentBorder {
     private static int activeOperations;
     /** True from first target action until the owning agent run finishes. Main-thread only. */
     private static boolean targetAppSession;
-    /** At least one click, input, or scroll has happened in this target-app session. */
+    /** At least one foreground target operation, including a launch, happened in this session. */
     private static boolean targetOperationCompleted;
 
     private AgentBorder() { }
@@ -53,14 +53,15 @@ public final class AgentBorder {
         try {
             String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
             if (!controlsTargetApp(c)) return false;
-            final boolean launch = launchesTargetApp(c);
             android.util.Log.i("AIssistant", "border operation start: "
                     + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
             H.post(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
-                if (!launch) targetOperationCompleted = true;
+                // Launching the target is itself an operation.  If no follow-up arrives, the
+                // quiet handoff returns the user to the session after the same three seconds.
+                targetOperationCompleted = true;
                 activeOperations++;
                 show(ac);
             } });
@@ -121,8 +122,8 @@ public final class AgentBorder {
 
     /** End one target-app action and remove only its visual indicator.
      *
-     * Opening a target alone never schedules a handoff. A completed target action gets three
-     * seconds for a follow-up action before the session page returns.
+     * Every completed target action, including a launch, gets three seconds for a follow-up
+     * action before the session page returns.
      */
     public static void endOperation() {
         H.post(new Runnable() { @Override public void run() { endOperationOnMain(); } });

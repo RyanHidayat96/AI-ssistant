@@ -4236,7 +4236,8 @@ public class MainActivity extends Activity {
                 && isPostBaselineArtifactDetour(cmd)) {
             String blocked = "[UI GATE ROUTE REQUIRED: target UI already identifies the gate. "
                     + "Package metadata, archive inventory, hashes, AAPT, and tool-runtime discovery add no next decision here. "
-                    + "Run one source transformation, or if source exists query a visible UI ID with line numbers.]";
+                    + "If source is not decoded yet, run one direct decode/decompile from the known artifact; otherwise query a visible UI ID with line numbers. "
+                    + "Do not copy or inventory the archive as a separate detour.]";
             if (echoCommand) addBubble("tool", "$ " + cmd);
             addBubble("tool", blocked);
             return blocked;
@@ -4354,6 +4355,7 @@ public class MainActivity extends Activity {
             }
         }
         String out = withRecovery(foldLong(AgentWindowFilter.hideSelfOverlays(raw, getPackageName())), cmd);
+        learnTargetUiAnchors(out);
         if (isTargetSourceRead(cmd) && usesTargetUiAnchor(cmd)) {
             targetSourceAnchorAttempts++;
             if (hasLineNumberedSourceResult(out) || targetSourceAnchorAttempts >= 2) {
@@ -4405,11 +4407,27 @@ public class MainActivity extends Activity {
                 + "printf '%s | %s | %s | %s | %s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >> \"$TOOLS/agent-tools.md\"; }; ";
     }
 
-    /** Collects target resource names from Accessibility output without treating UI text as executable input. */
+    /**
+     * Records resource ids from either the Accessibility result or the explicitly isolated raw
+     * UI fallback. Both are observations of the same foreground target window; otherwise a
+     * source-anchor guard can demand an id it discarded before the next step.
+     */
+    private void learnTargetUiAnchors(String observation) {
+        String target = mentionedTargetPackage();
+        if (target.isEmpty() || observation == null) return;
+        String low = observation.toLowerCase(Locale.US);
+        if (!low.contains("resource-id=\"" + target + ":id/")
+                && !low.contains("resource-id='" + target + ":id/")
+                && !low.contains("id=" + target + "/")) return;
+        observedTargetUi.add(target);
+        collectTargetUiAnchors(observation);
+    }
+
+    /** Collects target resource names from observed UI without treating UI text as executable input. */
     private void collectTargetUiAnchors(String observation) {
         if (observation == null) return;
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
-                "\\bid=[^\\s/]+/([A-Za-z0-9_]+)").matcher(observation);
+                "(?:\\bid=[^\\s/]+/|\\bresource-id=[\\\"']?[^\\s\\\"']*:id/)([A-Za-z0-9_]+)").matcher(observation);
         while (matcher.find() && targetUiAnchors.size() < 8) targetUiAnchors.add(matcher.group(1).toLowerCase(Locale.US));
     }
 
@@ -4455,11 +4473,20 @@ public class MainActivity extends Activity {
     private static boolean isPostBaselineArtifactDetour(String command) {
         if (command == null) return false;
         String low = command.toLowerCase(Locale.US);
+        // A single direct transform may need to copy the known artifact into $WD first.  It is
+        // the shortest path to source and must not be mistaken for an inventory detour.
+        if (isDirectSourceTransformation(low)) return false;
         if (low.matches("(?s).*\\b(aapt|aapt2|zipinfo|readelf|strings|sha(?:1|256)?sum|md5sum|file)\\b.*")) return true;
         if (low.matches("(?s).*\\bunzip\\s+-l\\b.*")) return true;
         if (low.matches("(?s).*\\bcp\\b.*\\.apk\\b.*")) return true;
         return (low.contains("$tools") || low.contains("/tools/"))
                 && low.matches("(?s).*\\b(ls|find|cat)\\b.*");
+    }
+
+    /** A decoder/decompiler creates the source branch demanded by the UI gate; it is not inventory. */
+    private static boolean isDirectSourceTransformation(String low) {
+        return low.matches("(?s).*\\b(?:apktool(?:\\.jar)?|baksmali)\\b.*(?:^|\\s)d(?:\\s|$).*")
+                || low.matches("(?s).*\\bjadx(?:\\.cli\\.jadxcli)?\\b.*\\s-d(?:\\s|$).*");
     }
 
     /** Returns the named package that needs a current UI baseline, or empty when static inspection is appropriate. */

@@ -259,7 +259,9 @@ public final class AgentReliabilityTest {
         check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site")
                         && prompt.contains("Artifact investigation must earn a next action")
                         && prompt.contains("resource id") && prompt.contains("line-number structural query")
-                        && prompt.contains("do not repeat package metadata"),
+                        && prompt.contains("do not repeat package metadata")
+                        && prompt.contains("no decoded source yet")
+                        && prompt.contains("Do not separately copy, list, or inventory the archive first"),
                 "prompt requires mapped artifact evidence to produce an action branch");
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
