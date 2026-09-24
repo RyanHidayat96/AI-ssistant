@@ -1291,6 +1291,26 @@ public class MainActivity extends Activity {
             panel.addView(fingerprintHelp, fingerprintHelpLp);
         }
 
+        LinearLayout.LayoutParams storageHeaderLp = new LinearLayout.LayoutParams(-1, -2);
+        storageHeaderLp.setMargins(0, dp(22), 0, dp(6));
+        panel.addView(sectionLabel(uiText(R.string.settings_section_storage)), storageHeaderLp);
+        TextView storageHelp = tv(12, MUTED, Typeface.NORMAL);
+        storageHelp.setText(uiText(R.string.settings_storage_help));
+        panel.addView(storageHelp, new LinearLayout.LayoutParams(-1, -2));
+        Button cleanStorage = new Button(this);
+        cleanStorage.setText(uiText(R.string.settings_clean_storage));
+        cleanStorage.setAllCaps(false);
+        cleanStorage.setTextSize(14);
+        cleanStorage.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        cleanStorage.setTextColor(FG);
+        cleanStorage.setBackground(ripple(TOOL_BG, LINE, 14));
+        cleanStorage.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showStorageCleanupDialog(); }
+        });
+        LinearLayout.LayoutParams cleanLp = new LinearLayout.LayoutParams(-1, dp(48));
+        cleanLp.setMargins(0, dp(8), 0, 0);
+        panel.addView(cleanStorage, cleanLp);
+
         Button save = new Button(this);
         save.setText(uiText(R.string.common_save));
         save.setAllCaps(false);
@@ -1317,6 +1337,123 @@ public class MainActivity extends Activity {
         root.removeAllViews();
         root.addView(v, new LinearLayout.LayoutParams(-1, 0, 1));
         root.requestApplyInsets();
+    }
+
+    private void showStorageCleanupDialog() {
+        if (busy) { toast(uiText(R.string.storage_cleanup_running)); return; }
+        final String[] labels = {
+                uiText(R.string.storage_cleanup_old_workspaces),
+                uiText(R.string.storage_cleanup_current_workspace),
+                uiText(R.string.storage_cleanup_memory),
+                uiText(R.string.storage_cleanup_attachments),
+                uiText(R.string.storage_cleanup_tools)
+        };
+        final boolean[] checked = { true, false, false, false, false };
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(uiText(R.string.storage_cleanup_title))
+                .setMessage(uiText(R.string.storage_cleanup_message))
+                .setMultiChoiceItems(labels, checked, new DialogInterface.OnMultiChoiceClickListener() {
+                    @Override public void onClick(DialogInterface d, int which, boolean isChecked) {
+                        checked[which] = isChecked;
+                    }
+                })
+                .setPositiveButton(uiText(R.string.common_clear), null)
+                .setNegativeButton(uiText(R.string.common_cancel), null)
+                .create();
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface d) {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        boolean any = false;
+                        for (boolean b : checked) any |= b;
+                        if (!any) { toast(uiText(R.string.storage_cleanup_none)); return; }
+                        dialog.dismiss();
+                        cleanSelectedStorage(checked, labels);
+                    }
+                });
+            }
+        });
+        dialog.show();
+    }
+
+    private void cleanSelectedStorage(final boolean[] checked, final String[] labels) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    final String cleaned = performStorageCleanup(checked, labels);
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast(uiText(R.string.storage_cleanup_done, cleaned)); }
+                    });
+                } catch (final Throwable t) {
+                    ui.post(new Runnable() {
+                        @Override public void run() { toast(uiText(R.string.storage_cleanup_failed, t.getMessage() == null ? t : t.getMessage())); }
+                    });
+                }
+            }
+        }).start();
+    }
+
+    private String performStorageCleanup(boolean[] checked, String[] labels) throws Exception {
+        StringBuilder cleaned = new StringBuilder();
+        if (checked[0]) {
+            String current = currentWorkspaceName();
+            String script = "ROOT=/data/local/tmp/ai-ssistant; CUR=" + shQuote(current) + ";"
+                    + " [ -d \"$ROOT\" ] && for D in \"$ROOT\"/*; do [ -d \"$D\" ] || continue;"
+                    + " [ \"${D##*/}\" = \"$CUR\" ] && continue; rm -rf \"$D\"; done; true";
+            RootShell.run(script, 60);
+            appendCleaned(cleaned, labels[0]);
+        }
+        if (checked[1]) {
+            RootShell.run("rm -rf " + shQuote(workDir()), 60);
+            appendCleaned(cleaned, labels[1]);
+        }
+        if (checked[2]) {
+            deleteTree(new java.io.File(getFilesDir(), "agent-memory"));
+            appendCleaned(cleaned, labels[2]);
+        }
+        if (checked[3]) {
+            java.io.File external = getExternalFilesDir(null);
+            if (external != null) deleteTree(new java.io.File(external, "attachments"));
+            deleteTree(new java.io.File(getFilesDir(), "attachments"));
+            pendingPath = null;
+            pendingName = null;
+            ui.post(new Runnable() {
+                @Override public void run() { if (attachBar != null) attachBar.removeAllViews(); }
+            });
+            appendCleaned(cleaned, labels[3]);
+        }
+        if (checked[4]) {
+            RootShell.run("rm -rf /data/adb/ai-ssistant/tools "
+                    + "/data/data/com.aissistant.app/files/tools /data/local/ai-ssistant/tools; true", 90);
+            toolsCache = "";
+            appendCleaned(cleaned, labels[4]);
+        }
+        return cleaned.toString();
+    }
+
+    private String currentWorkspaceName() {
+        String wd = workDir();
+        int slash = wd.lastIndexOf('/');
+        return slash >= 0 ? wd.substring(slash + 1) : wd;
+    }
+
+    private static void appendCleaned(StringBuilder out, String label) {
+        if (out.length() > 0) out.append(", ");
+        out.append(label);
+    }
+
+    private static String shQuote(String value) {
+        if (value == null) value = "";
+        return "'" + value.replace("'", "'\"'\"'") + "'";
+    }
+
+    private static void deleteTree(java.io.File file) {
+        if (file == null || !file.exists()) return;
+        java.io.File[] children = file.listFiles();
+        if (children != null) {
+            for (java.io.File child : children) deleteTree(child);
+        }
+        try { file.delete(); } catch (Throwable ignored) { }
     }
 
     /** Current visual choice. Android 13 Settings and this picker share one LocaleManager value. */
