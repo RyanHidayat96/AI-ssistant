@@ -225,6 +225,28 @@ public final class AgentReliabilityTest {
         }
         check(guard.reportOnly(), "artifact investigation has a bounded analysis pass");
         guard.reset();
+        guard.observe("python decrypt_str2.py jadx_out/sources/AbstractC1520.java", "ERR: list index out of range");
+        note = guard.observe("java DecryptStrings jadx_out/sources/AbstractC1520.java",
+                "java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1");
+        check(note.contains("transformed-artifact helper failure")
+                        && note.contains("Pivot now to the target UI/source anchor"),
+                "repeated helper index failures force a pivot");
+        guard.observe("java DecryptStrings jadx_out/sources/AbstractC1520.java",
+                "java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1");
+        check(guard.reportOnly(), "third equivalent helper failure ends the tool loop");
+        guard.reset();
+        for (int i = 0; i < 5; i++) {
+            note = guard.observe("python helper/decode_" + i + ".py jadx_out/sources/Target.java",
+                    "decoded fragment " + i);
+        }
+        check(note.contains("five consecutive helper/decode attempts"),
+                "helper work without a decision receives a focused nudge");
+        for (int i = 5; i < 8; i++) {
+            guard.observe("python helper/decode_" + i + ".py jadx_out/sources/Target.java",
+                    "decoded fragment " + i);
+        }
+        check(guard.reportOnly(), "helper work without a decision has a hard cap");
+        guard.reset();
         check(!guard.reportOnly(), "new run resets guard state");
     }
 
@@ -258,6 +280,8 @@ public final class AgentReliabilityTest {
                 "prompt requires explicit shared and session tool scopes");
         check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site")
                         && prompt.contains("Artifact investigation must earn a next action")
+                        && prompt.contains("visible UI text/resource id -> listener/navigation route")
+                        && prompt.contains("If a decoder/helper fails twice")
                         && prompt.contains("resource id") && prompt.contains("line-number structural query")
                         && prompt.contains("do not repeat package metadata")
                         && prompt.contains("no decoded source yet")

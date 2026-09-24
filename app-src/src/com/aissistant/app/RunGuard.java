@@ -20,9 +20,11 @@ final class RunGuard {
     private static final int STATIC_ARTIFACT_NUDGE_AFTER = 8;
     private static final int STATIC_ARTIFACT_REPORT_AFTER = 16;
     private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices, consecutiveEmptyLiteralSearches;
+    private int consecutiveHelperAttempts, sameHelperFailureCount;
     /** Cumulative read-only artifact work since last target interaction; prevents analysis becoming task avoidance. */
     private int staticArtifactReads;
     private String microSliceFamily = "";
+    private String helperFailureFamily = "";
     private boolean exhausted;
 
     void reset() {
@@ -33,8 +35,11 @@ final class RunGuard {
         consecutiveEvidenceReads = 0;
         consecutiveMicroSlices = 0;
         consecutiveEmptyLiteralSearches = 0;
+        consecutiveHelperAttempts = 0;
+        sameHelperFailureCount = 0;
         staticArtifactReads = 0;
         microSliceFamily = "";
+        helperFailureFamily = "";
         exhausted = false;
     }
 
@@ -57,9 +62,55 @@ final class RunGuard {
         }
         consecutiveEmptyLiteralSearches = emptyLiteralSearch(key, result)
                 ? consecutiveEmptyLiteralSearches + 1 : 0;
-        if (isTargetInteraction(key)) staticArtifactReads = 0;
+        boolean targetInteraction = isTargetInteraction(key);
+        if (targetInteraction) {
+            staticArtifactReads = 0;
+            consecutiveHelperAttempts = 0;
+            sameHelperFailureCount = 0;
+            helperFailureFamily = "";
+        }
         else if (staticArtifactRead(key)) staticArtifactReads++;
+        if (!targetInteraction && transformedHelperWork(key)) {
+            consecutiveHelperAttempts++;
+            String helperFamily = transformedHelperFailureFamily(key, result);
+            if (!helperFamily.isEmpty()) {
+                if (helperFamily.equals(helperFailureFamily)) sameHelperFailureCount++;
+                else {
+                    helperFailureFamily = helperFamily;
+                    sameHelperFailureCount = 1;
+                }
+            }
+        } else if (!staticArtifactRead(key)) {
+            consecutiveHelperAttempts = 0;
+            sameHelperFailureCount = 0;
+            helperFailureFamily = "";
+        }
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
+        if (sameHelperFailureCount >= 3) {
+            exhausted = true;
+            return triage + "\n[RUNTIME: the same transformed-artifact helper failure (" + helperFailureFamily
+                    + ") occurred three times. Stop debugging the helper. Do not decode the whole table or "
+                    + "rewrite another equivalent helper this run. State the current UI/source anchor, the failed "
+                    + "decoder path, and one direct next action: locate the listener/gate near the visible UI id, "
+                    + "make one structural query, or perform one runtime observation. No further tools this run.]";
+        }
+        if (sameHelperFailureCount == 2) {
+            return triage + "\n[RUNTIME: the same transformed-artifact helper failure (" + helperFailureFamily
+                    + ") happened twice. Treat this decoder/helper branch as failing. Do not keep repairing it "
+                    + "unless one tiny valid sample is proven first. Pivot now to the target UI/source anchor, "
+                    + "candidate call-site, or runtime behavior test.]";
+        }
+        if (consecutiveHelperAttempts >= 8) {
+            exhausted = true;
+            return triage + "\n[RUNTIME: eight consecutive helper/decode attempts occurred without target interaction "
+                    + "or a verified action branch. Stop helper work. State verified facts and the smallest direct "
+                    + "branch for resume. No further tools this run.]";
+        }
+        if (consecutiveHelperAttempts == 5) {
+            return triage + "\n[RUNTIME: five consecutive helper/decode attempts. A helper is not progress until it "
+                    + "yields a decision tied to the requested behavior. Use the current target UI/source anchor "
+                    + "or make one runtime observation instead of expanding the helper.]";
+        }
         if (staticArtifactReads >= STATIC_ARTIFACT_REPORT_AFTER) {
             exhausted = true;
             return triage + "\n[RUNTIME: " + STATIC_ARTIFACT_REPORT_AFTER
@@ -133,6 +184,44 @@ final class RunGuard {
         if (low.matches("(?s).*\\b(sed\\s+-i|tee|cp|mv|rm|chmod|chown|zipalign|apksigner|install|uninstall|apktool\\s+b|smali\\s+assemble)\\b.*")
                 || low.matches("(?s).*[^0-9]>{1,2}\\s*(?!/dev/null\\b).*")) return false;
         return low.matches("(?s).*\\b(cat|grep|rg|sed|awk|head|tail|strings|readelf|objdump|xxd|hexdump|wc|find|ls|unzip|zipinfo|aapt|aapt2|jadx|baksmali)\\b.*");
+    }
+
+    /** Custom decoders are useful only while they resolve a bounded target branch. */
+    private static boolean transformedHelperWork(String action) {
+        if (action == null) return false;
+        String low = action.toLowerCase(Locale.US);
+        boolean helper = low.contains("helper") || low.contains("decrypt") || low.contains("decode")
+                || low.contains("deobfuscat") || low.contains("stringfog") || low.contains("m3256")
+                || low.contains("abstractc") || low.contains("javac") || low.contains("python")
+                || low.contains("cat >") || low.contains("tee ");
+        if (!helper) return false;
+        return low.contains(".apk") || low.contains(".dex") || low.contains(".smali")
+                || low.contains("/sources") || low.contains("jadx_out") || low.contains("$wd")
+                || low.contains(".java") || low.contains(".py") || low.contains("stringfog")
+                || low.contains("m3256") || low.contains("abstractc");
+    }
+
+    private static String transformedHelperFailureFamily(String action, String output) {
+        String low = ((action == null ? "" : action) + "\n" + (output == null ? "" : output))
+                .toLowerCase(Locale.US);
+        if (low.contains("arrayindexoutofboundsexception")
+                || low.contains("indexoutofboundsexception")
+                || low.contains("list index out of range")
+                || low.matches("(?s).*index\\s+\\d+\\s+out\\s+of\\s+bounds.*")) {
+            return "HELPER_INDEX_BOUNDS";
+        }
+        if (low.contains("invalid base64") || low.contains("incorrect padding")
+                || low.contains("number of data characters")) {
+            return "HELPER_ENCODING";
+        }
+        if (low.contains("syntaxerror") || low.contains("compilation failed")
+                || low.contains("error:") && (low.contains("javac") || low.contains(".java"))) {
+            return "HELPER_SYNTAX_OR_COMPILE";
+        }
+        if (low.contains("sockettimeoutexception") || low.contains("timeout")) {
+            return "HELPER_TIMEOUT";
+        }
+        return "";
     }
 
     /** An Accessibility interaction is a fresh behavior boundary for later artifact work. */
