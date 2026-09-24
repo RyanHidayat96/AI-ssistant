@@ -3581,7 +3581,8 @@ public class MainActivity extends Activity {
         // that yanks the target window away mid-run (the agent then "cannot" act because the target is gone).
         // This callback fires three seconds after a completed target action. Never interrupt an
         // action still in flight.
-        if (OverlayHub.overlaySuppressedForDriving()) return;
+        // A new target action cancels this callback. Isolation only hides our own surface from
+        // agent tooling; it must not prevent the idle handoff back to this session.
         try { AgentBorder.hide(); } catch (Throwable ignored) { }
         if (appVisible || isFinishing()
                 || (android.os.Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
@@ -4344,7 +4345,7 @@ public class MainActivity extends Activity {
             try {
                 raw = RootShell.run(exec, store.timeoutSec());
             } finally {
-                if (borderOperation) AgentBorder.endOperation();
+                if (borderOperation) AgentBorder.endOperationAfterCommand(cmd);
                 if (rawVisual) {
                     try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
                 } else if (rawInput) {

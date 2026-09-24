@@ -31,6 +31,8 @@ public final class AgentBorder {
 
     private static final Handler H = new Handler(Looper.getMainLooper());
     private static final long FOLLOWUP_TARGET_IDLE_RETURN_MS = 3000L;
+    /** A launch returns before Activity.onPause on many devices; retain its edge through that handoff. */
+    private static final long LAUNCH_BORDER_SETTLE_MS = 900L;
 
     private static View view;
     private static WindowManager wm;
@@ -71,7 +73,9 @@ public final class AgentBorder {
     public static void showForBackgroundOperation(final Context ctx) {
         if (ctx == null) return;
         final Context ac = ctx.getApplicationContext();
-        H.post(new Runnable() { @Override public void run() { show(ac); } });
+        // onPause happens before onStop, so MainActivity.appVisible can still be true here.
+        // This callback is the lifecycle proof that the target app is taking the foreground.
+        H.post(new Runnable() { @Override public void run() { show(ac, true); } });
     }
 
     /** Recreate edge only if target-app action still runs after UI isolation ends. */
@@ -121,13 +125,25 @@ public final class AgentBorder {
      * seconds for a follow-up action before the session page returns.
      */
     public static void endOperation() {
-        H.post(new Runnable() { @Override public void run() {
-            if (activeOperations > 0) activeOperations--;
-            if (activeOperations == 0) {
-                drop();
-                if (targetOperationCompleted) scheduleReturnToMain();
-            }
-        } });
+        H.post(new Runnable() { @Override public void run() { endOperationOnMain(); } });
+    }
+
+    /**
+     * Finish a shell operation. Starting another Activity often returns before its pause
+     * lifecycle callback, so hold only launch commands briefly for a visible, reliable edge.
+     */
+    public static void endOperationAfterCommand(String cmd) {
+        String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
+        long delay = launchesTargetApp(c) ? LAUNCH_BORDER_SETTLE_MS : 0L;
+        H.postDelayed(new Runnable() { @Override public void run() { endOperationOnMain(); } }, delay);
+    }
+
+    private static void endOperationOnMain() {
+        if (activeOperations > 0) activeOperations--;
+        if (activeOperations == 0) {
+            drop();
+            if (targetOperationCompleted) scheduleReturnToMain();
+        }
     }
 
     /** Enter a UI-critical phase before the command can read or touch another app. */
@@ -297,11 +313,14 @@ public final class AgentBorder {
         view = null;
     }
 
-    private static void show(Context ctx) {
+    private static void show(Context ctx) { show(ctx, false); }
+
+    /** onPause has already proved the app left foreground even though onStop may not run yet. */
+    private static void show(Context ctx, boolean duringBackgroundTransition) {
         try {
             // This edge is secure, non-touchable and hidden from Accessibility. It exists only
             // while a target-app action is in flight; model thinking and screen reads stay dark.
-            if (activeOperations <= 0 || MainActivity.appVisible) return;
+            if (activeOperations <= 0 || (MainActivity.appVisible && !duringBackgroundTransition)) return;
             if (view != null) { if (pulse != null) pulse.bump(); return; }
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return;
