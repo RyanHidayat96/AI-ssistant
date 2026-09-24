@@ -190,9 +190,9 @@ public class MainActivity extends Activity {
     private final java.util.Map<String, Integer> guardHits = new java.util.HashMap<>();
     /** hard safety valve across every duplicate command in one run */
     private int repeatGuardTotal = 0;
-    private static final int REPEAT_CACHE_AFTER = 3;
-    /** Same command already has cached evidence; three ignored redirects end tool use for this run. */
-    private static final int REPEAT_SAME_COMMAND_STOP_AFTER = 3;
+    private static final int REPEAT_CACHE_AFTER = 2;
+    /** A cached exact result needs one redirect only; another identical request ends this run. */
+    private static final int REPEAT_SAME_COMMAND_STOP_AFTER = 1;
     private static final int REPEAT_RUNAWAY_LIMIT = 12;
     private volatile boolean loopBroken = false;
     /** guard stopped the run: give the model one last turn to write the conclusion, with no tools */
@@ -281,6 +281,8 @@ public class MainActivity extends Activity {
     private String lastCmdSeen = "";
     /** the text of the run in flight - kept after the fast path hands over, so the guard can classify it */
     private String runTaskText;
+    /** Target UI baselines collected in this run; static artifact work must follow one when relevant. */
+    private final java.util.Set<String> observedTargetUi = new java.util.HashSet<String>();
     /** when the current run started, so the finish notice can say how long it took */
     private long runStartMs;
     /** the overlay needs a way back into the activity's own send path */
@@ -3371,6 +3373,7 @@ public class MainActivity extends Activity {
         runOutputs.clear();
         guardHits.clear();
         repeatGuardTotal = 0;
+        observedTargetUi.clear();
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
@@ -3498,6 +3501,7 @@ public class MainActivity extends Activity {
         runOutputs.clear();
         guardHits.clear();
         repeatGuardTotal = 0;
+        observedTargetUi.clear();
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;
@@ -3865,9 +3869,12 @@ public class MainActivity extends Activity {
     private String dispatchTool(String name, JSONObject args) throws Exception {
         if (stop || reportOnly) return "[not executed: run stopped]";
         if ("run_shell".equals(name)) return runCommand(args.getString("command").trim());
-        if ("observe_app".equals(name))
-            return AgentA11y.observe(args.optString("package", ""));
-        if ("act_app".equals(name))
+        if ("observe_app".equals(name)) {
+            String pkg = args.optString("package", "").trim().toLowerCase(Locale.US);
+            String result = AgentA11y.observe(pkg);
+            if (pkg.equals(mentionedTargetPackage())) observedTargetUi.add(pkg);
+            return result;
+        }        if ("act_app".equals(name))
             return AgentA11y.act(args.optString("package", ""), args.getString("node"), args.getString("action"), args.optString("text", ""));
         if ("scroll_app".equals(name))
             return AgentA11y.scrollFor(args.optString("package", ""), args.getString("node"),
@@ -4199,7 +4206,17 @@ public class MainActivity extends Activity {
                 return redirected;
             }
         }
-        String cat = permissionCategory(cmd);
+        String baselinePackage = requiredTargetUiBaseline();
+        if (!baselinePackage.isEmpty() && !observedTargetUi.contains(baselinePackage)
+                && isStaticArtifactInspection(cmd)) {
+            String blocked = "[TARGET UI BASELINE REQUIRED: this task asks to change behavior in "
+                    + baselinePackage + ". Before static artifact inspection, call observe_app with that exact package. "
+                    + "If its window is not visible, launch it, then observe again. Use that gate/UI state to choose and "
+                    + "verify the smallest next action.]";
+            if (echoCommand) addBubble("tool", "$ " + cmd);
+            addBubble("tool", blocked);
+            return blocked;
+        }        String cat = permissionCategory(cmd);
         boolean gated = cat != null;
         if (gated && autoApprove) {
             audit(cat, "ALLOW-AUTO", cmd);
@@ -4323,6 +4340,40 @@ public class MainActivity extends Activity {
                 + "printf '%s | %s | %s | %s | %s\\n' \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >> \"$TOOLS/agent-tools.md\"; }; ";
     }
 
+    /** Returns the named package that needs a current UI baseline, or empty when static inspection is appropriate. */
+    private String requiredTargetUiBaseline() {
+        String pkg = mentionedTargetPackage();
+        if (pkg.isEmpty() || !isBehaviorChangeTask(runTaskText)) return "";
+        return pkg;
+    }
+
+    private String mentionedTargetPackage() {
+        String text = runTaskText == null ? "" : runTaskText;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                "(?i)(?:^|[^A-Za-z0-9_.])@?((?:com|org|net|io|app)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+)")
+                .matcher(text);
+        return matcher.find() ? matcher.group(1).toLowerCase(Locale.US) : "";
+    }
+
+    private static boolean isBehaviorChangeTask(String task) {
+        String low = task == null ? "" : task.toLowerCase(Locale.US);
+        String[] words = {"fix", "repair", "patch", "modify", "mod", "crack", "unlock", "bypass",
+                "enable", "disable", "change", "make", "work", "function", "buat", "bikin",
+                "perbaiki", "ubah", "ganti", "rombak", "aktifkan", "nonaktifkan", "berfungsi",
+                "gunakan", "tanpa", "agar", "supaya"};
+        for (String word : words) if (low.contains(word)) return true;
+        return false;
+    }
+
+    /** Artifact inspection is valuable after a UI baseline, not a substitute for it. */
+    private static boolean isStaticArtifactInspection(String command) {
+        String low = command == null ? "" : command.toLowerCase(Locale.US);
+        return low.matches("(?s).*\\b(jadx|apktool|baksmali|smali|dexdump)\\b.*")
+                || low.matches("(?s).*\\baapt2?\\s+dump\\b.*")
+                || low.matches("(?s).*\\b(classes\\.dex|resources\\.arsc)\\b.*")
+                || low.matches("(?s).*\\bunzip\\b.*\\bapk\\b.*")
+                || low.matches("(?s).*\\bstrings\\b.*\\b(dex|apk|so)\\b.*");
+    }
     /** Fresh state probes are safe to repeat; mutation commands keep the existing replay guard. */
     private static boolean isFreshObservation(String cmd) {
         if (cmd == null) return false;
@@ -4661,6 +4712,7 @@ public class MainActivity extends Activity {
         runOutputs.clear();
         guardHits.clear();
         repeatGuardTotal = 0;
+        observedTargetUi.clear();
         analysisHits.clear();
         analysisWarned.clear();
         idleSteps = 0; idleWarned = 0; digSteps = 0; digWarned = 0;

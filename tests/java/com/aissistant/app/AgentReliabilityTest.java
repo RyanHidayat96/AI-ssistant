@@ -215,6 +215,16 @@ public final class AgentReliabilityTest {
         for (int i = 3; i < 5; i++) guard.observe("grep -rl \"derived-value\" sources", "");
         check(guard.reportOnly(), "empty literal searches stop before a representation loop");
         guard.reset();
+        for (int i = 0; i < 12; i++) {
+            note = guard.observe("grep gate /tmp/task/jadxout/sources/Target.java", "fact-" + i);
+        }
+        check(note.contains("read-only artifact checks"),
+                "artifact investigation requires an action branch before it drifts");
+        for (int i = 12; i < 24; i++) {
+            guard.observe("sed -n '1,80p' /tmp/task/jadxout/sources/Target.java", "fact-" + i);
+        }
+        check(guard.reportOnly(), "artifact investigation has a bounded analysis pass");
+        guard.reset();
         check(!guard.reportOnly(), "new run resets guard state");
     }
 
@@ -246,13 +256,15 @@ public final class AgentReliabilityTest {
         check(prompt.contains("agent_tool_list") && prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
                         && prompt.contains("agent_tool_register_shared"),
                 "prompt requires explicit shared and session tool scopes");
-        check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site"),
-                "prompt requires mapping derived artifact values to their source");
+        check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site")
+                        && prompt.contains("Artifact investigation must earn a next action"),
+                "prompt requires mapped artifact evidence to produce an action branch");
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
                 "prompt documents stable tool storage layouts");
         check(prompt.contains("UI primary: call observe_app")
-                        && prompt.contains("Raw fallback receives a short exclusive phase"),
+                        && prompt.contains("Raw fallback receives a short exclusive phase")
+                        && prompt.contains("behavior-changing tasks on a named installed app"),
                 "prompt keeps ordinary Android UI on target-window Accessibility");
         check(!low.contains("proven recipes on this phone") && !low.contains("unlocking a feature")
                         && !low.contains("vip camera") && !low.contains("tricky_store"),

@@ -17,7 +17,11 @@ final class RunGuard {
     private final Map<String, Integer> failureFamilies = new LinkedHashMap<String, Integer>();
     private static final Pattern PAGED_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+(?:,\\d+)?)p['\\\"]?");
     private static final Pattern LITERAL_SEARCH = Pattern.compile("\\b(?:grep|rg)\\b");
+    private static final int STATIC_ARTIFACT_NUDGE_AFTER = 12;
+    private static final int STATIC_ARTIFACT_REPORT_AFTER = 24;
     private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices, consecutiveEmptyLiteralSearches;
+    /** Cumulative read-only artifact work since last target interaction; prevents analysis becoming task avoidance. */
+    private int staticArtifactReads;
     private String microSliceFamily = "";
     private boolean exhausted;
 
@@ -29,6 +33,7 @@ final class RunGuard {
         consecutiveEvidenceReads = 0;
         consecutiveMicroSlices = 0;
         consecutiveEmptyLiteralSearches = 0;
+        staticArtifactReads = 0;
         microSliceFamily = "";
         exhausted = false;
     }
@@ -52,7 +57,22 @@ final class RunGuard {
         }
         consecutiveEmptyLiteralSearches = emptyLiteralSearch(key, result)
                 ? consecutiveEmptyLiteralSearches + 1 : 0;
+        if (isTargetInteraction(key)) staticArtifactReads = 0;
+        else if (staticArtifactRead(key)) staticArtifactReads++;
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
+        if (staticArtifactReads >= STATIC_ARTIFACT_REPORT_AFTER) {
+            exhausted = true;
+            return triage + "\n[RUNTIME: " + STATIC_ARTIFACT_REPORT_AFTER
+                    + " read-only artifact checks occurred without another target interaction. Stop inspection now. "
+                    + "State the verified gate, strongest source/runtime facts, and one bounded action or decisive test for resume. "
+                    + "No further tools this run.]";
+        }
+        if (staticArtifactReads == STATIC_ARTIFACT_NUDGE_AFTER) {
+            return triage + "\n[RUNTIME: " + STATIC_ARTIFACT_NUDGE_AFTER
+                    + " read-only artifact checks occurred. Do not keep inventorying or paging source. "
+                    + "Choose one current branch: a writable change location, runtime predicate, configuration condition, "
+                    + "or behavior test; execute the bounded action that resolves it.]";
+        }
         if (consecutiveEmptyLiteralSearches >= 5) {
             exhausted = true;
             return triage + "\n[RUNTIME: five literal searches produced no match. Stop searching the same representation. "
@@ -99,6 +119,26 @@ final class RunGuard {
                     + "command success alone does not verify the outcome.]";
         }
         return triage;
+    }
+
+    /** Read-only APK/DEX/native/source inspection is useful only until it yields an action branch. */
+    private static boolean staticArtifactRead(String action) {
+        if (action == null) return false;
+        String low = action.toLowerCase(Locale.US);
+        boolean artifact = low.contains(".apk") || low.contains(".dex") || low.contains(".smali")
+                || low.contains(".so") || low.contains("jadxout") || low.contains("apktool")
+                || low.contains("baksmali") || low.contains("/sources/");
+        if (!artifact) return false;
+        if (low.matches("(?s).*\\b(sed\\s+-i|tee|cp|mv|rm|chmod|chown|zipalign|apksigner|install|uninstall|apktool\\s+b|smali\\s+assemble)\\b.*")
+                || low.matches("(?s).*[^0-9]>{1,2}\\s*(?!/dev/null\\b).*")) return false;
+        return low.matches("(?s).*\\b(cat|grep|rg|sed|awk|head|tail|strings|readelf|objdump|xxd|hexdump|wc|find|ls|unzip|zipinfo|aapt|aapt2|jadx|baksmali)\\b.*");
+    }
+
+    /** An Accessibility interaction is a fresh behavior boundary for later artifact work. */
+    private static boolean isTargetInteraction(String action) {
+        if (action == null) return false;
+        String low = action.trim().toLowerCase(Locale.US);
+        return low.startsWith("act_app ") || low.startsWith("scroll_app ");
     }
 
     /** Detect sequential output paging while allowing a bounded source/text excerpt to continue normally. */
