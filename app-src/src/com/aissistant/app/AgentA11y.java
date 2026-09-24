@@ -101,7 +101,9 @@ public class AgentA11y extends AccessibilityService {
     static String observe(String packageName) {
         AgentA11y s = awaitLive(CONNECT_WAIT_MS);
         if (s == null) return unavailable();
+        boolean borderActive = false;
         try {
+            if (!empty(packageName)) borderActive = AgentBorder.beginAccessibilityOperation(s);
             Target target = waitForTarget(s, packageName, empty(packageName) ? 800L : 1200L);
             if (target == null) {
                 if (!empty(packageName)) {
@@ -137,6 +139,8 @@ public class AgentA11y extends AccessibilityService {
             return b.toString();
         } catch (Throwable t) {
             return "observe_app failed: " + t;
+        } finally {
+            if (borderActive) AgentBorder.endOperation();
         }
     }
 

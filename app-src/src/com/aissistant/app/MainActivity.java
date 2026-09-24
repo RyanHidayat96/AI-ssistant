@@ -4018,6 +4018,24 @@ public class MainActivity extends Activity {
         return note;
     }
 
+    private int bubbleCount() {
+        synchronized (lock) {
+            try { return cur == null ? 0 : bubblesOf(cur).length(); }
+            catch (Throwable ignored) { return 0; }
+        }
+    }
+
+    private static String toolCallAction(JSONObject call) {
+        if (call == null) return "tool_call <null>";
+        try {
+            JSONObject fn = call.optJSONObject("function");
+            String name = fn == null ? "tool_call" : fn.optString("name", "tool_call");
+            String args = fn == null ? "" : fn.optString("arguments", "");
+            return name + " " + args;
+        } catch (Throwable ignored) {
+            return "tool_call " + call.toString();
+        }
+    }
     private String dispatchTool(String name, JSONObject args) throws Exception {
         if (stop || reportOnly) return "[not executed: run stopped]";
         if ("run_shell".equals(name)) return runCommand(args.getString("command").trim());
@@ -4063,8 +4081,16 @@ public class MainActivity extends Activity {
             boolean brokeEarly = false;
             final int thinkBase = store.thinking();
             boolean escalate = false;
+            int silentTurns = 0;
+            final int maxAgentTurns = 120;
             // The full raw output is archived. Every new observation is executed fresh.
             for (int step = 1; !stop; step++) {
+                if (step > maxAgentTurns) {
+                    loopBroken = true;
+                    reportOnly = true;
+                    addBubble("note", "Runtime menghentikan loop: terlalu banyak model turn tanpa penyelesaian. Agent harus memberi laporan dari bukti yang sudah ada.");
+                }
+                int bubblesBeforeTurn = bubbleCount();
                 if (OverlayHub.stopRequested()) stop = true;   // STOP from the floating panel
                 if (stop) break;
                 final boolean finalTurn = reportOnly || loopBroken;
@@ -4168,11 +4194,12 @@ public class MainActivity extends Activity {
                     // run is stopped here. A dangling tool_call makes the NEXT request fail with HTTP 400:
                     // "An assistant message with 'tool_calls' must be followed by tool messages".
                     boolean aborted = false;
+                    int evidenceCallsThisTurn = 0;
                     for (int i = 0; i < reply.toolCalls.length(); i++) {
                         JSONObject call = reply.toolCalls.optJSONObject(i);
                         String callId = call == null ? ("call_" + i) : call.optString("id", "call_" + i);
                         String result;
-                        String cmd = "";
+                        String cmd = toolCallAction(call);
                         if (aborted || stop || loopBroken || reportOnly) {
                             aborted = true;
                             result = "[not executed: the app stopped this run before this call. Do not retry it; "
@@ -4183,11 +4210,19 @@ public class MainActivity extends Activity {
                                 JSONObject args = AgentTools.arguments(call);
                                 String name = call.getJSONObject("function").getString("name");
                                 cmd = "run_shell".equals(name) ? args.getString("command") : name + " " + args;
-                                result = dispatchTool(name, args);
+                                if ("read_evidence".equals(name) && ++evidenceCallsThisTurn > 4) {
+                                    loopBroken = true;
+                                    reportOnly = true;
+                                    result = "[EVIDENCE LOOP STOPPED: too many historical-evidence reads in one turn. "
+                                            + "No more evidence retrievals this run; synthesize current facts and choose one concrete next action.]";
+                                } else {
+                                    result = dispatchTool(name, args);
+                                }
                                 if (!"run_shell".equals(name)) addBubble("tool", result);
                             } catch (Exception invalid) {
                                 result = "[TOOL ERROR: " + invalid.getMessage()
                                         + "; no fallback shell execution. Correct the arguments or approach.]";
+                                addBubble("tool", result);
                             }
                             result += progressNudge(cmd, result);
                             if (thinkBase == 3 && looksLikeFailure(result)) escalate = true;
@@ -4202,6 +4237,13 @@ public class MainActivity extends Activity {
                         if (loopBroken || reportOnly || stop) aborted = true;
                     }
                     if (stop) break;
+                    int bubblesAfterTurn = bubbleCount();
+                    silentTurns = bubblesAfterTurn == bubblesBeforeTurn ? silentTurns + 1 : 0;
+                    if (silentTurns >= 3) {
+                        loopBroken = true;
+                        reportOnly = true;
+                        addBubble("note", "Runtime menghentikan loop sunyi: context internal bertambah, tapi tidak ada output baru di sesi. Agent harus membuat laporan dari bukti yang sudah ada.");
+                    }
                     continue;
                 }
 
@@ -4218,6 +4260,13 @@ public class MainActivity extends Activity {
                         synchronized (messages) { messages.add(tm); }
                     } catch (Throwable ignored) { }
                     if (loopBroken || reportOnly) break;
+                }
+                int bubblesAfterTurn = bubbleCount();
+                silentTurns = bubblesAfterTurn == bubblesBeforeTurn ? silentTurns + 1 : 0;
+                if (silentTurns >= 3) {
+                    loopBroken = true;
+                    reportOnly = true;
+                    addBubble("note", "Runtime menghentikan loop sunyi: context internal bertambah, tapi tidak ada output baru di sesi. Agent harus membuat laporan dari bukti yang sudah ada.");
                 }
             }
             if (!brokeEarly && !stop && loopBroken) {
@@ -4396,9 +4445,10 @@ public class MainActivity extends Activity {
         if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
                 && isPostBaselineArtifactDetour(cmd) && !isToolRuntimeFix(cmd)) {
             String blocked = "[UI GATE ROUTE REQUIRED: target UI already identifies the gate. "
-                    + "Package metadata, archive inventory, hashes, AAPT, and tool-runtime discovery add no next decision here. "
-                    + "If source is not decoded yet, run one direct decode/decompile from the known artifact; otherwise query a visible UI ID with line numbers. "
-                    + "Do not copy or inventory the archive as a separate detour.]";
+                    + "This command was treated as metadata/archive inventory, not as the direct source route. "
+                    + "Allowed next paths: run one direct decode/decompile into $WD (jadx -d, apktool d, or baksmali d), "
+                    + "or stage only the known base APK into $WD and immediately decode it. "
+                    + "Do not unzip/list/hash/inventory the whole archive as a separate detour; after decode, query a visible UI ID with line numbers.]";
             if (echoCommand) addBubble("tool", "$ " + cmd);
             addBubble("tool", blocked);
             return blocked;
@@ -4656,24 +4706,9 @@ public class MainActivity extends Activity {
         return low.matches("(?s).*\\bcat\\s+[^;|\\r\\n]*\\.(java|kt|smali)\\b.*");
     }
 
-    /** After a target gate is visible, these repeat metadata but cannot choose an implementation branch. */
+    /** After a target gate is visible, block metadata detours but allow bounded source materialization. */
     private static boolean isPostBaselineArtifactDetour(String command) {
-        if (command == null) return false;
-        String low = command.toLowerCase(Locale.US);
-        // A single direct transform may need to copy the known artifact into $WD first.  It is
-        // the shortest path to source and must not be mistaken for an inventory detour.
-        if (isDirectSourceTransformation(low)) return false;
-        if (low.matches("(?s).*\\b(aapt|aapt2|zipinfo|readelf|strings|sha(?:1|256)?sum|md5sum|file)\\b.*")) return true;
-        if (low.matches("(?s).*\\bunzip\\s+-l\\b.*")) return true;
-        if (low.matches("(?s).*\\bcp\\b.*\\.apk\\b.*")) return true;
-        return (low.contains("$tools") || low.contains("/tools/"))
-                && low.matches("(?s).*\\b(ls|find|cat)\\b.*");
-    }
-
-    /** A decoder/decompiler creates the source branch demanded by the UI gate; it is not inventory. */
-    private static boolean isDirectSourceTransformation(String low) {
-        return low.matches("(?s).*\\b(?:apktool(?:\\.jar)?|baksmali)\\b.*(?:^|\\s)d(?:\\s|$).*")
-                || low.matches("(?s).*\\bjadx(?:\\.cli\\.jadxcli)?\\b.*\\s-d(?:\\s|$).*");
+        return ToolPolicy.postBaselineArtifactDetour(command);
     }
 
     /** Returns the named package that needs a current UI baseline, or empty when static inspection is appropriate. */
@@ -6660,3 +6695,4 @@ public class MainActivity extends Activity {
         return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), g, null);
     }
 }
+

@@ -27,6 +27,7 @@ public final class AgentReliabilityTest {
         testAppLockHashing();
         testToolValidation();
         testToolAcquisitionGuardClassifiers();
+        testArtifactRoutePolicy();
         testMemory();
         testMessageBranch();
         testOverlayWindowMask();
@@ -89,6 +90,18 @@ public final class AgentReliabilityTest {
                 "tool inventory commands are recognized");
     }
 
+    private static void testArtifactRoutePolicy() {
+        check(!ToolPolicy.postBaselineArtifactDetour("jadx -d $WD/dec /data/app/pkg/base.apk"),
+                "direct jadx decode is allowed after UI baseline");
+        check(!ToolPolicy.postBaselineArtifactDetour("cd $WD && cp /data/app/pkg/base.apk base.apk"),
+                "staging the known base APK is allowed after UI baseline");
+        check(!ToolPolicy.postBaselineArtifactDetour("unzip -o base.apk classes.dex -d dex_out"),
+                "bounded DEX extraction is allowed for a following disassembler");
+        check(ToolPolicy.postBaselineArtifactDetour("unzip -o base.apk -d extracted && ls extracted"),
+                "whole archive extraction plus listing remains a post-baseline detour");
+        check(ToolPolicy.postBaselineArtifactDetour("aapt dump badging base.apk"),
+                "metadata inspection remains blocked once the UI gate is known");
+    }
     private static void testMemory() throws Exception {
         Path root = Files.createTempDirectory("aissistant-memory-");
         AgentMemory memory = new AgentMemory(root.toFile(), "session / test");
@@ -303,7 +316,8 @@ public final class AgentReliabilityTest {
                         && prompt.contains("resource id") && prompt.contains("line-number structural query")
                         && prompt.contains("do not repeat package metadata")
                         && prompt.contains("no decoded source yet")
-                        && prompt.contains("Do not separately copy, list, or inventory the archive first"),
+                        && prompt.contains("stage only the known base APK")
+                        && prompt.contains("Do not unzip, list, hash, or inventory the whole archive first"),
                 "prompt requires mapped artifact evidence to produce an action branch");
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
@@ -464,3 +478,4 @@ public final class AgentReliabilityTest {
         @Override public boolean isAlive() { return true; }
     }
 }
+

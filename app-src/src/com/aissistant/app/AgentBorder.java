@@ -59,9 +59,7 @@ public final class AgentBorder {
             H.post(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
-                // A launcher command often precedes observe_app. Do not yank the target back
-                // to chat before the baseline can be read; finishRun still returns the session.
-                if (!launchesTargetApp(c)) targetOperationCompleted = true;
+                targetOperationCompleted = true;
                 activeOperations++;
                 show(ac);
             } });
@@ -101,14 +99,17 @@ public final class AgentBorder {
         try {
             if (ctx == null || OverlayHub.agentIsolation()) return false;
             final Context ac = ctx.getApplicationContext();
-            H.post(new Runnable() { @Override public void run() {
+            final java.util.concurrent.atomic.AtomicBoolean done =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+            boolean completed = onMainAndWait(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
                 targetOperationCompleted = true;
                 activeOperations++;
                 show(ac);
-            } });
-            return true;
+                done.set(true);
+            } }, 700L);
+            return completed && done.get();
         } catch (Throwable ignored) { }
         return false;
     }
