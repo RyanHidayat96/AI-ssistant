@@ -30,7 +30,7 @@ final class Hygiene {
               + " rm -rf /data/local/tmp/re.frida.server 2>/dev/null;"
               + " find /data/local/tmp -maxdepth 3 -type f -name 'frida-server*' -delete 2>/dev/null;"
               + " find /data/local/tmp -maxdepth 3 -type f -name 'frida-inject*' -delete 2>/dev/null;"
-              + " for f in $(find " + MainActivity.toolsDir() + " -maxdepth 3 \\( -iname '*frida*' -o -iname '*gadget*' -o -iname '*objection*' \\) 2>/dev/null); do rm -rf \"$f\"; done;"
+              // tools the agent downloaded stay put: no binary removal from $TOOLS (user request);
               + " rm -f /data/local/tmp/.frida* 2>/dev/null;"
               + " if [ \"$(getenforce 2>/dev/null)\" = \"Permissive\" ]; then setenforce 1; echo 'selinux: dipulihkan ke Enforcing'; fi;"
               + " sleep 1; after=$(ps -A 2>/dev/null | grep -icE 'frida|re\\.frida|objection' || true);"

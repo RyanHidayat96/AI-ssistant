@@ -49,6 +49,11 @@ final class RunGuard {
         calls++;
         String key = action == null ? "" : action;
         String result = output == null ? "" : output;
+        // A quoting/regex slip is a tool-usage mistake, never task evidence: it must not park the run.
+        String lowResult = result.toLowerCase(java.util.Locale.ENGLISH);
+        boolean toolSlip = lowResult.contains("bad regex") || lowResult.contains("trailing backslash")
+                || lowResult.contains("syntax error") || lowResult.contains("unexpected eof")
+                || lowResult.contains("command not found");
         String previous = observations.put(key, result);
         repeated = result.equals(previous) ? repeated + 1 : 0;
         boolean evidenceRead = key.trim().startsWith("read_evidence");
@@ -70,7 +75,7 @@ final class RunGuard {
             helperFailureFamily = "";
         }
         else if (staticArtifactRead(key)) staticArtifactReads++;
-        if (!targetInteraction && transformedHelperWork(key)) {
+        if (!targetInteraction && transformedHelperWork(key) && !toolSlip) {
             consecutiveHelperAttempts++;
             String helperFamily = transformedHelperFailureFamily(key, result);
             if (!helperFamily.isEmpty()) {
@@ -86,7 +91,7 @@ final class RunGuard {
             helperFailureFamily = "";
         }
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
-        if (sameHelperFailureCount >= 3) {
+        if (sameHelperFailureCount >= 5) {
             exhausted = true;
             return triage + "\n[RUNTIME: the same transformed-artifact helper failure (" + helperFailureFamily
                     + ") occurred three times. Stop debugging the helper. Do not decode the whole table or "
@@ -100,7 +105,7 @@ final class RunGuard {
                     + "unless one tiny valid sample is proven first. Pivot now to the target UI/source anchor, "
                     + "candidate call-site, or runtime behavior test.]";
         }
-        if (consecutiveHelperAttempts >= 8) {
+        if (consecutiveHelperAttempts >= 20) {
             exhausted = true;
             return triage + "\n[RUNTIME: eight consecutive helper/decode attempts occurred without target interaction "
                     + "or a verified action branch. Stop helper work. State verified facts and the smallest direct "

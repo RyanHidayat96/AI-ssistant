@@ -371,4 +371,6 @@
     <string name="voice_audio_unavailable">Mikrofon tidak tersedia atau sedang dipakai app lain</string>
     <string name="voice_interrupted">Layanan suara berhenti. Coba lagi.</string>
     <string name="a11y_service_desc">Mengizinkan agent AI-ssistant membaca dan mengoperasikan UI app lain lewat Accessibility, tanpa screenshot.</string>
+    <string name="runtime_loop_report">Runtime menghentikan loop: terlalu banyak model turn tanpa penyelesaian. Agent harus memberi laporan dari bukti yang sudah ada.</string>
+    <string name="runtime_silent_loop_report">Runtime menghentikan loop sunyi: context internal bertambah, tapi tidak ada output baru di sesi. Agent harus membuat laporan dari bukti yang sudah ada.</string>
 </resources>

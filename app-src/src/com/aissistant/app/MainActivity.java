@@ -3684,7 +3684,7 @@ public class MainActivity extends Activity {
 
     // ================= hybrid hierarchical agent =================
     // parser lokal -> capability registry -> adapter -> executor (kondisi, bukan sleep) -> verifikasi.
-    // Model hanya dipanggil kalau perintahnya ambigu atau tidak ada adapter.
+    // The model is only called when the command is ambiguous or no adapter exists.
 
     // ================= device hygiene =================
     // The heavy tools (frida-server, hook servers) are fine DURING a task, but an anti-tamper SDK
@@ -3921,7 +3921,7 @@ public class MainActivity extends Activity {
             JSONObject m = new JSONObject();
             m.put("role", "user");
             m.put("content", "[jalur lokal (adapter app) sudah dicoba dan gagal: " + error
-                    + ". Jangan ulangi jalur itu; pakai otomasi UI generik, atau jelaskan blocker sebenarnya.]");
+                    + ". Do not repeat that route; use generic UI automation, or state the real blocker.]");
             synchronized (messages) { messages.add(m); }
         } catch (Throwable ignored) { }
     }
@@ -4065,7 +4065,9 @@ public class MainActivity extends Activity {
         String c = cmd.toLowerCase(java.util.Locale.ENGLISH);
         return c.contains("libz") || c.contains("/tools") || c.contains("ld_library_path")
                 || c.contains("ldd ") || c.contains("which ") || c.contains("linker")
-                || c.contains("cannot link") || c.contains("soname") || c.contains("/lib/");
+                || c.contains("cannot link") || c.contains("soname") || c.contains("/lib/")
+                || c.contains("download") || c.contains("github") || c.contains("curl")
+                || c.contains("wget") || c.contains("pkg install") || c.contains("pip install");
     }
 
     private void agentLoop() {
@@ -4088,7 +4090,7 @@ public class MainActivity extends Activity {
                 if (step > maxAgentTurns) {
                     loopBroken = true;
                     reportOnly = true;
-                    addBubble("note", "Runtime menghentikan loop: terlalu banyak model turn tanpa penyelesaian. Agent harus memberi laporan dari bukti yang sudah ada.");
+                    addBubble("note", uiText(R.string.runtime_loop_report));
                 }
                 int bubblesBeforeTurn = bubbleCount();
                 if (OverlayHub.stopRequested()) stop = true;   // STOP from the floating panel
@@ -4242,7 +4244,7 @@ public class MainActivity extends Activity {
                     if (silentTurns >= 3) {
                         loopBroken = true;
                         reportOnly = true;
-                        addBubble("note", "Runtime menghentikan loop sunyi: context internal bertambah, tapi tidak ada output baru di sesi. Agent harus membuat laporan dari bukti yang sudah ada.");
+                        addBubble("note", uiText(R.string.runtime_silent_loop_report));
                     }
                     continue;
                 }
@@ -4266,7 +4268,7 @@ public class MainActivity extends Activity {
                 if (silentTurns >= 3) {
                     loopBroken = true;
                     reportOnly = true;
-                    addBubble("note", "Runtime menghentikan loop sunyi: context internal bertambah, tapi tidak ada output baru di sesi. Agent harus membuat laporan dari bukti yang sudah ada.");
+                    addBubble("note", uiText(R.string.runtime_silent_loop_report));
                 }
             }
             if (!brokeEarly && !stop && loopBroken) {
