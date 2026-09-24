@@ -4199,6 +4199,7 @@ public class MainActivity extends Activity {
 
     /** `echoCommand` is false when the user-visible bubble already contains the exact command. */
     private String executeCommand(String cmd, boolean echoCommand) {
+        cmd = normalizeKnownToolInvocation(cmd);
         if (touchesForeignTmp(cmd)) {
             String blocked = "[WORKSPACE ISOLATION: this command points outside this session workspace ("
                     + workDir() + "). It was NOT executed. Use current-session artifacts or obtain a fresh, "
@@ -4352,6 +4353,19 @@ public class MainActivity extends Activity {
         if (!runOutputs.containsKey(cmd)) runOutputs.put(cmd, out);
         addBubble("tool", out);
         return out;
+    }
+
+    /** Make the known all-in-one JADX jar use its CLI entry point even when the model spells an absolute Java path. */
+    private static String normalizeKnownToolInvocation(String command) {
+        if (command == null || command.isEmpty()) return command == null ? "" : command;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                "(?i)([A-Za-z0-9_./$-]*java)\\s+(?:-jar\\s+([^\\s;]*jadx[^\\s;]*-all\\.jar)|-cp\\s+([^\\s;]*jadx[^\\s;]*-all\\.jar)\\s+jadx\\.cli\\.JadxCLI)")
+                .matcher(command);
+        if (!matcher.find()) return command;
+        String jar = matcher.group(2) == null ? matcher.group(3) : matcher.group(2);
+        String replacement = "mkdir -p \"$WD/tmp\"; export LD_LIBRARY_PATH=\"$TOOLS/tlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"; "
+                + matcher.group(1) + " -Djava.io.tmpdir=\"$WD/tmp\" -cp " + jar + " jadx.cli.JadxCLI";
+        return command.substring(0, matcher.start()) + replacement + command.substring(matcher.end());
     }
 
     /** Shell prologue that gives every agent command one strict location per tool scope. */
@@ -4518,6 +4532,9 @@ public class MainActivity extends Activity {
         }
         if (lo.contains("inaccessible or not found") || lo.contains("exit 127") || lo.contains("not found]")) {
             h.append("- a tool path is unavailable. This does not prove the task or hardware is impossible. First inspect the exact capability: built-ins, installed PATH, $TOOLS inventory, compatible ABI, and execution context. If a compatible tool is absent, acquire/setup it in $TOOLS or the matching user-space, run a harmless version/test, then resume. Ask the user only if compatible acquisition is proven to need an external requirement.\n");
+            if (cmd != null && cmd.toLowerCase(Locale.US).matches("(?s).*\\bjadx\\b.*")) {
+                h.append("- JADX is available as $TOOLS/lib/jadx-1.5.6-all.jar. Use `java -jar $TOOLS/lib/jadx-1.5.6-all.jar <args>`; runtime redirects it to the tested CLI entry point with compatible libraries and temp directory.\n");
+            }
         }
         if (lo.contains("no such device") || lo.contains("device not present") || lo.contains("camera unavailable")
                 || lo.contains("no camera") || lo.contains("hardware not supported") || lo.contains("operation not supported")) {
