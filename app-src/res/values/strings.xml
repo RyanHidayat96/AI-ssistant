@@ -255,6 +255,16 @@
     <string name="runtime_no_model">No model selected. Open ⋮ → Models &amp; providers, add provider and model, then select it.</string>
     <string name="runtime_limit_reached">Runtime paused a loop; agent is preparing status from available evidence.</string>
     <string name="runtime_image_retry">Model refused image — retried with file path only</string>
+    <string name="runtime_model_waiting">Waiting for model (max 20s) - step %1$d</string>
+    <string name="runtime_model_reconnecting">Model connection lost - retrying %1$d/%2$d</string>
+    <string name="runtime_model_reconnecting_detail">Model connection lost. Retrying %1$d/%2$d. Status: %3$s</string>
+    <string name="runtime_model_no_response">No response from model provider</string>
+    <string name="runtime_model_auth_failed">Provider auth failed - check API key</string>
+    <string name="runtime_model_quota">Provider quota or rate limit reached</string>
+    <string name="runtime_model_token_limit">Token/context limit reached - reduce context or start a new session</string>
+    <string name="runtime_model_connection_lost">Model connection lost or timed out - stopped after 20s</string>
+    <string name="runtime_model_error_status">Model stopped: %1$s</string>
+    <string name="runtime_model_error_detail">%1$s\nDetail: %2$s</string>
     <string name="runtime_provider_retry">Temporary provider connection issue — resumed automatically (%1$d retry)</string>
     <string name="runtime_loop_stopped">Command loop paused; agent is preparing a new path from available evidence</string>
     <string name="runtime_input_continuing">Your input has not been processed · continuing automatically</string>

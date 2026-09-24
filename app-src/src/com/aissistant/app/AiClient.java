@@ -27,6 +27,11 @@ final class AiClient {
         void onDelta(String content, String reasoning);
     }
 
+    /** provider transport status before any model text/tool reaches the UI */
+    interface StatusCb {
+        void onRetry(int retry, int maxRetries, String error, long waitMs);
+    }
+
     static final class Reply {
         boolean ok;
         String text = "";
@@ -76,6 +81,9 @@ final class AiClient {
 
     /** set by Stop, cleared when a new run starts - so a cancel is never lost to a race */
     private static volatile boolean cancelled;
+
+    /** User-visible provider wait window: if no model response arrives in 20 seconds, stop. */
+    private static final int MODEL_WAIT_TIMEOUT_MS = 20000;
 
     static void cancel() {
         cancelled = true;
@@ -166,6 +174,9 @@ final class AiClient {
             } catch (Throwable ignored) { }
             out.ok = true;
             return out;
+        } catch (java.net.SocketTimeoutException t) {
+            out.error = "model wait timed out after 20 seconds; no commands were executed";
+            return out;
         } catch (Throwable t) {
             out.error = String.valueOf(t);
             return out;
@@ -180,11 +191,23 @@ final class AiClient {
         return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, 4096, cb);
     }
 
+    static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
+                          JSONArray tools, double temperature, int thinking, int timeoutSec,
+                          StreamCb cb, StatusCb statusCb) {
+        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, 4096, cb, statusCb);
+    }
+
     /** same call with an explicit output cap - the local planner asks for ~512 */
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int thinking, int timeoutSec,
                           int maxTokens, StreamCb cb) {
-        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, maxTokens, cb, false);
+        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, maxTokens, cb, false, null);
+    }
+
+    static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
+                          JSONArray tools, double temperature, int thinking, int timeoutSec,
+                          int maxTokens, StreamCb cb, StatusCb statusCb) {
+        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, maxTokens, cb, false, statusCb);
     }
 
     /**
@@ -195,6 +218,12 @@ final class AiClient {
     static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
                           JSONArray tools, double temperature, int thinking, int timeoutSec,
                           int maxTokens, StreamCb cb, boolean minimal) {
+        return complete(baseUrl, apiKey, model, messages, tools, temperature, thinking, timeoutSec, maxTokens, cb, minimal, null);
+    }
+
+    static Reply complete(String baseUrl, String apiKey, String model, JSONArray messages,
+                          JSONArray tools, double temperature, int thinking, int timeoutSec,
+                          int maxTokens, StreamCb cb, boolean minimal, StatusCb statusCb) {
         final int maxRetries = 2;
         Reply last = null;
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
@@ -208,9 +237,11 @@ final class AiClient {
                     timeoutSec, maxTokens, cb, minimal);
             last.retries = attempt;
             if (!shouldRetryTransient(last) || attempt == maxRetries) return last;
+            long waitMs = 350L * (attempt + 1);
             android.util.Log.i("AIssistant", "temporary provider transport failure; retry "
                     + (attempt + 1) + "/" + maxRetries + ": " + last.error);
-            if (!waitForRetry(350L * (attempt + 1))) return last;
+            if (statusCb != null) statusCb.onRetry(attempt + 1, maxRetries, last.error, waitMs);
+            if (!waitForRetry(waitMs)) return last;
         }
         return last == null ? new Reply() : last;
     }
@@ -219,16 +250,15 @@ final class AiClient {
     static boolean shouldRetryTransient(Reply reply) {
         if (reply == null || reply.ok || reply.responseStarted || cancelled) return false;
         String error = reply.error == null ? "" : reply.error.toLowerCase(java.util.Locale.ENGLISH);
-        if (error.startsWith("http 408") || error.startsWith("http 429")
-                || error.startsWith("http 500") || error.startsWith("http 502")
-                || error.startsWith("http 503") || error.startsWith("http 504")) return true;
+        if (error.contains("sockettimeoutexception") || error.contains("timed out")
+                || error.contains("timeout") || error.contains("connection refused")
+                || error.contains("network is unreachable") || error.contains("unable to resolve host")) return false;
+        if (error.startsWith("http 429") || error.startsWith("http 500")
+                || error.startsWith("http 502") || error.startsWith("http 503")
+                || error.startsWith("http 504")) return true;
         return error.contains("unexpected end of stream")
                 || error.contains("connection reset")
                 || error.contains("broken pipe")
-                || error.contains("connection refused")
-                || error.contains("connection timed out")
-                || error.contains("network is unreachable")
-                || error.contains("unable to resolve host")
                 || error.contains("eofexception");
     }
 
@@ -292,8 +322,8 @@ final class AiClient {
             conn = (HttpURLConnection) new URL(url).openConnection();
             active = conn;
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(20000);
-            conn.setReadTimeout(Math.max(60, timeoutSec) * 1000);
+            conn.setConnectTimeout(MODEL_WAIT_TIMEOUT_MS);
+            conn.setReadTimeout(MODEL_WAIT_TIMEOUT_MS);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Accept", "text/event-stream, application/json");
@@ -490,6 +520,9 @@ final class AiClient {
                 out.promptTokens = usage.optInt("prompt_tokens", 0);
                 out.completionTokens = usage.optInt("completion_tokens", 0);
             }
+            return out;
+        } catch (java.net.SocketTimeoutException t) {
+            out.error = "model wait timed out after 20 seconds; no commands were executed";
             return out;
         } catch (Throwable t) {
             out.error = String.valueOf(t);

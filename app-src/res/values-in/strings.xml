@@ -255,6 +255,16 @@
     <string name="runtime_no_model">Belum ada model dipilih. Buka ⋮ → Model &amp; provider, tambahkan provider dan model, lalu pilih model.</string>
     <string name="runtime_limit_reached">Runtime menahan loop; agent menyiapkan status dari bukti yang ada.</string>
     <string name="runtime_image_retry">Model menolak gambar — dicoba ulang hanya dengan path file</string>
+    <string name="runtime_model_waiting">Menunggu model (maks 20 detik) - step %1$d</string>
+    <string name="runtime_model_reconnecting">Koneksi model terputus - retry %1$d/%2$d</string>
+    <string name="runtime_model_reconnecting_detail">Koneksi model terputus. Retry %1$d/%2$d. Status: %3$s</string>
+    <string name="runtime_model_no_response">Tidak ada respons dari provider model</string>
+    <string name="runtime_model_auth_failed">Auth provider gagal - cek API key</string>
+    <string name="runtime_model_quota">Kuota atau rate limit provider tercapai</string>
+    <string name="runtime_model_token_limit">Limit token/context tercapai - kurangi context atau mulai sesi baru</string>
+    <string name="runtime_model_connection_lost">Koneksi model terputus atau timeout - dihentikan setelah 20 detik</string>
+    <string name="runtime_model_error_status">Model berhenti: %1$s</string>
+    <string name="runtime_model_error_detail">%1$s\nDetail: %2$s</string>
     <string name="runtime_provider_retry">Koneksi provider sempat terganggu — dilanjutkan otomatis (%1$d kali coba ulang)</string>
     <string name="runtime_loop_stopped">Loop perintah ditahan; agent menyiapkan jalur baru dari bukti yang ada</string>
     <string name="runtime_input_continuing">Masukan Anda belum diproses · melanjutkan otomatis</string>

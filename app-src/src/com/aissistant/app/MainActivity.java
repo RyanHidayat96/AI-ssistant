@@ -3056,6 +3056,70 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void setRunStatus(final String status) {
+        if (status == null || status.trim().isEmpty()) return;
+        ui.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (busy && subtitle != null) subtitle.setText(status);
+                    AgentService.status(MainActivity.this, status);
+                } catch (Throwable ignored) { }
+            }
+        });
+    }
+
+    private AiClient.StatusCb modelStatusCallback(final int step) {
+        return new AiClient.StatusCb() {
+            @Override public void onRetry(int retry, int maxRetries, String error, long waitMs) {
+                String status = uiText(R.string.runtime_model_reconnecting, retry, maxRetries);
+                setRunStatus(status);
+                addBubble("note", uiText(R.string.runtime_model_reconnecting_detail,
+                        retry, maxRetries, classifyModelError(error)));
+            }
+        };
+    }
+
+    private String classifyModelError(String error) {
+        String e = error == null ? "" : error.trim();
+        String low = e.toLowerCase(Locale.ENGLISH);
+        if (low.isEmpty()) return uiText(R.string.runtime_model_no_response);
+        if (low.contains("stopped")) return uiText(R.string.chat_stopped);
+        if (low.startsWith("http 401") || low.startsWith("http 403")
+                || low.contains("unauthorized") || low.contains("invalid api key")
+                || low.contains("invalid_api_key") || low.contains("authentication")) {
+            return uiText(R.string.runtime_model_auth_failed);
+        }
+        if (low.startsWith("http 402") || low.startsWith("http 429")
+                || low.contains("quota") || low.contains("rate limit") || low.contains("rate_limit")
+                || low.contains("billing") || low.contains("credit") || low.contains("insufficient")) {
+            return uiText(R.string.runtime_model_quota);
+        }
+        if (low.startsWith("http 413") || low.contains("context length")
+                || low.contains("maximum context") || low.contains("token limit")
+                || low.contains("too many tokens") || low.contains("prompt too long")
+                || low.contains("max_tokens")) {
+            return uiText(R.string.runtime_model_token_limit);
+        }
+        if (low.contains("stream disconnected") || low.contains("timed out")
+                || low.contains("timeout") || low.contains("connection reset")
+                || low.contains("connection refused") || low.contains("broken pipe")
+                || low.contains("network is unreachable") || low.contains("unable to resolve host")
+                || low.contains("eofexception") || low.contains("unexpected end of stream")) {
+            return uiText(R.string.runtime_model_connection_lost);
+        }
+        return uiText(R.string.runtime_model_error_status, compactRuntimeError(e));
+    }
+
+    private String modelErrorDetail(String error) {
+        return uiText(R.string.runtime_model_error_detail, classifyModelError(error), compactRuntimeError(error));
+    }
+
+    private static String compactRuntimeError(String error) {
+        if (error == null) return "";
+        String e = error.replace('\n', ' ').replace('\r', ' ').replaceAll("\\s+", " ").trim();
+        return e.length() <= 220 ? e : e.substring(0, 220) + "...";
+    }
+
     private void refreshStatus() {
         updateSubtitle();
         setRootStatus(uiText(R.string.root_checking));
@@ -4323,18 +4387,22 @@ public class MainActivity extends Activity {
                 android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
                         + " payloadChars=" + msgs.toString().length());
                 final boolean hadImage = hasImagePart(msgs);
+                setRunStatus(uiText(R.string.runtime_model_waiting, stepNow));
+                final AiClient.StreamCb streamCb = new AiClient.StreamCb() {
+                    @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
+                };
+                final AiClient.StatusCb statusCb = modelStatusCallback(stepNow);
                 AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
-                        msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
-                            @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
-                        });
+                        msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300,
+                        streamCb, statusCb);
                 if (!reply.ok && hadImage && reply.error != null && reply.error.indexOf("400") >= 0) {
                     // this model cannot take image parts - fall back to the file path and retry once
                     stripImageParts(msgs);
                     addBubble("note", uiText(R.string.runtime_image_retry));
+                    setRunStatus(uiText(R.string.runtime_model_waiting, stepNow));
                     reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
-                            msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300, new AiClient.StreamCb() {
-                                @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
-                            });
+                            msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300,
+                            streamCb, statusCb);
                 }
                 streamReset();
                 if (stop) break;
@@ -4346,7 +4414,9 @@ public class MainActivity extends Activity {
                 }
                 if (!reply.ok) {
                     runErrored = true;
-                    addBubble("note", "\u26a0 " + reply.error);
+                    String status = classifyModelError(reply.error);
+                    setRunStatus(status);
+                    addBubble("note", modelErrorDetail(reply.error));
                     brokeEarly = true;
                     break;
                 }

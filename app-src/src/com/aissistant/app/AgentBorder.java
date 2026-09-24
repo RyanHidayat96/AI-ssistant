@@ -396,13 +396,19 @@ public final class AgentBorder {
                         + "  float roundBR = mix(1000000.0, u_br.z - length(fragCoord - u_br.xy), activeBR);\n"
                         + "  float roundBL = mix(1000000.0, u_bl.z - length(fragCoord - u_bl.xy), activeBL);\n"
                         + "  edge = min(edge, min(min(roundTL, roundTR), min(roundBR, roundBL)));\n"
-                        + "  float pulse = 0.5 + 0.5 * sin(u_time * 1.10);\n"
-                        + "  float solid = 1.80 * u_density;\n"
-                        + "  float fadeEnd = (18.0 + 8.0 * pulse) * u_density;\n"
+                        + "  float pulse = 0.5 + 0.5 * sin(u_time * 0.95);\n"
+                        + "  float solid = 1.25 * u_density;\n"
+                        + "  float fadeEnd = (30.0 + 6.0 * pulse) * u_density;\n"
                         + "  float fade = 1.0 - smoothstep(solid, fadeEnd, edge);\n"
-                        + "  float opacityFalloff = fade * fade;\n"
-                        + "  half3 blue = half3(0.086, 0.365, 1.00);\n"
-                        + "  half alpha = half(clamp(opacityFalloff * (0.78 + 0.12 * pulse), 0.0, 0.90));\n"
+                        + "  fade = pow(clamp(fade, 0.0, 1.0), 1.55);\n"
+                        + "  float innerGate = 1.0 - smoothstep(fadeEnd * 0.68, fadeEnd, edge);\n"
+                        + "  float outerGlow = 1.0 - smoothstep(0.0, 7.0 * u_density, edge);\n"
+                        + "  float wavePhase = edge / max(u_density, 0.001) * 0.92 - u_time * 5.25;\n"
+                        + "  float wave = 0.5 + 0.5 * sin(wavePhase);\n"
+                        + "  float crest = smoothstep(0.62, 1.0, wave) * innerGate * fade;\n"
+                        + "  float alphaF = outerGlow * 0.66 + fade * 0.52 + crest * 0.34;\n"
+                        + "  half3 blue = half3(0.020, 0.455, 1.00);\n"
+                        + "  half alpha = half(clamp(alphaF, 0.0, 0.94));\n"
                         + "  return half4(blue * alpha, alpha);\n"
                         + "}\n";
 
@@ -526,32 +532,55 @@ public final class AgentBorder {
         /** Static smooth fallback for API 26-32; keeps same safe, non-interactive overlay. */
         private static final class Fallback {
             private final Shader top, right, bottom, left;
+            private final float density;
             private final float inset;
 
             Fallback(float density, int w, int h) {
-                inset = 26f * density;
-                int outer = Color.argb(230, 22, 93, 255);
-                int middle = Color.argb(36, 22, 93, 255);
-                int clear = Color.argb(0, 22, 93, 255);
+                this.density = density;
+                inset = 36f * density;
+                int outer = Color.argb(240, 5, 116, 255);
+                int middle = Color.argb(72, 5, 116, 255);
+                int clear = Color.argb(0, 5, 116, 255);
                 top = new LinearGradient(0, 0, 0, inset,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .42f, 1f }, Shader.TileMode.CLAMP);
                 right = new LinearGradient(w, 0, w - inset, 0,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .42f, 1f }, Shader.TileMode.CLAMP);
                 bottom = new LinearGradient(0, h, 0, h - inset,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .42f, 1f }, Shader.TileMode.CLAMP);
                 left = new LinearGradient(0, 0, inset, 0,
-                        new int[] { outer, middle, clear }, new float[] { 0f, .56f, 1f }, Shader.TileMode.CLAMP);
+                        new int[] { outer, middle, clear }, new float[] { 0f, .42f, 1f }, Shader.TileMode.CLAMP);
             }
 
             void draw(Canvas c, Paint p, float seconds) {
-                float breath = .90f + .10f * (float) Math.sin(seconds * .44f);
+                float breath = .92f + .08f * (float) Math.sin(seconds * .72f);
                 p.setAlpha((int) (255f * breath));
                 p.setShader(top); c.drawRect(0, 0, c.getWidth(), inset, p);
                 p.setShader(right); c.drawRect(c.getWidth() - inset, 0, c.getWidth(), c.getHeight(), p);
                 p.setShader(bottom); c.drawRect(0, c.getHeight() - inset, c.getWidth(), c.getHeight(), p);
                 p.setShader(left); c.drawRect(0, 0, inset, c.getHeight(), p);
-                p.setAlpha(255);
                 p.setShader(null);
+                drawWaveStrips(c, p, seconds);
+                p.setAlpha(255);
+            }
+
+            private void drawWaveStrips(Canvas c, Paint p, float seconds) {
+                int w = c.getWidth();
+                int h = c.getHeight();
+                float step = 7.5f * density;
+                float strip = Math.max(1.0f, 1.35f * density);
+                int blue = Color.rgb(5, 116, 255);
+                p.setStyle(Paint.Style.FILL);
+                for (float d = 5f * density; d < inset * .72f; d += step) {
+                    float normalized = 1f - (d / inset);
+                    float wave = .5f + .5f * (float) Math.sin((d / density) * .95f - seconds * 5.4f);
+                    int alpha = (int) (72f * normalized * normalized * wave);
+                    if (alpha < 8) continue;
+                    p.setColor(Color.argb(alpha, Color.red(blue), Color.green(blue), Color.blue(blue)));
+                    c.drawRect(0, d, w, d + strip, p);
+                    c.drawRect(0, h - d - strip, w, h - d, p);
+                    c.drawRect(d, 0, d + strip, h, p);
+                    c.drawRect(w - d - strip, 0, w - d, h, p);
+                }
             }
         }
     }
