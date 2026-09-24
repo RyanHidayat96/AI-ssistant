@@ -191,8 +191,10 @@ public class MainActivity extends Activity {
     /** hard safety valve across every duplicate command in one run */
     private int repeatGuardTotal = 0;
     private static final int REPEAT_CACHE_AFTER = 2;
-    /** A cached exact result needs one redirect only; another identical request ends this run. */
-    private static final int REPEAT_SAME_COMMAND_STOP_AFTER = 1;
+    /** Codex-like: cache duplicate output, then steer; stop only after repeated ignored redirects. */
+    private static final int REPEAT_SAME_COMMAND_STOP_AFTER = 3;
+    /** App lifecycle reset probes are common during Android testing; tolerate more before stopping. */
+    private static final int REPEAT_LIFECYCLE_RESET_STOP_AFTER = 5;
     private static final int REPEAT_RUNAWAY_LIMIT = 12;
     private volatile boolean loopBroken = false;
     /** guard stopped the run: give the model one last turn to write the conclusion, with no tools */
@@ -4684,27 +4686,33 @@ public class MainActivity extends Activity {
             }
             String prev = runOutputs.get(cmd);
             String cached = prev == null ? "(no output)" : clip(prev);
+            boolean lifecycleReset = isTargetLifecycleReset(cmd);
+            int sameCommandStopAfter = lifecycleReset
+                    ? REPEAT_LIFECYCLE_RESET_STOP_AFTER
+                    : REPEAT_SAME_COMMAND_STOP_AFTER;
             if (repeatGuardTotal >= REPEAT_RUNAWAY_LIMIT) {
                 loopBroken = true;
+                reportOnly = true;
                 addBubble("note", uiText(R.string.runtime_runaway, repeatGuardTotal, firstLine(cmd)));
                 return "[RUNAWAY LOOP STOPPED: too many duplicate commands in this run. "
-                        + "Use cached output below, write a conclusion, and do not call this tool path again.\n"
+                        + "Use cached output below, write a concise status, and do not call this exact tool path again.\n"
                         + "CACHED OUTPUT:\n" + cached + "]";
             }
-            if (hits + 1 >= REPEAT_SAME_COMMAND_STOP_AFTER) {
+            if (hits + 1 >= sameCommandStopAfter) {
                 loopBroken = true;
                 reportOnly = true;
                 addBubble("note", uiText(R.string.runtime_runaway, hits + 1, firstLine(cmd)));
-                return "[RUNAWAY LOOP STOPPED: this exact command was blocked " + (hits + 1)
-                        + " times after its cached result. No further tools are allowed this run. "
+                return "[RUNAWAY LOOP STOPPED: this exact command ignored " + (hits + 1)
+                        + " cached redirects. No further tools are allowed this run. "
                         + "State verified facts, remaining uncertainty, and one materially different next action for a later run.\n"
                         + "CACHED OUTPUT:\n" + cached + "]";
             }
-            return "[DUPLICATE COMMAND BLOCKED: this exact command already ran " + REPEAT_CACHE_AFTER
+            String next = lifecycleReset
+                    ? "NEXT ACTION REQUIRED: continue without this reset. Use fresh evidence instead: observe UI, dump current window/activity, read logcat -d after launch, or inspect files. Do not ask the user to continue only because this reset was cached."
+                    : "NEXT ACTION REQUIRED: continue with a different observation, representation, or tool path. Do not ask the user to continue only because this duplicate was cached.";
+            return "[DUPLICATE COMMAND CACHED: this exact command already ran " + REPEAT_CACHE_AFTER
                     + " times. It was NOT executed again. Cached output follows.\nCACHED OUTPUT:\n"
-                    + cached
-                    + "\nNEXT ACTION REQUIRED: do not run this command again. Change the representation, capability, "
-                    + "or observation that can resolve the current hypothesis.]";
+                    + cached + "\n" + next + "]";
         }
         runCounts.put(cmd, n + 1);
         final String wd = workDir();
@@ -4927,6 +4935,16 @@ public class MainActivity extends Activity {
                 || low.matches("(?s).*\\b(classes\\.dex|resources\\.arsc)\\b.*")
                 || low.matches("(?s).*\\bunzip\\b.*\\bapk\\b.*")
                 || low.matches("(?s).*\\bstrings\\b.*\\b(dex|apk|so)\\b.*");
+    }
+    /** Android app lifecycle probes can repeat during test loops; cache them, but avoid early hard stop. */
+    private static boolean isTargetLifecycleReset(String cmd) {
+        if (cmd == null) return false;
+        String low = cmd.toLowerCase(Locale.ENGLISH);
+        boolean opensOrResetsApp = low.matches("(?s).*\\bam\\s+(force-stop|start)\\b.*")
+                || low.matches("(?s).*\\bmonkey\\s+.*-p\\s+[a-z0-9_.]+.*")
+                || low.matches("(?s).*\\blogcat\\s+-c\\b.*");
+        if (!opensOrResetsApp) return false;
+        return !low.matches("(?s).*\\b(input\\s+(tap|text|keyevent|swipe|roll|press)|sendevent|pm\\s+uninstall|rm|dd|mount|setprop|settings\\s+put|install|chmod|chown|reboot)\\b.*");
     }
     /** Fresh state probes are safe to repeat; mutation commands keep the existing replay guard. */
     private static boolean isFreshObservation(String cmd) {
