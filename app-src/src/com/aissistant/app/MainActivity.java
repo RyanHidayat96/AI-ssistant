@@ -4020,7 +4020,7 @@ public class MainActivity extends Activity {
         if ("observe_app".equals(name)) {
             String pkg = args.optString("package", "").trim().toLowerCase(Locale.US);
             String result = AgentA11y.observe(pkg);
-            if (pkg.equals(mentionedTargetPackage())) {
+            if (pkg.equals(mentionedTargetPackage()) && result != null && result.startsWith("TARGET WINDOW ")) {
                 observedTargetUi.add(pkg);
                 collectTargetUiAnchors(result);
             }

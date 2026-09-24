@@ -62,6 +62,8 @@ public final class AgentReliabilityTest {
         JSONObject observe = call("observe_app", "{\"package\":\"com.example.target\"}");
         check("com.example.target".equals(AgentTools.arguments(observe).getString("package")),
                 "target app observation arguments accepted");
+        check(tools.toString().contains("launches/waits briefly if needed"),
+                "observe_app advertises launch-and-wait baseline behavior");
         JSONObject act = call("act_app", "{\"node\":\"n1\",\"action\":\"click\"}");
         check("click".equals(AgentTools.arguments(act).getString("action")), "target app action arguments accepted");
         JSONObject scroll = call("scroll_app", "{\"node\":\"n2\",\"direction\":\"forward\",\"duration_ms\":10000}");
@@ -292,7 +294,8 @@ public final class AgentReliabilityTest {
                 "prompt documents stable tool storage layouts");
         check(prompt.contains("UI primary: call observe_app")
                         && prompt.contains("Raw fallback receives a short exclusive phase")
-                        && prompt.contains("behavior-changing tasks on a named installed app"),
+                        && prompt.contains("behavior-changing tasks on a named installed app")
+                        && prompt.contains("trust only a TARGET WINDOW result as the baseline"),
                 "prompt keeps ordinary Android UI on target-window Accessibility");
         check(!low.contains("proven recipes on this phone") && !low.contains("unlocking a feature")
                         && !low.contains("vip camera") && !low.contains("tricky_store"),

@@ -3,7 +3,6 @@ package com.aissistant.app;
 import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
 import android.content.Intent;
-import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
@@ -28,6 +27,8 @@ public class AgentA11y extends AccessibilityService {
     private static final Object LOCK = new Object();
     private static final int MAX_NODES = 180;
     private static final long CONNECT_WAIT_MS = 1600L;
+    private static final long OBSERVE_LAUNCH_WAIT_MS = 6500L;
+    private static final long ACTION_RELAUNCH_WAIT_MS = 4000L;
     private static final long RECOVERY_WAIT_MS = 3000L;
     private static final long RECOVERY_PAUSE_MS = 120L;
     private static long lastToken;
@@ -84,21 +85,36 @@ public class AgentA11y extends AccessibilityService {
         try { Thread.sleep(ms); } catch (InterruptedException ignored) { }
     }
 
+    private static Target waitForTarget(AgentA11y s, String packageName, long timeoutMs) {
+        if (s == null) return null;
+        Target target = s.target(packageName);
+        if (target != null || timeoutMs <= 0L) return target;
+        long deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs;
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            sleepQuiet(180L);
+            target = s.target(packageName);
+            if (target != null) return target;
+        }
+        return null;
+    }
+
     static String observe(String packageName) {
         AgentA11y s = awaitLive(CONNECT_WAIT_MS);
         if (s == null) return unavailable();
         try {
-            Target target = s.target(packageName);
+            Target target = waitForTarget(s, packageName, empty(packageName) ? 800L : 1200L);
             if (target == null) {
                 if (!empty(packageName)) {
                     relaunchTarget(s, packageName);
-                    sleepQuiet(1500);
-                    target = s.target(packageName);
+                    target = waitForTarget(s, packageName, OBSERVE_LAUNCH_WAIT_MS);
                 }
                 if (target == null) {
-                    return "[target app window not found: " + (empty(packageName) ? "foreground app" : packageName)
-                            + ". Relaunched once and it still is not visible. Do NOT poll focus in a loop: if the "
-                            + "target closes itself, switch to the static (jadx/apktool) or hook (frida) route.]";
+                    return "[target app Accessibility window not visible: "
+                            + (empty(packageName) ? "foreground app" : packageName)
+                            + ". Launch/wait was attempted but no target application window appeared within "
+                            + (OBSERVE_LAUNCH_WAIT_MS / 1000L)
+                            + "s. If shell focus shows the package, wait briefly and call observe_app once more; "
+                            + "if it keeps disappearing, switch to the static (jadx/apktool) or hook (frida) route.]";
                 }
             }
             long token = System.currentTimeMillis();
@@ -141,11 +157,10 @@ public class AgentA11y extends AccessibilityService {
             if (!empty(packageName) && !packageName.trim().equals(ref.packageName)) {
                 return "[act_app refused: node belongs to " + ref.packageName + ", not " + packageName + "]";
             }
-            Target target = s.target(ref.packageName);
+            Target target = waitForTarget(s, ref.packageName, 800L);
             if (target == null) {
                 relaunchTarget(s, ref.packageName);
-                sleepQuiet(1500);
-                Target again = s.target(ref.packageName);
+                Target again = waitForTarget(s, ref.packageName, ACTION_RELAUNCH_WAIT_MS);
                 if (again == null) return "[act_app error: " + ref.packageName + " closed its own window. Relaunched "
                         + "once; if it keeps closing, use the static/hook route instead of chasing focus.]";
                 target = again;
@@ -226,11 +241,10 @@ public class AgentA11y extends AccessibilityService {
             if (!empty(packageName) && !packageName.trim().equals(ref.packageName))
                 return "[scroll_app refused: node belongs to " + ref.packageName + ", not " + packageName + "]";
 
-            Target initialTarget = s.target(ref.packageName);
+            Target initialTarget = waitForTarget(s, ref.packageName, 800L);
             if (initialTarget == null) {
                 relaunchTarget(s, ref.packageName);
-                sleepQuiet(1500);
-                initialTarget = s.target(ref.packageName);
+                initialTarget = waitForTarget(s, ref.packageName, ACTION_RELAUNCH_WAIT_MS);
                 if (initialTarget == null) return "[scroll_app error: " + ref.packageName + " closed its own window. "
                         + "Relaunched once; if it keeps closing, use the static/hook route instead of chasing focus.]";
             }

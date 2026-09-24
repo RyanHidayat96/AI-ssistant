@@ -59,9 +59,9 @@ public final class AgentBorder {
             H.post(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
-                // Launching the target is itself an operation.  If no follow-up arrives, the
-                // quiet handoff returns the user to the session after the same three seconds.
-                targetOperationCompleted = true;
+                // A launcher command often precedes observe_app. Do not yank the target back
+                // to chat before the baseline can be read; finishRun still returns the session.
+                if (!launchesTargetApp(c)) targetOperationCompleted = true;
                 activeOperations++;
                 show(ac);
             } });
@@ -252,8 +252,7 @@ public final class AgentBorder {
             activeOperations = 0;
             drop();
             boolean returnToMain = targetAppSession;
-            if (returnToMain && targetOperationCompleted) scheduleReturnToMain();
-            else if (!targetOperationCompleted) targetAppSession = false;
+            if (returnToMain) scheduleReturnToMain();
         } });
     }
 

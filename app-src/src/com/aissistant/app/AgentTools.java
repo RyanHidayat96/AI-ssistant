@@ -57,7 +57,7 @@ final class AgentTools {
                 .put("required", new JSONArray()).put("additionalProperties", false);
         tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
                 .put("name", "observe_app")
-                .put("description", "Observe target app Accessibility window while excluding AI-ssistant and non-application overlay windows. Returns node ids for act_app.")
+                .put("description", "Observe target app Accessibility window while excluding AI-ssistant and non-application overlay windows. With an exact package, launches/waits briefly if needed. Returns TARGET WINDOW plus node ids for act_app.")
                 .put("parameters", params)));
     }
 
