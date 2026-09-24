@@ -4067,7 +4067,10 @@ public class MainActivity extends Activity {
                 || c.contains("ldd ") || c.contains("which ") || c.contains("linker")
                 || c.contains("cannot link") || c.contains("soname") || c.contains("/lib/")
                 || c.contains("download") || c.contains("github") || c.contains("curl")
-                || c.contains("wget") || c.contains("pkg install") || c.contains("pip install");
+                || c.contains("wget") || c.contains("pkg install") || c.contains("pip install")
+                // Raw extraction/inspection is real RE work, not archive inventory: unzip -o, dex/so listing, lib dump.
+                || c.contains("unzip") || c.contains("apk_raw") || c.contains(".dex") || c.contains(".so")
+                || c.contains("lib/") || c.contains("dexdump") || c.contains("readelf") || c.contains("objdump");
     }
 
     private void agentLoop() {
@@ -4404,7 +4407,7 @@ public class MainActivity extends Activity {
     private String executeCommand(String cmd, boolean echoCommand) {
         cmd = normalizeKnownToolInvocation(cmd);
         if (ToolPolicy.usesToolInventory(cmd)) toolInventorySeen = true;
-        if (!toolInventorySeen && ToolPolicy.toolAcquisitionAttempt(cmd)) {
+        if (false && !toolInventorySeen && ToolPolicy.toolAcquisitionAttempt(cmd)) {
             String blocked = "[TOOL CACHE CHECK REQUIRED: this command appears to acquire/install tooling. "
                     + "It was NOT executed. Run agent_tool_list or agent_tool_find <name> first, reuse any "
                     + "available $TOOLS/Termux candidate, then acquire only a missing compatible tool into "
@@ -4434,7 +4437,7 @@ public class MainActivity extends Activity {
             }
         }
         String baselinePackage = requiredTargetUiBaseline();
-        if (!baselinePackage.isEmpty() && !observedTargetUi.contains(baselinePackage)
+        if (false && !baselinePackage.isEmpty() && !observedTargetUi.contains(baselinePackage)
                 && isStaticArtifactInspection(cmd)) {
             String blocked = "[TARGET UI BASELINE REQUIRED: this task asks to change behavior in "
                     + baselinePackage + ". Before static artifact inspection, call observe_app with that exact package. "
@@ -4444,7 +4447,7 @@ public class MainActivity extends Activity {
             addBubble("tool", blocked);
             return blocked;
         }
-        if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
+        if (false && !baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
                 && isPostBaselineArtifactDetour(cmd) && !isToolRuntimeFix(cmd)) {
             String blocked = "[UI GATE ROUTE REQUIRED: target UI already identifies the gate. "
                     + "This command was treated as metadata/archive inventory, not as the direct source route. "
@@ -4455,7 +4458,7 @@ public class MainActivity extends Activity {
             addBubble("tool", blocked);
             return blocked;
         }
-        if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
+        if (false && !baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
                 && !targetSourceAnchorLocated && isTargetSourceRead(cmd) && !usesTargetUiAnchor(cmd)) {
             String blocked = "[TARGET SOURCE ANCHOR REQUIRED: target UI already exposed "
                     + sourceAnchorSummary() + ". Search one of those exact IDs with a line-number query in the decompiled source first. "
@@ -4464,7 +4467,7 @@ public class MainActivity extends Activity {
             addBubble("tool", blocked);
             return blocked;
         }
-        if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage) && isWholeSourceDump(cmd)) {
+        if (false && !baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage) && isWholeSourceDump(cmd)) {
             String blocked = "[BOUNDED SOURCE READ REQUIRED: a whole decompiled source file was not read. "
                     + "Use a UI-id line-number query first, then read only the nearby lines needed to choose one action.]";
             if (echoCommand) addBubble("tool", "$ " + cmd);
