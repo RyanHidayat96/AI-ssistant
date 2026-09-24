@@ -17,8 +17,8 @@ final class RunGuard {
     private final Map<String, Integer> failureFamilies = new LinkedHashMap<String, Integer>();
     private static final Pattern PAGED_SED = Pattern.compile("\\bsed\\s+-n\\s+['\\\"]?(\\d+(?:,\\d+)?)p['\\\"]?");
     private static final Pattern LITERAL_SEARCH = Pattern.compile("\\b(?:grep|rg)\\b");
-    private static final int STATIC_ARTIFACT_NUDGE_AFTER = 8;
-    private static final int STATIC_ARTIFACT_REPORT_AFTER = 16;
+    private static final int STATIC_ARTIFACT_NUDGE_AFTER = 20;
+    private static final int STATIC_ARTIFACT_REPORT_AFTER = 120;
     private int repeated, calls, consecutiveEvidenceReads, consecutiveMicroSlices, consecutiveEmptyLiteralSearches;
     /** Cumulative read-only artifact work since last target interaction; prevents analysis becoming task avoidance. */
     private int staticArtifactReads;
@@ -102,7 +102,7 @@ final class RunGuard {
             return triage + "\n[RUNTIME: three consecutive historical-evidence retrievals. Do not retrieve evidence of a retrieval or follow a reference chain. "
                     + "Use the source facts now, or make one fresh, task-relevant observation.]";
         }
-        if (repeated >= 12 || calls >= 240) {
+        if (repeated >= 2 || calls >= 400) {
             exhausted = true;
             return triage + "\n[RUNTIME: execution budget reached (" + calls + " calls, " + repeated
                     + " repeated observations). This is not proof the task is impossible. Report verified "

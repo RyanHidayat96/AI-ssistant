@@ -10,8 +10,9 @@ final class AgentSkills {
         + "blocker teknisnya dengan bukti.";
 
     private static final String[][] SKILLS = {
-        {"root-shell", "Shell root penuh di HP ini: kewenangan uid 0 untuk baca/tulis apa pun.",
-         "Semua perintah lewat run_shell (uid 0). Bisa: baca/tulis /data (prefs, db, files app), /system "
+        {"root-shell", "Shell root penuh (uid 0) + akses FS asli via nsenter. Kalau `ls /data/user/0` cuma nunjukin ~4 folder, itu namespace sempit: pakai `nsenter -t 1 -m -- <cmd>`.",
+         "MOUNT NAMESPACE (critical): the agent shell runs inside a narrow namespace. If /data/user/0 lists only a few folders (com.aissistant.app, gms, termux, xiaomi) then app data you are hunting is simply invisible there - that is NOT a missing app. Reach the real filesystem with: nsenter -t 1 -m -- <cmd> (works from this shell, uid 0). Never repeat the same path probe more than twice: switch namespace, path, or tool instead of looping.\n"
+         + "Semua perintah lewat run_shell (uid 0). Bisa: baca/tulis /data (prefs, db, files app), /system "
          + "(mount rw bila perlu), /data/adb (modul, tools), props, proses, service, mount namespace "
          + "(nsenter -t 1 -m -- untuk lihat FS asli), uid lain (su <uid> -c), dan migrasi data antar app. "
          + "Selalu cek identitas target dulu (pm path, dumpsys package, ls -Z), backup sebelum ubah, verifikasi "
