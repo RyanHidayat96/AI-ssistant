@@ -141,10 +141,12 @@ final class RunGuard {
                     + "may not occur verbatim in the source. Stop literal searching; map the derived value to its source "
                     + "location or make one structural/runtime observation.]";
         }
-        if (consecutiveMicroSlices >= 5) {
-            exhausted = true;
+        if (consecutiveMicroSlices == 5
+                || (consecutiveMicroSlices > 5 && consecutiveMicroSlices % 3 == 0)) {
             return triage + "\n[RUNTIME: five sequential paged slices from the same text pipeline produced fragments, not a decision. "
-                    + "Stop paging output. State the current hypothesis and facts, then on resume use one bounded coherent excerpt or a structural query tied to that hypothesis. No further tools this run.]";
+                    + "This is a representation pivot guard, not a stop. Do not final-report and do not ask the user to continue. "
+                    + "The next tool must switch representation or resolve the hypothesis directly: use smali/baksmali, a line-number structural query, "
+                    + "one coherent excerpt around the exact call-site, or a runtime/UI observation.]";
         }
         if (consecutiveMicroSlices == 3) {
             return triage + "\n[RUNTIME: three sequential paged slices from the same text pipeline. Do not keep paging output. "

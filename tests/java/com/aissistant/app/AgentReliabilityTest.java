@@ -234,7 +234,10 @@ public final class AgentReliabilityTest {
         for (int i = 3; i < 5; i++) {
             note = guard.observe("grep relevant file | sed -n '" + (i * 60 + 1) + "," + (i * 60 + 60) + "p'", "fragment");
         }
-        check(guard.reportOnly(), "micro-paged text stops before it becomes a long loop");
+        check(note.contains("representation pivot guard")
+                        && note.contains("do not ask the user to continue"),
+                "micro-paged text pivots representation instead of asking to continue");
+        check(!guard.reportOnly(), "micro-paged text stays runnable after the pivot guard");
         guard.reset();
         for (int i = 0; i < 3; i++) {
             note = guard.observe("grep -rl \"derived-value\" sources", "");
