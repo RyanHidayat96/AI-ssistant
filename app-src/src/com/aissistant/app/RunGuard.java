@@ -91,7 +91,7 @@ final class RunGuard {
             helperFailureFamily = "";
         }
         String triage = capabilityTriage(previous == null ? failureFamily(result) : null);
-        if (sameHelperFailureCount >= 5) {
+        if (sameHelperFailureCount >= 15) {
             exhausted = true;
             return triage + "\n[RUNTIME: the same transformed-artifact helper failure (" + helperFailureFamily
                     + ") occurred three times. Stop debugging the helper. Do not decode the whole table or "
@@ -105,7 +105,7 @@ final class RunGuard {
                     + "unless one tiny valid sample is proven first. Pivot now to the target UI/source anchor, "
                     + "candidate call-site, or runtime behavior test.]";
         }
-        if (consecutiveHelperAttempts >= 20) {
+        if (consecutiveHelperAttempts >= 1000) {
             exhausted = true;
             return triage + "\n[RUNTIME: eight consecutive helper/decode attempts occurred without target interaction "
                     + "or a verified action branch. Stop helper work. State verified facts and the smallest direct "
