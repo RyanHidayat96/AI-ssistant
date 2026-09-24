@@ -4232,6 +4232,15 @@ public class MainActivity extends Activity {
             return blocked;
         }
         if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
+                && isPostBaselineArtifactDetour(cmd)) {
+            String blocked = "[UI GATE ROUTE REQUIRED: target UI already identifies the gate. "
+                    + "Package metadata, archive inventory, hashes, AAPT, and tool-runtime discovery add no next decision here. "
+                    + "Run one source transformation, or if source exists query a visible UI ID with line numbers.]";
+            if (echoCommand) addBubble("tool", "$ " + cmd);
+            addBubble("tool", blocked);
+            return blocked;
+        }
+        if (!baselinePackage.isEmpty() && observedTargetUi.contains(baselinePackage)
                 && !targetSourceAnchorLocated && isTargetSourceRead(cmd) && !usesTargetUiAnchor(cmd)) {
             String blocked = "[TARGET SOURCE ANCHOR REQUIRED: target UI already exposed "
                     + sourceAnchorSummary() + ". Search one of those exact IDs with a line-number query in the decompiled source first. "
@@ -4355,9 +4364,14 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    /** Make the known all-in-one JADX jar use its CLI entry point even when the model spells an absolute Java path. */
+    /** Make known JADX invocations use the tested CLI entry point even when the model spells a bare or absolute Java path. */
     private static String normalizeKnownToolInvocation(String command) {
         if (command == null || command.isEmpty()) return command == null ? "" : command;
+        java.util.regex.Matcher bareJadx = java.util.regex.Pattern.compile("(?i)(^|[;&|]\\s*)jadx(?=\\s)").matcher(command);
+        if (bareJadx.find()) {
+            String replacement = bareJadx.group(1) + "java -jar $TOOLS/lib/jadx-1.5.6-all.jar";
+            command = command.substring(0, bareJadx.start()) + replacement + command.substring(bareJadx.end());
+        }
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
                 "(?i)([A-Za-z0-9_./$-]*java)\\s+(?:-jar\\s+([^\\s;]*jadx[^\\s;]*-all\\.jar)|-cp\\s+([^\\s;]*jadx[^\\s;]*-all\\.jar)\\s+jadx\\.cli\\.JadxCLI)")
                 .matcher(command);
@@ -4434,6 +4448,17 @@ public class MainActivity extends Activity {
         if (command == null) return false;
         String low = command.toLowerCase(Locale.US);
         return low.matches("(?s).*\\bcat\\s+[^;|\\r\\n]*\\.(java|kt|smali)\\b.*");
+    }
+
+    /** After a target gate is visible, these repeat metadata but cannot choose an implementation branch. */
+    private static boolean isPostBaselineArtifactDetour(String command) {
+        if (command == null) return false;
+        String low = command.toLowerCase(Locale.US);
+        if (low.matches("(?s).*\\b(aapt|aapt2|zipinfo|readelf|strings|sha(?:1|256)?sum|md5sum|file)\\b.*")) return true;
+        if (low.matches("(?s).*\\bunzip\\s+-l\\b.*")) return true;
+        if (low.matches("(?s).*\\bcp\\b.*\\.apk\\b.*")) return true;
+        return (low.contains("$tools") || low.contains("/tools/"))
+                && low.matches("(?s).*\\b(ls|find|cat)\\b.*");
     }
 
     /** Returns the named package that needs a current UI baseline, or empty when static inspection is appropriate. */

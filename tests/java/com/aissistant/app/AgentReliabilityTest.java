@@ -258,7 +258,8 @@ public final class AgentReliabilityTest {
                 "prompt requires explicit shared and session tool scopes");
         check(prompt.contains("TRANSFORMED ARTIFACTS") && prompt.contains("source location or call-site")
                         && prompt.contains("Artifact investigation must earn a next action")
-                        && prompt.contains("resource id") && prompt.contains("line-number structural query"),
+                        && prompt.contains("resource id") && prompt.contains("line-number structural query")
+                        && prompt.contains("do not repeat package metadata"),
                 "prompt requires mapped artifact evidence to produce an action branch");
         check(prompt.contains("$TOOLS/shared/<name>/<version>/<abi>")
                         && prompt.contains("$WD/.tools/<name>"),
