@@ -315,8 +315,6 @@
     <string name="busy_stopping">Stopping...</string>
     <string name="busy_working">Working...</string>
     <string name="busy_working_step">Working... step %1$d</string>
-    <string name="busy_model_waiting">Waiting... %1$d s</string>
-    <string name="busy_model_waiting_step">Waiting... step %1$d · %2$d s</string>
     <string name="chat_empty_description">Describe a goal. Root actions that need approval are reviewed by default.</string>
     <string name="chat_setup_description">Add a provider and model before chatting. API keys and image attachments are sent only to the provider you select.</string>
     <string name="suggest_system_title">System check</string>

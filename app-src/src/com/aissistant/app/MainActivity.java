@@ -129,9 +129,6 @@ public class MainActivity extends Activity {
     private int lastNavigationInset = -1;
     private TextView streamView;
     private View busyView;
-    private TextView busyText;
-    private volatile int modelWaitRemaining = -1;
-    private volatile int modelWaitToken = 0;
     private String pendingPath = null;
     private String pendingName = null;
     private boolean pickerOpen = false;
@@ -1890,12 +1887,6 @@ public class MainActivity extends Activity {
 
     private void renderTranscript() { renderTranscript(false); }
 
-    private static boolean isInternalGuideBubble(String text) {
-        String t = text == null ? "" : text.trim();
-        return t.startsWith("Skill yang bisa gua pakai:")
-                || (t.startsWith("I do whatever you ask:") && t.contains("Skill yang bisa gua pakai:"));
-    }
-
     private void renderTranscript(boolean forceBottom) {
         if (chatLog == null || cur == null) return;
         // rebuilding the transcript swaps every bubble view out; a selectable bubble would then grab the
@@ -1914,10 +1905,8 @@ public class MainActivity extends Activity {
             for (int i = 0; i < b.length(); i++) {
                 JSONObject o = b.optJSONObject(i);
                 if (o == null) continue;
-                String role = o.optString("role", "note");
-                String text = o.optString("text", "");
-                if ("tool".equals(role) && isInternalGuideBubble(text)) continue;
-                snap.add(new Object[]{role, text, o.optLong("t", 0), Integer.valueOf(i) });
+                snap.add(new Object[]{o.optString("role", "note"), o.optString("text", ""),
+                        o.optLong("t", 0), Integer.valueOf(i) });
             }
         }
 
@@ -1947,7 +1936,6 @@ public class MainActivity extends Activity {
             // never cut a tool run in half, or its collapse key would differ from the stored one
             while (renderFrom > 0 && "tool".equals((String) snap.get(renderFrom)[0])
                     && "tool".equals((String) snap.get(renderFrom - 1)[0])) renderFrom--;
-            if (renderFrom > 0 && ROLE_AGENT_PROGRESS.equals((String) snap.get(renderFrom - 1)[0])) renderFrom--;
             while (renderTo < total && "tool".equals((String) snap.get(renderTo - 1)[0])
                     && "tool".equals((String) snap.get(renderTo)[0])) renderTo++;
             String prev = null;
@@ -2147,14 +2135,14 @@ public class MainActivity extends Activity {
             n.setPadding(dp(4), dp(2), dp(4), dp(2));
             row.addView(n, new LinearLayout.LayoutParams(-2, -2));
         } else if (progress) {
-            TextView p = tv(14, FG, Typeface.NORMAL);
-            String shown = text.length() > 1400 ? "\u2026" + text.substring(text.length() - 1400) : text;
+            TextView p = tv(13, MUTED, Typeface.NORMAL);
+            String shown = text.length() > 1200 ? "\u2026" + text.substring(text.length() - 1200) : text;
             p.setText(markdownText(shown));
             p.setTextIsSelectable(true);
             p.setLineSpacing(dp(2), 1f);
-            p.setBackground(round(SURFACE, LINE, 18));
-            p.setPadding(dp(14), dp(10), dp(14), dp(10));
-            p.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.84f));
+            p.setBackground(round(TOOL_BG, LINE, 16));
+            p.setPadding(dp(12), dp(8), dp(12), dp(8));
+            p.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.86f));
             row.addView(p, new LinearLayout.LayoutParams(-2, -2));
         } else if (tool) {
             LinearLayout card = new LinearLayout(this);
@@ -2302,7 +2290,9 @@ public class MainActivity extends Activity {
                 if (isMarkdownTableStart(lines, n)) {
                     int end = n + 2;
                     while (end < lines.length && isMarkdownTableRow(lines[end])) end++;
+                    int start = out.length();
                     out.append(renderMarkdownTable(lines, n, end));
+                    styleCode(out, start, out.length());
                     n = end - 1;
                     if (n < lines.length - 1) out.append('\n');
                     continue;
@@ -2418,7 +2408,6 @@ public class MainActivity extends Activity {
             rows.add(cells);
         }
         if (rows.isEmpty() || cols == 0) return "";
-        if (cols == 2 && rows.size() > 1) return renderTwoColumnMarkdownTable(rows);
         int[] widths = new int[cols];
         for (String[] row : rows) {
             for (int i = 0; i < cols; i++) {
@@ -2445,26 +2434,6 @@ public class MainActivity extends Activity {
             }
         }
         return out.toString();
-    }
-
-    private static String renderTwoColumnMarkdownTable(java.util.List<String[]> rows) {
-        StringBuilder out = new StringBuilder();
-        for (int r = 1; r < rows.size(); r++) {
-            String[] row = rows.get(r);
-            String left = stripSimpleMarkdown(row.length > 0 ? row[0] : "");
-            String right = stripSimpleMarkdown(row.length > 1 ? row[1] : "");
-            if (left.isEmpty() && right.isEmpty()) continue;
-            if (out.length() > 0) out.append('\n');
-            out.append("\u2022 ").append(left);
-            if (!right.isEmpty()) out.append('\n').append("  ").append(right);
-        }
-        return out.toString();
-    }
-
-    private static String stripSimpleMarkdown(String text) {
-        String t = text == null ? "" : text.trim();
-        t = t.replace("**", "").replace("__", "").replace("`", "");
-        return t.replaceAll("\\s+", " ").trim();
     }
 
     private static String[] markdownTableCells(String line) {
@@ -2833,48 +2802,6 @@ public class MainActivity extends Activity {
             newMessagesChip.announceForAccessibility(uiText(R.string.a11y_new_messages_announcement, jumpCount));
         }
     }
-    private String currentBusyText() {
-        if (stop) return uiText(R.string.busy_stopping);
-        if (modelWaitRemaining > 0) {
-            return stepNow > 0
-                    ? uiText(R.string.busy_model_waiting_step, stepNow, modelWaitRemaining)
-                    : uiText(R.string.busy_model_waiting, modelWaitRemaining);
-        }
-        return stepNow > 0 ? uiText(R.string.busy_working_step, stepNow) : uiText(R.string.busy_working);
-    }
-
-    private void refreshBusyText() {
-        ui.post(new Runnable() {
-            @Override public void run() {
-                if (!busy) return;
-                String txt = currentBusyText();
-                if (busyText != null) busyText.setText(txt);
-                AgentService.status(MainActivity.this, txt);
-            }
-        });
-    }
-
-    private void beginModelWaitCountdown(final int seconds) {
-        final int token = ++modelWaitToken;
-        modelWaitRemaining = Math.max(1, seconds);
-        refreshBusyText();
-        ui.postDelayed(new Runnable() {
-            @Override public void run() {
-                if (token != modelWaitToken || !busy || stop) return;
-                if (modelWaitRemaining <= 1) return;
-                modelWaitRemaining--;
-                refreshBusyText();
-                ui.postDelayed(this, 1000);
-            }
-        }, 1000);
-    }
-
-    private void endModelWaitCountdown() {
-        modelWaitToken++;
-        modelWaitRemaining = -1;
-        refreshBusyText();
-    }
-
     private View busyRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
@@ -2883,8 +2810,11 @@ public class MainActivity extends Activity {
         rlp.setMargins(0, dp(14), 0, 0);
         row.setLayoutParams(rlp);
         TextView b = tv(13, MUTED, Typeface.NORMAL);
-        busyText = b;
-        b.setText(currentBusyText());
+        String txt;
+        if (stop) txt = uiText(R.string.busy_stopping);
+        else if (stepNow > 0) txt = uiText(R.string.busy_working_step, stepNow);
+        else txt = uiText(R.string.busy_working);
+        b.setText(txt);
         b.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         b.setBackground(round(SURFACE, LINE, 18));
         b.setPadding(dp(14), dp(10), dp(14), dp(10));
@@ -3116,18 +3046,20 @@ public class MainActivity extends Activity {
         if (reply == null || reply.ok || reply.responseStarted || stop) return false;
         String e = reply.error == null ? "" : reply.error.toLowerCase(Locale.ENGLISH);
         if (e.contains("stopped")) return false;
-        // Auto-switch is only for an unreachable/silent provider: no usable response from baseUrl
-        // inside the current wait window (5s when fallback is enabled). Provider/model rejections
-        // like invalid key, quota, rate limit, or HTTP 400 are surfaced to the user instead.
-        return e.contains("model wait timed out") || e.contains("sockettimeoutexception")
-                || e.contains("timed out") || e.contains("timeout")
-                || e.contains("no response")
+        return e.contains("timed out") || e.contains("timeout")
                 || e.contains("stream disconnected") || e.contains("connection reset")
-                || e.contains("connection refused") || e.contains("connectexception")
-                || e.contains("broken pipe") || e.contains("eofexception")
-                || e.contains("unexpected end of stream")
-                || e.contains("network is unreachable")
-                || e.contains("unable to resolve host") || e.contains("unknownhostexception");
+                || e.contains("connection refused") || e.contains("broken pipe")
+                || e.contains("network is unreachable") || e.contains("unable to resolve host")
+                || e.contains("eofexception") || e.contains("unexpected end of stream")
+                || e.contains("no response") || e.contains("no endpoint") || e.contains("no model")
+                || e.contains("quota") || e.contains("rate limit") || e.contains("rate_limit")
+                || e.contains("billing") || e.contains("credit") || e.contains("insufficient")
+                || e.contains("unauthorized") || e.contains("invalid api key")
+                || e.contains("invalid_api_key") || e.contains("authentication")
+                || e.startsWith("http 400") || e.startsWith("http 401") || e.startsWith("http 403")
+                || e.startsWith("http 404") || e.startsWith("http 408") || e.startsWith("http 409")
+                || e.startsWith("http 429") || e.startsWith("http 500") || e.startsWith("http 502")
+                || e.startsWith("http 503") || e.startsWith("http 504");
     }
 
     private void ensureActiveStillValid() {
@@ -3196,7 +3128,8 @@ public class MainActivity extends Activity {
     private AiClient.StatusCb modelStatusCallback(final int step) {
         return new AiClient.StatusCb() {
             @Override public void onRetry(int retry, int maxRetries, String error, long waitMs) {
-                beginModelWaitCountdown(Math.max(1, (int) Math.ceil(waitMs / 1000.0)));
+                String status = uiText(R.string.runtime_model_reconnecting, retry, maxRetries);
+                setRunStatus(status);
                 addBubble("note", uiText(R.string.runtime_model_reconnecting_detail,
                         retry, maxRetries, classifyModelError(error)));
             }
@@ -3827,7 +3760,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Stop when a run is in flight and the input is empty (tap = stop); Send whenever there is text to send */
+    /** ■ when a run is in flight and the input is empty (tap = stop); ↑ whenever there is text to send */
     private void refreshSendBtn() {
         if (sendBtn == null) return;
         boolean hasText = input != null && input.getText().toString().trim().length() > 0;
@@ -3898,7 +3831,6 @@ public class MainActivity extends Activity {
 
     /** live assistant bubble while the model streams; the stored bubble replaces it on render */
     private void streamUpdate(final String contentText, final String reasoning) {
-        endModelWaitCountdown();
         ui.post(new Runnable() {
             @Override public void run() {
                 if (chatLog == null) return;
@@ -4249,7 +4181,7 @@ public class MainActivity extends Activity {
             m.put("role", "user");
             m.put("content", "[LOCAL PREFLIGHT EVIDENCE for the current request. "
                     + "Use it as observed device evidence. Do not repeat the same broad diagnostic; "
-                    + "proceed with the narrowest next action and verify the user's requested outcome.]\n"
+                    + "continue with the narrowest next action and verify the user's requested outcome.]\n"
                     + (evidence == null ? "" : evidence));
             synchronized (messages) { messages.add(m); }
         } catch (Throwable ignored) { }
@@ -4399,38 +4331,6 @@ public class MainActivity extends Activity {
             return "tool_call " + call.toString();
         }
     }
-
-    private static String toolProgressSummary(JSONArray toolCalls) {
-        if (toolCalls == null || toolCalls.length() == 0) return "";
-        JSONObject call = toolCalls.optJSONObject(0);
-        if (call == null) return "Saya jalankan langkah teknis berikut.";
-        JSONObject fn = call.optJSONObject("function");
-        String name = fn == null ? "" : fn.optString("name", "");
-        JSONObject args = null;
-        try { args = AgentTools.arguments(call); } catch (Throwable ignored) { }
-        String text;
-        if ("run_shell".equals(name)) {
-            String cmd = args == null ? "" : args.optString("command", "").trim();
-            text = cmd.isEmpty() ? "Saya jalankan command untuk cek target."
-                    : "Saya jalankan command untuk cek target:\n`" + firstLine(cmd) + "`";
-        } else if ("observe_app".equals(name)) {
-            String pkg = args == null ? "" : args.optString("package", "");
-            text = pkg.isEmpty() ? "Saya observasi UI target." : "Saya observasi UI target `" + pkg + "`.";
-        } else if ("act_app".equals(name)) {
-            text = "Saya operasikan UI target dan cek hasilnya.";
-        } else if ("scroll_app".equals(name)) {
-            text = "Saya scroll UI target dan cek hasilnya.";
-        } else if ("read_reference".equals(name)) {
-            text = "Saya baca referensi yang relevan dulu.";
-        } else if ("list_skills".equals(name) || "read_skill".equals(name)) {
-            text = "Saya cek skill yang relevan dulu.";
-        } else {
-            text = "Saya jalankan langkah teknis berikut.";
-        }
-        int more = toolCalls.length() - 1;
-        if (more > 0) text += "\nAda " + more + " tool lain dalam batch ini.";
-        return text;
-    }
     private String dispatchTool(String name, JSONObject args) throws Exception {
         if (stop || reportOnly) return "[not executed: run stopped]";
         if ("run_shell".equals(name)) return runCommand(args.getString("command").trim());
@@ -4453,10 +4353,6 @@ public class MainActivity extends Activity {
         if ("save_checkpoint".equals(name)) return taskMemory.saveCheckpoint(args.getString("summary"));
         if ("read_evidence".equals(name)) return taskMemory.readEvidence(args.getString("id"), args.optInt("offset", 0));
         throw new IllegalArgumentException("Unknown tool");
-    }
-
-    private static boolean shouldMirrorToolBubble(String name) {
-        return "observe_app".equals(name) || "act_app".equals(name) || "scroll_app".equals(name);
     }
 
     private boolean isToolRuntimeFix(String cmd) {
@@ -4540,9 +4436,8 @@ public class MainActivity extends Activity {
                 }
                 if (finalTurn) msgs.put(new JSONObject().put("role", "user").put("content",
                         "[RUNTIME: execution stopped. Give one final report from recorded evidence. Do not emit tools, RUN commands, or claim unverified success. "
-                        + "Never ask the user to type continue, tap continue, approve routine work, or start a later run. "
-                        + "Do not write phrases like 'lanjut di run berikutnya', 'mau lanjut', 'kalau dilanjutkan', 'continue?', or equivalent. "
-                        + "If the guard stopped tools, write: verified facts; why progress paused; one concrete next action the agent will execute automatically when runtime resumes; no question mark. "
+                        + "Do not ask the user to type continue or request permission for routine next work. "
+                        + "State verified status, what runtime guard stopped, and the exact next action only as a task plan, not as a question. "
                         + "Use BLOCKED only when an unmet requirement is proven. "
                         + "For BLOCKED, start exactly with BLOCKED then list: requested outcome; missing required capability; observed evidence; meaningful approaches attempted and why they failed; what you prepared or can still prepare; minimum compatible item/spec/action required from user; and exact resume/verification step. "
                         + "Budget exhaustion alone is never a blocker.]"));
@@ -4569,21 +4464,20 @@ public class MainActivity extends Activity {
                     String modelId = requestModel.optString("id");
                     if (!modelId.isEmpty()) triedModelIds.add(modelId);
                     String modelLabel = shortLabel(requestModel);
-                    int modelWaitSeconds = fallbackModels ? 5 : 20;
+                    setRunStatus(uiText(R.string.runtime_model_waiting_seconds, fallbackModels ? 5 : 20, stepNow));
                     reply = AiClient.complete(provider.optString("baseUrl", ""), provider.optString("apiKey", ""),
                             requestModel.optString("name", ""), msgs, (finalTurn ? null : tools()),
-                            store.temperature() / 100.0, thinkNow, modelWaitSeconds, streamCb, statusCb);
-                    endModelWaitCountdown();
+                            store.temperature() / 100.0, thinkNow, fallbackModels ? 5 : 20, streamCb, statusCb);
                     if (!reply.ok && !imagePartsStripped && hasImagePart(msgs)
                             && reply.error != null && reply.error.indexOf("400") >= 0) {
                         // this model cannot take image parts - fall back to the file path and retry once
                         stripImageParts(msgs);
                         imagePartsStripped = true;
                         addBubble("note", uiText(R.string.runtime_image_retry));
+                        setRunStatus(uiText(R.string.runtime_model_waiting_seconds, fallbackModels ? 5 : 20, stepNow));
                         reply = AiClient.complete(provider.optString("baseUrl", ""), provider.optString("apiKey", ""),
                                 requestModel.optString("name", ""), msgs, (finalTurn ? null : tools()),
-                                store.temperature() / 100.0, thinkNow, modelWaitSeconds, streamCb, statusCb);
-                        endModelWaitCountdown();
+                                store.temperature() / 100.0, thinkNow, fallbackModels ? 5 : 20, streamCb, statusCb);
                     }
                     streamReset();
                     if (reply.ok) {
@@ -4597,7 +4491,6 @@ public class MainActivity extends Activity {
                         break;
                     }
                     addBubble("note", uiText(R.string.runtime_model_switching, modelLabel, shortLabel(nextModel)));
-                    beginModelWaitCountdown(fallbackModels ? 5 : 20);
                     requestModel = nextModel;
                 }
                 if (stop) break;
@@ -4628,7 +4521,6 @@ public class MainActivity extends Activity {
                 boolean hasToolCalls = !finalTurn && reply.toolCalls != null && reply.toolCalls.length() > 0;
                 List<String> cmds = extractCommands(reply.text);
                 String visible = stripFences(reply.text).trim();
-                if (!finalTurn && visible.isEmpty() && hasToolCalls) visible = toolProgressSummary(reply.toolCalls);
                 if (finalTurn && visible.isEmpty()) visible = "Eksekusi dihentikan. Hasil akhir belum terverifikasi; "
                         + "bukti langkah sebelumnya tersimpan di percakapan.";
                 if (!visible.isEmpty()) {
@@ -4679,7 +4571,7 @@ public class MainActivity extends Activity {
                                 } else {
                                     result = dispatchTool(name, args);
                                 }
-                                if (shouldMirrorToolBubble(name)) addBubble("tool", result);
+                                if (!"run_shell".equals(name)) addBubble("tool", result);
                             } catch (Exception invalid) {
                                 result = "[TOOL ERROR: " + invalid.getMessage()
                                         + "; no fallback shell execution. Correct the arguments or approach.]";
@@ -4948,7 +4840,7 @@ public class MainActivity extends Activity {
         }
         Integer seen = runCounts.get(cmd);
         int n = seen == null ? 0 : seen;
-        if (n >= REPEAT_CACHE_AFTER && !isVolatileFreshObservation(cmd)) {
+        if (n >= REPEAT_CACHE_AFTER && !isFreshObservation(cmd)) {
             Integer gh = guardHits.get(cmd);
             int hits = gh == null ? 0 : gh;
             guardHits.put(cmd, hits + 1);
@@ -4980,12 +4872,12 @@ public class MainActivity extends Activity {
                 addBubble("note", uiText(R.string.runtime_runaway, hits + 1, firstLine(cmd)));
                 return "[RUNAWAY LOOP STOPPED: this exact command ignored " + (hits + 1)
                         + " cached redirects. No further tools are allowed this run. "
-                        + "State verified facts, remaining uncertainty, and one materially different next action to execute automatically when runtime resumes.\n"
+                        + "State verified facts, remaining uncertainty, and one materially different next action for a later run.\n"
                         + "CACHED OUTPUT:\n" + cached + "]";
             }
             String next = lifecycleReset
-                    ? "NEXT ACTION REQUIRED: skip this reset and use fresh evidence instead: observe UI, dump current window/activity, read logcat -d after launch, or inspect files. Do not ask the user for permission only because this reset was cached."
-                    : "NEXT ACTION REQUIRED: use a different observation, representation, or tool path. Do not ask the user for permission only because this duplicate was cached.";
+                    ? "NEXT ACTION REQUIRED: continue without this reset. Use fresh evidence instead: observe UI, dump current window/activity, read logcat -d after launch, or inspect files. Do not ask the user to continue only because this reset was cached."
+                    : "NEXT ACTION REQUIRED: continue with a different observation, representation, or tool path. Do not ask the user to continue only because this duplicate was cached.";
             return "[DUPLICATE COMMAND CACHED: this exact command already ran " + REPEAT_CACHE_AFTER
                     + " times. It was NOT executed again. Cached output follows.\nCACHED OUTPUT:\n"
                     + cached + "\n" + next + "]";
@@ -5229,18 +5121,6 @@ public class MainActivity extends Activity {
         if (!opensOrResetsApp) return false;
         return !low.matches("(?s).*\\b(input\\s+(tap|text|keyevent|swipe|roll|press)|sendevent|pm\\s+uninstall|rm|dd|mount|setprop|settings\\s+put|install|chmod|chown|reboot)\\b.*");
     }
-    /** Exact duplicate static reads are cached; only live device-state probes may refresh. */
-    private static boolean isVolatileFreshObservation(String cmd) {
-        if (cmd == null) return false;
-        String low = cmd.trim().toLowerCase(Locale.ENGLISH);
-        if (low.isEmpty()) return false;
-        if (low.matches("(?s).*\\b(input|am\\s+start|monkey|settings\\s+put|svc|install|uninstall|rm|mv|cp|"
-                + "touch|mkdir|chmod|chown|kill|reboot|setprop|mount|tee|dd|truncate|sed\\s+-i)\\b.*")) return false;
-        if (low.matches("(?s).*[^0-9]>{1,2}\\s*(?!/dev/null\\b).*")) return false;
-        return low.matches("(?s).*\\b(dumpsys|cmd\\s+(activity|window|input|accessibility)|logcat\\s+-d|"
-                + "ps|pidof|getprop|pm\\s+(path|list|dump)|uiautomator\\s+dump|df|du)\\b.*");
-    }
-
     /** Fresh state probes are safe to repeat; mutation commands keep the existing replay guard. */
     private static boolean isFreshObservation(String cmd) {
         if (cmd == null) return false;
@@ -5404,7 +5284,7 @@ public class MainActivity extends Activity {
                 int head = 180;
                 int tail = 140;
                 sb.append(line, 0, head)
-                        .append(" ... [long line ").append(line.length()).append(" chars omitted] ... ")
+                        .append(" … [long line ").append(line.length()).append(" chars omitted] … ")
                         .append(line, line.length() - tail, line.length());
                 if (nl >= 0) sb.append('\n');
             } else if (!line.isEmpty() || nl >= 0) {
@@ -7225,4 +7105,3 @@ public class MainActivity extends Activity {
         return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), g, null);
     }
 }
-
