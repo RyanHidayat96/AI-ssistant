@@ -33,6 +33,7 @@ public final class AgentReliabilityTest {
         testOverlayWindowMask();
         testOverlayIsolationState();
         testTargetAppHandoffPolicy();
+        testTranscriptProgressRenderingPolicy();
         testRunGuard();
         testCapabilityTriage();
         testPromptIsGeneral();
@@ -232,6 +233,31 @@ public final class AgentReliabilityTest {
                         && main.contains("mInputMethodTarget") && !main.contains("grep -m1 -E 'mCurrentFocus|mFocusedApp"),
                 "raw global input checks full focus/IME target state before execution");
     }
+    private static void testTranscriptProgressRenderingPolicy() throws Exception {
+        String main = Files.readString(Path.of("app-src/src/com/aissistant/app/MainActivity.java"));
+        check(main.contains("isInternalGuideBubble") && main.contains("if (\"tool\".equals(role) && isInternalGuideBubble(text)) continue"),
+                "internal skill-guide tool output is hidden from the user transcript");
+        check(main.contains("ROLE_AGENT_PROGRESS.equals((String) snap.get(renderFrom - 1)[0])"),
+                "agent progress bubble remains visible before a long collapsed command run");
+        check(main.contains("shouldMirrorToolBubble(name)") && main.contains("observe_app")
+                        && !main.contains("if (!\"run_shell\".equals(name)) addBubble(\"tool\", result);"),
+                "only user-relevant target-app tools mirror as visible tool bubbles");
+        check(main.contains("toolProgressSummary(reply.toolCalls)")
+                        && main.contains("Saya jalankan command untuk cek target")
+                        && main.contains("Ada ") && main.contains("tool lain dalam batch ini"),
+                "tool-only turns still show a concise progress bubble instead of silent command spam");
+        check(main.contains("isVolatileFreshObservation(cmd)")
+                        && main.contains("NEXT ACTION REQUIRED: use a different observation")
+                        && !main.contains("NEXT ACTION REQUIRED: continue with"),
+                "static duplicate commands are cached and redirected without telling the user to continue");
+        check(main.contains("Never ask the user to type continue")
+                        && main.contains("Do not write phrases like 'lanjut di run berikutnya'")
+                        && main.contains("one concrete next action the agent will execute automatically"),
+                "final report instruction forbids asking for continue after routine guard stops");
+        check(main.contains("renderTwoColumnMarkdownTable") && main.contains("stripSimpleMarkdown"),
+                "two-column markdown tables render as mobile-readable lists");
+    }
+
     private static void testRunGuard() {
         RunGuard guard = new RunGuard();
         String note = "";
