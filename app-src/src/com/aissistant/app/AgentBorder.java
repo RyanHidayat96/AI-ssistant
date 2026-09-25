@@ -30,14 +30,13 @@ import android.view.WindowInsets;
 public final class AgentBorder {
 
     private static final Handler H = new Handler(Looper.getMainLooper());
-    private static final long FOLLOWUP_TARGET_IDLE_RETURN_MS = 3000L;
     /** A launch returns before Activity.onPause on many devices; retain its edge through that handoff. */
     private static final long LAUNCH_BORDER_SETTLE_MS = 900L;
 
     private static View view;
     private static WindowManager wm;
     private static Pulse pulse;
-    /** Idle handoff returns chat only after a completed target-app action is quiet. */
+    /** Obsolete queued handoff holder; kept only so older queued callbacks can be cancelled safely. */
     private static Runnable pendingReturnToMain;
     /** Number of target-app actions in flight. Main-thread only. */
     private static int activeOperations;
@@ -121,11 +120,7 @@ public final class AgentBorder {
         return true;
     }
 
-    /** End one target-app action and remove only its visual indicator.
-     *
-     * Every completed target action, including a launch, gets three seconds for a follow-up
-     * action before the session page returns.
-     */
+    /** End one target-app action and remove only its visual indicator. */
     public static void endOperation() {
         H.post(new Runnable() { @Override public void run() { endOperationOnMain(); } });
     }
@@ -144,7 +139,6 @@ public final class AgentBorder {
         if (activeOperations > 0) activeOperations--;
         if (activeOperations == 0) {
             drop();
-            if (targetOperationCompleted) scheduleReturnToMain();
         }
     }
 
@@ -189,6 +183,12 @@ public final class AgentBorder {
                 || c.matches("(?s).*\\b(sendevent|uinput)\\b.*")
                 || c.matches("(?s).*\\bservice\\s+call\\s+input\\b.*")
                 || c.matches("(?s).*\\bcmd\\s+(activity|input)\\b.*");
+    }
+
+    /** Public classifier for the run loop: true means keep the target app in front for this command. */
+    public static boolean drivesTargetAppCommand(String cmd) {
+        String c = cmd == null ? "" : cmd.toLowerCase(java.util.Locale.ENGLISH);
+        return drivesTargetApp(c);
     }
 
     /** Starting a target immediately is necessary; the first input/gesture waits after launch. */
@@ -252,35 +252,30 @@ public final class AgentBorder {
         H.post(new Runnable() { @Override public void run() {
             activeOperations = 0;
             drop();
-            boolean returnToMain = targetAppSession;
-            if (returnToMain) scheduleReturnToMain();
+            returnToSessionIfIdleOnMain();
         } });
     }
 
-    /** Return to the session only after a completed target action is quiet for three seconds. */
-    private static void scheduleReturnToMain() {
+    /**
+     * The agent has switched from operating a target app to thinking/reporting/ordinary work.
+     * Return the session page immediately when no target action is in flight.
+     */
+    public static void handoffToSessionIfIdle() {
+        H.post(new Runnable() { @Override public void run() { returnToSessionIfIdleOnMain(); } });
+    }
+
+    private static void returnToSessionIfIdleOnMain() {
         cancelQueuedReturnToMain();
+        if (activeOperations != 0 || !targetAppSession) return;
         if (MainActivity.appVisible) {
             targetAppSession = false;
             targetOperationCompleted = false;
             return;
         }
-        pendingReturnToMain = new Runnable() {
-            @Override public void run() {
-                pendingReturnToMain = null;
-                if (activeOperations != 0) return;
-                if (MainActivity.appVisible) {
-                    targetAppSession = false;
-                    targetOperationCompleted = false;
-                    return;
-                }
-                targetAppSession = false;
-                targetOperationCompleted = false;
-                MainActivity host = MainActivity.instance;
-                if (host != null) host.returnToMainAfterTargetOperation();
-            }
-        };
-        H.postDelayed(pendingReturnToMain, FOLLOWUP_TARGET_IDLE_RETURN_MS);
+        targetAppSession = false;
+        targetOperationCompleted = false;
+        MainActivity host = MainActivity.instance;
+        if (host != null) host.returnToMainAfterTargetOperation();
     }
 
     /** Any next target action wins over queued idle handoff. */

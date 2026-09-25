@@ -4481,6 +4481,7 @@ public class MainActivity extends Activity {
                         + "Use BLOCKED only when an unmet requirement is proven. "
                         + "For BLOCKED, start exactly with BLOCKED then list: requested outcome; missing required capability; observed evidence; meaningful approaches attempted and why they failed; what you prepared or can still prepare; minimum compatible item/spec/action required from user; and exact resume/verification step. "
                         + "Budget exhaustion alone is never a blocker.]"));
+                AgentBorder.handoffToSessionIfIdle();
                 android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
                         + " payloadChars=" + msgs.toString().length());
                 final boolean fallbackModels = store.modelFallbackEnabled();
@@ -4931,37 +4932,44 @@ public class MainActivity extends Activity {
         String exec = toolWorkspaceBootstrap(wd) + cmd;
         boolean rawInput = needsRawInputPassThrough(cmd);
         boolean rawVisual = needsRawVisualIsolation(cmd);
+        boolean targetScreenCommand = AgentBorder.drivesTargetAppCommand(cmd);
+        if (!targetScreenCommand) AgentBorder.handoffToSessionIfIdle();
         if (rawInput || rawVisual) OverlayView.releaseFocus();
         String raw;
         // Accessibility actions already target another app's node tree and AgentWindowFilter
         // removes this app from diagnostics. Ordinary shell work must never disturb the user's
         // panel. Only global coordinate input or visual capture gets a short exclusive phase.
-        boolean isolated = true;
-        if (rawVisual) {
-            isolated = OverlayView.ensureAgentIsolation(this) && AgentBorder.suppressForAgentRun();
-        } else if (rawInput) {
-            isolated = OverlayView.beginRawInputPassThrough(this);
-        }
-        if (!isolated) {
-            // Fail closed only for a raw UI phase. The panel must not intercept global input or
-            // leak into an agent-owned screen capture.
-            raw = "[AGENT UI ISOLATION NOT READY: command was not executed. "
-                    + "Wait for the interface to settle, then retry once.]";
-            if (rawVisual) {
-                try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
-            } else if (rawInput) {
-                try { OverlayView.finishRawInputPassThrough(); } catch (Throwable ignored) { }
-            }
+        if (rawInput && rawInputWouldHitSelf(cmd)) {
+            raw = "[RAW INPUT REFUSED: AI-ssistant is the current foreground window. "
+                    + "Relaunch or observe the target app first, and use act_app set_text for text entry when an editable node exists.]";
         } else {
-            boolean borderOperation = AgentBorder.beginOperation(this, cmd);
-            try {
-                raw = RootShell.run(exec, store.timeoutSec());
-            } finally {
-                if (borderOperation) AgentBorder.endOperationAfterCommand(cmd);
+            boolean isolated = true;
+            if (rawVisual) {
+                isolated = OverlayView.ensureAgentIsolation(this) && AgentBorder.suppressForAgentRun();
+            } else if (rawInput) {
+                isolated = OverlayView.beginRawInputPassThrough(this);
+            }
+            if (!isolated) {
+                // Fail closed only for a raw UI phase. The panel must not intercept global input or
+                // leak into an agent-owned screen capture.
+                raw = "[AGENT UI ISOLATION NOT READY: command was not executed. "
+                        + "Wait for the interface to settle, then retry once.]";
                 if (rawVisual) {
                     try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
                 } else if (rawInput) {
                     try { OverlayView.finishRawInputPassThrough(); } catch (Throwable ignored) { }
+                }
+            } else {
+                boolean borderOperation = AgentBorder.beginOperation(this, cmd);
+                try {
+                    raw = RootShell.run(exec, store.timeoutSec());
+                } finally {
+                    if (borderOperation) AgentBorder.endOperationAfterCommand(cmd);
+                    if (rawVisual) {
+                        try { OverlayView.finishAgentObservation(this); } catch (Throwable ignored) { }
+                    } else if (rawInput) {
+                        try { OverlayView.finishRawInputPassThrough(); } catch (Throwable ignored) { }
+                    }
                 }
             }
         }
@@ -5186,6 +5194,18 @@ public class MainActivity extends Activity {
                 || c.matches("(?s).*\\bmonkey\\b.*");
     }
 
+    private boolean rawInputWouldHitSelf(String cmd) {
+        String c = cmd == null ? "" : cmd.toLowerCase(Locale.ENGLISH);
+        if (c.matches("(?s).*\\b(am\\s+start|cmd\\s+activity|monkey)\\b.*")) return false;
+        if (!c.matches("(?s).*\\binput\\s+(tap|text|keyevent|swipe|roll|press)\\b.*")
+                && !c.matches("(?s).*\\bcmd\\s+input\\b.*")
+                && !c.matches("(?s).*\\bservice\\s+call\\s+input\\b.*")
+                && !c.matches("(?s).*\\b(sendevent|uinput)\\b.*")) return false;
+        try {
+            String focus = RootShell.run("dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp|mFocusedWindow|mInputMethodTarget|mLastInputMethodTarget'", 6);
+            return focus != null && focus.contains(getPackageName());
+        } catch (Throwable ignored) { return false; }
+    }
     /** Raw captures can reveal pixels from app-owned windows, so detach only for their duration. */
     private static boolean needsRawVisualIsolation(String cmd) {
         if (cmd == null) return false;

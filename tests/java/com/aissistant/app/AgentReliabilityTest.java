@@ -32,6 +32,7 @@ public final class AgentReliabilityTest {
         testMessageBranch();
         testOverlayWindowMask();
         testOverlayIsolationState();
+        testTargetAppHandoffPolicy();
         testRunGuard();
         testCapabilityTriage();
         testPromptIsGeneral();
@@ -212,6 +213,17 @@ public final class AgentReliabilityTest {
                 "terminal run cleanup restores normal overlay interaction");
     }
 
+    private static void testTargetAppHandoffPolicy() throws Exception {
+        String border = Files.readString(Path.of("app-src/src/com/aissistant/app/AgentBorder.java"));
+        String main = Files.readString(Path.of("app-src/src/com/aissistant/app/MainActivity.java"));
+        check(!border.contains("FOLLOWUP_TARGET_IDLE_RETURN_MS") && !border.contains("postDelayed(pendingReturnToMain"),
+                "target-app handoff is state-driven, not a fixed idle timer");
+        check(border.contains("handoffToSessionIfIdle") && main.contains("AgentBorder.handoffToSessionIfIdle();"),
+                "agent returns to session on thinking/non-target work boundaries");
+        check(main.contains("RAW INPUT REFUSED") && main.contains("rawInputWouldHitSelf")
+                        && main.contains("mInputMethodTarget") && !main.contains("grep -m1 -E 'mCurrentFocus|mFocusedApp"),
+                "raw global input checks full focus/IME target state before execution");
+    }
     private static void testRunGuard() {
         RunGuard guard = new RunGuard();
         String note = "";
