@@ -309,6 +309,19 @@ public final class AgentReliabilityTest {
                 "prompt labels generic candidates and volatile probe");
         check(prompt.contains("CAPABILITY GAP RESOLUTION") && prompt.contains("minimum compatible item/spec/action"),
                 "prompt requires evidence-backed external requirements");
+        check(prompt.contains("ASTRA-STYLE EXECUTION PROFILE")
+                        && prompt.contains("Task intake")
+                        && prompt.contains("success signal")
+                        && prompt.contains("one decisive next action")
+                        && prompt.contains("Tool discipline")
+                        && prompt.contains("Research discipline")
+                        && prompt.contains("Failure discipline")
+                        && prompt.contains("Context discipline")
+                        && prompt.contains("Do not ask for continue")
+                        && prompt.contains("pivot to a different representation")
+                        && prompt.contains("route ledger")
+                        && prompt.contains("Final output must report verified outcome first"),
+                "prompt imports compact Astra-style operating discipline without raw template bloat");
         check(prompt.contains("agent_tool_list") && prompt.contains("agent_tool_find") && prompt.contains("agent_tool_require")
                         && prompt.contains("agent_tool_acquire")
                         && prompt.contains("agent_tool_shared") && prompt.contains("agent_tool_session")
