@@ -3799,7 +3799,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** ■ when a run is in flight and the input is empty (tap = stop); ↑ whenever there is text to send */
+    /** Stop when a run is in flight and the input is empty (tap = stop); Send whenever there is text to send */
     private void refreshSendBtn() {
         if (sendBtn == null) return;
         boolean hasText = input != null && input.getText().toString().trim().length() > 0;
@@ -4044,11 +4044,11 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Target app was quiet for its configured handoff interval; restore the session page. */
+    /** Target app stayed reserved through short model thinking; long thinking or non-UI work restores the session page. */
     void returnToMainAfterTargetOperation() {
         // Never pull the chat back to the front while the agent is still driving another app:
         // that yanks the target window away mid-run (the agent then "cannot" act because the target is gone).
-        // This callback fires three seconds after a completed target action. Never interrupt an
+        // This callback fires only after long thinking or non-target work. Never interrupt an
         // action still in flight.
         // A new target action cancels this callback. Isolation only hides our own surface from
         // agent tooling; it must not prevent the idle handoff back to this session.
@@ -4481,7 +4481,7 @@ public class MainActivity extends Activity {
                         + "Use BLOCKED only when an unmet requirement is proven. "
                         + "For BLOCKED, start exactly with BLOCKED then list: requested outcome; missing required capability; observed evidence; meaningful approaches attempted and why they failed; what you prepared or can still prepare; minimum compatible item/spec/action required from user; and exact resume/verification step. "
                         + "Budget exhaustion alone is never a blocker.]"));
-                AgentBorder.handoffToSessionIfIdle();
+                AgentBorder.handoffToSessionIfLongThinking();
                 android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
                         + " payloadChars=" + msgs.toString().length());
                 final boolean fallbackModels = store.modelFallbackEnabled();
@@ -5326,7 +5326,7 @@ public class MainActivity extends Activity {
                 int head = 180;
                 int tail = 140;
                 sb.append(line, 0, head)
-                        .append(" … [long line ").append(line.length()).append(" chars omitted] … ")
+                        .append(" ... [long line ").append(line.length()).append(" chars omitted] ... ")
                         .append(line, line.length() - tail, line.length());
                 if (nl >= 0) sb.append('\n');
             } else if (!line.isEmpty() || nl >= 0) {
@@ -7147,3 +7147,4 @@ public class MainActivity extends Activity {
         return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), g, null);
     }
 }
+

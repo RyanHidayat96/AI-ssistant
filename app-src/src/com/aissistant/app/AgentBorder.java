@@ -32,10 +32,13 @@ public final class AgentBorder {
     private static final Handler H = new Handler(Looper.getMainLooper());
     /** A launch returns before Activity.onPause on many devices; retain its edge through that handoff. */
     private static final long LAUNCH_BORDER_SETTLE_MS = 900L;
+    /** Short model thinking stays on target app; long thinking returns the session page. */
+    private static final long LONG_THINK_SESSION_RETURN_MS = 8000L;
 
     private static View view;
     private static WindowManager wm;
     private static Pulse pulse;
+    private static Context lastContext;
     /** Obsolete queued handoff holder; kept only so older queued callbacks can be cancelled safely. */
     private static Runnable pendingReturnToMain;
     /** Number of target-app actions in flight. Main-thread only. */
@@ -44,6 +47,10 @@ public final class AgentBorder {
     private static boolean targetAppSession;
     /** At least one foreground target operation, including a launch, happened in this session. */
     private static boolean targetOperationCompleted;
+    private static final int MODE_ACTIVE = 1;
+    private static final int MODE_HOLD = 2;
+    /** Active = bright control, hold = dim reserved target while model plans next UI step. */
+    private static int visualMode;
 
     private AgentBorder() { }
 
@@ -55,11 +62,13 @@ public final class AgentBorder {
             android.util.Log.i("AIssistant", "border operation start: "
                     + c.substring(0, Math.min(60, c.length())));
             final Context ac = ctx.getApplicationContext();
+            lastContext = ac;
             H.post(new Runnable() { @Override public void run() {
                 cancelQueuedReturnToMain();
                 targetAppSession = true;
                 targetOperationCompleted = true;
                 activeOperations++;
+                visualMode = MODE_ACTIVE;
                 show(ac);
             } });
             return true;
@@ -71,6 +80,7 @@ public final class AgentBorder {
     public static void showForBackgroundOperation(final Context ctx) {
         if (ctx == null) return;
         final Context ac = ctx.getApplicationContext();
+        lastContext = ac;
         // onPause happens before onStop, so MainActivity.appVisible can still be true here.
         // This callback is the lifecycle proof that the target app is taking the foreground.
         H.post(new Runnable() { @Override public void run() { show(ac, true); } });
@@ -89,6 +99,7 @@ public final class AgentBorder {
             if (activeOperations == 0) {
                 targetAppSession = false;
                 targetOperationCompleted = false;
+                visualMode = 0;
             }
         } });
     }
@@ -98,6 +109,7 @@ public final class AgentBorder {
         try {
             if (ctx == null || OverlayHub.agentIsolation()) return false;
             final Context ac = ctx.getApplicationContext();
+            lastContext = ac;
             final java.util.concurrent.atomic.AtomicBoolean done =
                     new java.util.concurrent.atomic.AtomicBoolean(false);
             boolean completed = onMainAndWait(new Runnable() { @Override public void run() {
@@ -105,6 +117,7 @@ public final class AgentBorder {
                 targetAppSession = true;
                 targetOperationCompleted = true;
                 activeOperations++;
+                visualMode = MODE_ACTIVE;
                 show(ac);
                 done.set(true);
             } }, 700L);
@@ -138,10 +151,10 @@ public final class AgentBorder {
     private static void endOperationOnMain() {
         if (activeOperations > 0) activeOperations--;
         if (activeOperations == 0) {
-            drop();
+            if (targetAppSession && !MainActivity.appVisible) hold();
+            else drop();
         }
     }
-
     /** Enter a UI-critical phase before the command can read or touch another app. */
     public static boolean prepareTargetScreen(Context ctx, String cmd) {
         try {
@@ -240,6 +253,7 @@ public final class AgentBorder {
     public static void hide() {
         H.post(new Runnable() { @Override public void run() {
             activeOperations = 0;
+            visualMode = 0;
             drop();
         } });
     }
@@ -251,17 +265,38 @@ public final class AgentBorder {
     public static void finishRun() {
         H.post(new Runnable() { @Override public void run() {
             activeOperations = 0;
+            visualMode = 0;
             drop();
             returnToSessionIfIdleOnMain();
         } });
     }
 
     /**
-     * The agent has switched from operating a target app to thinking/reporting/ordinary work.
+     * The agent has switched from operating a target app to ordinary non-UI work or final output.
      * Return the session page immediately when no target action is in flight.
      */
     public static void handoffToSessionIfIdle() {
         H.post(new Runnable() { @Override public void run() { returnToSessionIfIdleOnMain(); } });
+    }
+
+    /** Model thinking often emits the next UI action quickly; avoid bouncing unless it takes long. */
+    public static void handoffToSessionIfLongThinking() {
+        H.post(new Runnable() { @Override public void run() {
+            cancelQueuedReturnToMain();
+            if (activeOperations != 0 || !targetAppSession) return;
+            if (MainActivity.appVisible) {
+                targetAppSession = false;
+                targetOperationCompleted = false;
+                return;
+            }
+            pendingReturnToMain = new Runnable() {
+                @Override public void run() {
+                    pendingReturnToMain = null;
+                    returnToSessionIfIdleOnMain();
+                }
+            };
+            H.postDelayed(pendingReturnToMain, LONG_THINK_SESSION_RETURN_MS);
+        } });
     }
 
     private static void returnToSessionIfIdleOnMain() {
@@ -270,10 +305,13 @@ public final class AgentBorder {
         if (MainActivity.appVisible) {
             targetAppSession = false;
             targetOperationCompleted = false;
+            visualMode = 0;
             return;
         }
         targetAppSession = false;
         targetOperationCompleted = false;
+        visualMode = 0;
+        drop();
         MainActivity host = MainActivity.instance;
         if (host != null) host.returnToMainAfterTargetOperation();
     }
@@ -301,7 +339,54 @@ public final class AgentBorder {
         catch (Throwable ignored) { return false; }
     }
 
+    private static void hold() {
+        visualMode = MODE_HOLD;
+        try {
+            if (!(view instanceof Edge) && lastContext != null && !MainActivity.appVisible) showReserved(lastContext);
+            if (view instanceof Edge) {
+                Edge edge = (Edge) view;
+                edge.setHold(true);
+                if (pulse == null) { pulse = new Pulse(edge); pulse.start(); }
+                else pulse.bump();
+            }
+            android.util.Log.i("AIssistant", "border hold");
+        } catch (Throwable ignored) { }
+    }
+
+    /** Reserved target-app state: visible cue without claiming an input/scroll is currently firing. */
+    private static void showReserved(Context ctx) {
+        try {
+            if (ctx == null || MainActivity.appVisible || view != null) return;
+            lastContext = ctx;
+            wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+            if (wm == null) return;
+            Edge e = new Edge(ctx);
+            e.setHold(true);
+            e.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            | WindowManager.LayoutParams.FLAG_SECURE
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                            | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.TOP | Gravity.START;
+            if (android.os.Build.VERSION.SDK_INT >= 30) lp.setFitInsetsTypes(0);
+            if (android.os.Build.VERSION.SDK_INT >= 28)
+                lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            wm.addView(e, lp);
+            view = e;
+            pulse = new Pulse(e);
+            pulse.start();
+            android.util.Log.i("AIssistant", "border hold window added");
+        } catch (Throwable t) { android.util.Log.w("AIssistant", "border hold show FAILED: " + t); }
+    }
+
     private static void drop() {
+        visualMode = 0;
         try {
             if (pulse != null) { pulse.stop(); pulse = null; }
             if (view != null && wm != null) { wm.removeViewImmediate(view); android.util.Log.i("AIssistant", "border gone"); }
@@ -314,10 +399,12 @@ public final class AgentBorder {
     /** onPause has already proved the app left foreground even though onStop may not run yet. */
     private static void show(Context ctx, boolean duringBackgroundTransition) {
         try {
-            // This edge is secure, non-touchable and hidden from Accessibility. It exists only
-            // while a target-app action is in flight; model thinking and screen reads stay dark.
+            // This edge is secure, non-touchable and hidden from Accessibility. Active mode means touch/scroll/input;
+            // hold mode means the target app is still reserved while the model plans the next UI action.
             if (activeOperations <= 0 || (MainActivity.appVisible && !duringBackgroundTransition)) return;
-            if (view != null) { if (pulse != null) pulse.bump(); return; }
+            visualMode = MODE_ACTIVE;
+            if (view instanceof Edge) { ((Edge) view).setHold(false); if (pulse != null) pulse.bump(); return; }
+            lastContext = ctx;
             wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return;
             Edge e = new Edge(ctx);
@@ -357,6 +444,7 @@ public final class AgentBorder {
         private Path physicalScreen;
         private RuntimeShader runtime;
         private Fallback fallback;
+        private boolean hold;
         private float tlX, tlY, tlR;
         private float trX, trY, trR;
         private float brX, brY, brR;
@@ -370,6 +458,7 @@ public final class AgentBorder {
                 "uniform float2 u_resolution;\n"
                         + "uniform float u_density;\n"
                         + "uniform float u_time;\n"
+                        + "uniform float u_hold;\n"
                         + "uniform float3 u_tl;\n"
                         + "uniform float3 u_tr;\n"
                         + "uniform float3 u_br;\n"
@@ -391,17 +480,18 @@ public final class AgentBorder {
                         + "  float roundBR = mix(1000000.0, u_br.z - length(fragCoord - u_br.xy), activeBR);\n"
                         + "  float roundBL = mix(1000000.0, u_bl.z - length(fragCoord - u_bl.xy), activeBL);\n"
                         + "  edge = min(edge, min(min(roundTL, roundTR), min(roundBR, roundBL)));\n"
-                        + "  float pulse = 0.5 + 0.5 * sin(u_time * 0.95);\n"
+                        + "  float hold = clamp(u_hold, 0.0, 1.0);\n"
+                        + "  float pulse = 0.5 + 0.5 * sin(u_time * mix(0.52, 0.95, 1.0 - hold));\n"
                         + "  float solid = 1.25 * u_density;\n"
                         + "  float fadeEnd = (30.0 + 6.0 * pulse) * u_density;\n"
                         + "  float fade = 1.0 - smoothstep(solid, fadeEnd, edge);\n"
                         + "  fade = pow(clamp(fade, 0.0, 1.0), 1.55);\n"
                         + "  float innerGate = 1.0 - smoothstep(fadeEnd * 0.68, fadeEnd, edge);\n"
                         + "  float outerGlow = 1.0 - smoothstep(0.0, 7.0 * u_density, edge);\n"
-                        + "  float wavePhase = edge / max(u_density, 0.001) * 0.92 - u_time * 5.25;\n"
+                        + "  float wavePhase = edge / max(u_density, 0.001) * 0.92 - u_time * mix(1.25, 5.25, 1.0 - hold);\n"
                         + "  float wave = 0.5 + 0.5 * sin(wavePhase);\n"
-                        + "  float crest = smoothstep(0.62, 1.0, wave) * innerGate * fade;\n"
-                        + "  float alphaF = outerGlow * 0.66 + fade * 0.52 + crest * 0.34;\n"
+                        + "  float crest = smoothstep(0.62, 1.0, wave) * innerGate * fade * mix(0.18, 1.0, 1.0 - hold);\n"
+                        + "  float alphaF = (outerGlow * 0.66 + fade * 0.52 + crest * 0.34) * mix(0.34, 1.0, 1.0 - hold);\n"
                         + "  half3 blue = half3(0.020, 0.455, 1.00);\n"
                         + "  half alpha = half(clamp(alphaF, 0.0, 0.94));\n"
                         + "  return half4(blue * alpha, alpha);\n"
@@ -416,10 +506,18 @@ public final class AgentBorder {
             if (Build.VERSION.SDK_INT >= 33) initRuntimeShader();
         }
 
+        void setHold(boolean hold) {
+            if (this.hold == hold) return;
+            this.hold = hold;
+            if (runtime != null) runtime.setFloatUniform("u_hold", hold ? 1f : 0f);
+            invalidate();
+        }
+
         @SuppressWarnings("NewApi")
         private void initRuntimeShader() {
             try {
                 runtime = new RuntimeShader(AMBIENT_EDGE_SHADER);
+                runtime.setFloatUniform("u_hold", hold ? 1f : 0f);
                 p.setShader(runtime);
             } catch (Throwable ignored) {
                 runtime = null;
@@ -497,6 +595,7 @@ public final class AgentBorder {
         private void setRuntimeSize(int w, int h) {
             runtime.setFloatUniform("u_resolution", (float) w, (float) h);
             runtime.setFloatUniform("u_density", density);
+            runtime.setFloatUniform("u_hold", hold ? 1f : 0f);
         }
 
         @SuppressWarnings("NewApi")
@@ -514,7 +613,7 @@ public final class AgentBorder {
                 c.clipPath(physicalScreen);
             }
             if (runtime != null) drawRuntime(c);
-            else if (fallback != null) fallback.draw(c, p, (System.currentTimeMillis() - t0) / 1000f);
+            else if (fallback != null) fallback.draw(c, p, (System.currentTimeMillis() - t0) / 1000f, hold);
             if (clipped >= 0) c.restoreToCount(clipped);
         }
 
@@ -546,19 +645,20 @@ public final class AgentBorder {
                         new int[] { outer, middle, clear }, new float[] { 0f, .42f, 1f }, Shader.TileMode.CLAMP);
             }
 
-            void draw(Canvas c, Paint p, float seconds) {
-                float breath = .92f + .08f * (float) Math.sin(seconds * .72f);
-                p.setAlpha((int) (255f * breath));
+            void draw(Canvas c, Paint p, float seconds, boolean hold) {
+                float breath = .92f + .08f * (float) Math.sin(seconds * (hold ? .38f : .72f));
+                float modeAlpha = hold ? .34f : 1f;
+                p.setAlpha((int) (255f * breath * modeAlpha));
                 p.setShader(top); c.drawRect(0, 0, c.getWidth(), inset, p);
                 p.setShader(right); c.drawRect(c.getWidth() - inset, 0, c.getWidth(), c.getHeight(), p);
                 p.setShader(bottom); c.drawRect(0, c.getHeight() - inset, c.getWidth(), c.getHeight(), p);
                 p.setShader(left); c.drawRect(0, 0, inset, c.getHeight(), p);
                 p.setShader(null);
-                drawWaveStrips(c, p, seconds);
+                drawWaveStrips(c, p, seconds, hold);
                 p.setAlpha(255);
             }
 
-            private void drawWaveStrips(Canvas c, Paint p, float seconds) {
+            private void drawWaveStrips(Canvas c, Paint p, float seconds, boolean hold) {
                 int w = c.getWidth();
                 int h = c.getHeight();
                 float step = 7.5f * density;
@@ -567,8 +667,8 @@ public final class AgentBorder {
                 p.setStyle(Paint.Style.FILL);
                 for (float d = 5f * density; d < inset * .72f; d += step) {
                     float normalized = 1f - (d / inset);
-                    float wave = .5f + .5f * (float) Math.sin((d / density) * .95f - seconds * 5.4f);
-                    int alpha = (int) (72f * normalized * normalized * wave);
+                    float wave = .5f + .5f * (float) Math.sin((d / density) * .95f - seconds * (hold ? 1.3f : 5.4f));
+                    int alpha = (int) ((hold ? 18f : 72f) * normalized * normalized * wave);
                     if (alpha < 8) continue;
                     p.setColor(Color.argb(alpha, Color.red(blue), Color.green(blue), Color.blue(blue)));
                     c.drawRect(0, d, w, d + strip, p);
@@ -600,3 +700,4 @@ public final class AgentBorder {
         }
     }
 }
+

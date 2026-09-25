@@ -216,10 +216,18 @@ public final class AgentReliabilityTest {
     private static void testTargetAppHandoffPolicy() throws Exception {
         String border = Files.readString(Path.of("app-src/src/com/aissistant/app/AgentBorder.java"));
         String main = Files.readString(Path.of("app-src/src/com/aissistant/app/MainActivity.java"));
-        check(!border.contains("FOLLOWUP_TARGET_IDLE_RETURN_MS") && !border.contains("postDelayed(pendingReturnToMain"),
-                "target-app handoff is state-driven, not a fixed idle timer");
-        check(border.contains("handoffToSessionIfIdle") && main.contains("AgentBorder.handoffToSessionIfIdle();"),
-                "agent returns to session on thinking/non-target work boundaries");
+        check(!border.contains("FOLLOWUP_TARGET_IDLE_RETURN_MS") && border.contains("LONG_THINK_SESSION_RETURN_MS"),
+                "target-app handoff has no short fixed idle timer; only long thinking can return");
+        check(border.contains("handoffToSessionIfLongThinking") && main.contains("AgentBorder.handoffToSessionIfLongThinking();"),
+                "short thinking keeps target app in front, long thinking can return to session");
+        check(border.contains("MODE_HOLD") && border.contains("setHold(true)") && border.contains("u_hold")
+                        && border.contains("showReserved"),
+                "short thinking keeps a dim reserved border instead of dropping target ownership");
+        check(border.contains("drop();\r\n        MainActivity host = MainActivity.instance")
+                        || border.contains("drop();\n        MainActivity host = MainActivity.instance"),
+                "long-thinking return drops border before restoring session page");
+        check(main.contains("if (!targetScreenCommand) AgentBorder.handoffToSessionIfIdle();"),
+                "non-target work still returns to the session immediately");
         check(main.contains("RAW INPUT REFUSED") && main.contains("rawInputWouldHitSelf")
                         && main.contains("mInputMethodTarget") && !main.contains("grep -m1 -E 'mCurrentFocus|mFocusedApp"),
                 "raw global input checks full focus/IME target state before execution");
@@ -513,4 +521,5 @@ public final class AgentReliabilityTest {
         @Override public boolean isAlive() { return true; }
     }
 }
+
 
