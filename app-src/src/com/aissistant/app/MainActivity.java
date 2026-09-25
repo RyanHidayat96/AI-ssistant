@@ -129,6 +129,9 @@ public class MainActivity extends Activity {
     private int lastNavigationInset = -1;
     private TextView streamView;
     private View busyView;
+    private TextView busyText;
+    private volatile int modelWaitRemaining = -1;
+    private volatile int modelWaitToken = 0;
     private String pendingPath = null;
     private String pendingName = null;
     private boolean pickerOpen = false;
@@ -2802,6 +2805,48 @@ public class MainActivity extends Activity {
             newMessagesChip.announceForAccessibility(uiText(R.string.a11y_new_messages_announcement, jumpCount));
         }
     }
+    private String currentBusyText() {
+        if (stop) return uiText(R.string.busy_stopping);
+        if (modelWaitRemaining > 0) {
+            return stepNow > 0
+                    ? uiText(R.string.busy_model_waiting_step, stepNow, modelWaitRemaining)
+                    : uiText(R.string.busy_model_waiting, modelWaitRemaining);
+        }
+        return stepNow > 0 ? uiText(R.string.busy_working_step, stepNow) : uiText(R.string.busy_working);
+    }
+
+    private void refreshBusyText() {
+        ui.post(new Runnable() {
+            @Override public void run() {
+                if (!busy) return;
+                String txt = currentBusyText();
+                if (busyText != null) busyText.setText(txt);
+                AgentService.status(MainActivity.this, txt);
+            }
+        });
+    }
+
+    private void beginModelWaitCountdown(final int seconds) {
+        final int token = ++modelWaitToken;
+        modelWaitRemaining = Math.max(1, seconds);
+        refreshBusyText();
+        ui.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (token != modelWaitToken || !busy || stop) return;
+                if (modelWaitRemaining <= 1) return;
+                modelWaitRemaining--;
+                refreshBusyText();
+                ui.postDelayed(this, 1000);
+            }
+        }, 1000);
+    }
+
+    private void endModelWaitCountdown() {
+        modelWaitToken++;
+        modelWaitRemaining = -1;
+        refreshBusyText();
+    }
+
     private View busyRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
@@ -2810,11 +2855,8 @@ public class MainActivity extends Activity {
         rlp.setMargins(0, dp(14), 0, 0);
         row.setLayoutParams(rlp);
         TextView b = tv(13, MUTED, Typeface.NORMAL);
-        String txt;
-        if (stop) txt = uiText(R.string.busy_stopping);
-        else if (stepNow > 0) txt = uiText(R.string.busy_working_step, stepNow);
-        else txt = uiText(R.string.busy_working);
-        b.setText(txt);
+        busyText = b;
+        b.setText(currentBusyText());
         b.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         b.setBackground(round(SURFACE, LINE, 18));
         b.setPadding(dp(14), dp(10), dp(14), dp(10));
@@ -3046,20 +3088,18 @@ public class MainActivity extends Activity {
         if (reply == null || reply.ok || reply.responseStarted || stop) return false;
         String e = reply.error == null ? "" : reply.error.toLowerCase(Locale.ENGLISH);
         if (e.contains("stopped")) return false;
-        return e.contains("timed out") || e.contains("timeout")
+        // Auto-switch is only for an unreachable/silent provider: no usable response from baseUrl
+        // inside the current wait window (5s when fallback is enabled). Provider/model rejections
+        // like invalid key, quota, rate limit, or HTTP 400 are surfaced to the user instead.
+        return e.contains("model wait timed out") || e.contains("sockettimeoutexception")
+                || e.contains("timed out") || e.contains("timeout")
+                || e.contains("no response")
                 || e.contains("stream disconnected") || e.contains("connection reset")
-                || e.contains("connection refused") || e.contains("broken pipe")
-                || e.contains("network is unreachable") || e.contains("unable to resolve host")
-                || e.contains("eofexception") || e.contains("unexpected end of stream")
-                || e.contains("no response") || e.contains("no endpoint") || e.contains("no model")
-                || e.contains("quota") || e.contains("rate limit") || e.contains("rate_limit")
-                || e.contains("billing") || e.contains("credit") || e.contains("insufficient")
-                || e.contains("unauthorized") || e.contains("invalid api key")
-                || e.contains("invalid_api_key") || e.contains("authentication")
-                || e.startsWith("http 400") || e.startsWith("http 401") || e.startsWith("http 403")
-                || e.startsWith("http 404") || e.startsWith("http 408") || e.startsWith("http 409")
-                || e.startsWith("http 429") || e.startsWith("http 500") || e.startsWith("http 502")
-                || e.startsWith("http 503") || e.startsWith("http 504");
+                || e.contains("connection refused") || e.contains("connectexception")
+                || e.contains("broken pipe") || e.contains("eofexception")
+                || e.contains("unexpected end of stream")
+                || e.contains("network is unreachable")
+                || e.contains("unable to resolve host") || e.contains("unknownhostexception");
     }
 
     private void ensureActiveStillValid() {
@@ -3128,8 +3168,7 @@ public class MainActivity extends Activity {
     private AiClient.StatusCb modelStatusCallback(final int step) {
         return new AiClient.StatusCb() {
             @Override public void onRetry(int retry, int maxRetries, String error, long waitMs) {
-                String status = uiText(R.string.runtime_model_reconnecting, retry, maxRetries);
-                setRunStatus(status);
+                beginModelWaitCountdown(Math.max(1, (int) Math.ceil(waitMs / 1000.0)));
                 addBubble("note", uiText(R.string.runtime_model_reconnecting_detail,
                         retry, maxRetries, classifyModelError(error)));
             }
@@ -3831,6 +3870,7 @@ public class MainActivity extends Activity {
 
     /** live assistant bubble while the model streams; the stored bubble replaces it on render */
     private void streamUpdate(final String contentText, final String reasoning) {
+        endModelWaitCountdown();
         ui.post(new Runnable() {
             @Override public void run() {
                 if (chatLog == null) return;
@@ -4463,20 +4503,21 @@ public class MainActivity extends Activity {
                     String modelId = requestModel.optString("id");
                     if (!modelId.isEmpty()) triedModelIds.add(modelId);
                     String modelLabel = shortLabel(requestModel);
-                    setRunStatus(uiText(R.string.runtime_model_waiting_seconds, fallbackModels ? 5 : 20, stepNow));
+                    int modelWaitSeconds = fallbackModels ? 5 : 20;
                     reply = AiClient.complete(provider.optString("baseUrl", ""), provider.optString("apiKey", ""),
                             requestModel.optString("name", ""), msgs, (finalTurn ? null : tools()),
-                            store.temperature() / 100.0, thinkNow, fallbackModels ? 5 : 20, streamCb, statusCb);
+                            store.temperature() / 100.0, thinkNow, modelWaitSeconds, streamCb, statusCb);
+                    endModelWaitCountdown();
                     if (!reply.ok && !imagePartsStripped && hasImagePart(msgs)
                             && reply.error != null && reply.error.indexOf("400") >= 0) {
                         // this model cannot take image parts - fall back to the file path and retry once
                         stripImageParts(msgs);
                         imagePartsStripped = true;
                         addBubble("note", uiText(R.string.runtime_image_retry));
-                        setRunStatus(uiText(R.string.runtime_model_waiting_seconds, fallbackModels ? 5 : 20, stepNow));
                         reply = AiClient.complete(provider.optString("baseUrl", ""), provider.optString("apiKey", ""),
                                 requestModel.optString("name", ""), msgs, (finalTurn ? null : tools()),
-                                store.temperature() / 100.0, thinkNow, fallbackModels ? 5 : 20, streamCb, statusCb);
+                                store.temperature() / 100.0, thinkNow, modelWaitSeconds, streamCb, statusCb);
+                        endModelWaitCountdown();
                     }
                     streamReset();
                     if (reply.ok) {
@@ -4490,6 +4531,7 @@ public class MainActivity extends Activity {
                         break;
                     }
                     addBubble("note", uiText(R.string.runtime_model_switching, modelLabel, shortLabel(nextModel)));
+                    beginModelWaitCountdown(fallbackModels ? 5 : 20);
                     requestModel = nextModel;
                 }
                 if (stop) break;

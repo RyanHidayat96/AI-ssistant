@@ -315,6 +315,8 @@
     <string name="busy_stopping">Menghentikan...</string>
     <string name="busy_working">Bekerja...</string>
     <string name="busy_working_step">Bekerja... langkah %1$d</string>
+    <string name="busy_model_waiting">Menunggu... %1$d detik</string>
+    <string name="busy_model_waiting_step">Menunggu... langkah %1$d · %2$d detik</string>
     <string name="chat_empty_description">Jelaskan tujuan Anda. Tindakan root yang perlu persetujuan ditinjau secara default.</string>
     <string name="chat_setup_description">Tambahkan provider dan model sebelum chat. API key dan lampiran gambar hanya dikirim ke provider yang Anda pilih.</string>
     <string name="suggest_system_title">Cek sistem</string>
