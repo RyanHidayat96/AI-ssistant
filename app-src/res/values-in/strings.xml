@@ -78,6 +78,11 @@
     <string name="thinking_high">Tinggi</string>
     <string name="settings_auto_run">Jalankan perintah aman otomatis</string>
     <string name="settings_auto_help">Mati secara default. Tindakan berisiko tetap perlu review kecuali AUTO aktif untuk chat ini.</string>
+    <string name="settings_model_fallback">Ganti model otomatis jika koneksi gagal</string>
+    <string name="settings_model_fallback_help">Jika aktif, saat model terpilih tidak tersambung dalam 5 detik, agent mencoba model aktif berikutnya secara berurutan.</string>
+    <string name="runtime_model_switching">%1$s tidak merespons tepat waktu - mencoba %2$s</string>
+    <string name="runtime_model_switched">Berhasil pindah ke %1$s</string>
+    <string name="runtime_model_no_fallback">Tidak ada model aktif lain yang tersedia.</string>
     <string name="settings_section_app_lock">KUNCI APP</string>
     <string name="settings_lock_enabled">Password aktif. Diminta setelah meninggalkan app saat idle, kecuali kembali dari panel floating.</string>
     <string name="settings_lock_disabled">Password belum aktif.</string>
@@ -256,6 +261,7 @@
     <string name="runtime_limit_reached">Runtime menahan loop; agent menyiapkan status dari bukti yang ada.</string>
     <string name="runtime_image_retry">Model menolak gambar — dicoba ulang hanya dengan path file</string>
     <string name="runtime_model_waiting">Menunggu model (maks 20 detik) - step %1$d</string>
+    <string name="runtime_model_waiting_seconds">Menunggu model (maks %1$d detik) - step %2$d</string>
     <string name="runtime_model_reconnecting">Koneksi model terputus - retry %1$d/%2$d</string>
     <string name="runtime_model_reconnecting_detail">Koneksi model terputus. Retry %1$d/%2$d. Status: %3$s</string>
     <string name="runtime_model_no_response">Tidak ada respons dari provider model</string>

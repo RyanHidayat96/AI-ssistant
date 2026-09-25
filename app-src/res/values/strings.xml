@@ -78,6 +78,11 @@
     <string name="thinking_high">High</string>
     <string name="settings_auto_run">Run safe commands automatically</string>
     <string name="settings_auto_help">Off by default. Risky actions still need review unless you enable AUTO for this chat.</string>
+    <string name="settings_model_fallback">Auto-switch model if connection fails</string>
+    <string name="settings_model_fallback_help">When enabled, if the selected model cannot connect within 5 seconds, the agent tries the next enabled model in order.</string>
+    <string name="runtime_model_switching">%1$s did not respond in time - trying %2$s</string>
+    <string name="runtime_model_switched">Switched to %1$s</string>
+    <string name="runtime_model_no_fallback">No other enabled model available.</string>
     <string name="settings_section_app_lock">APP LOCK</string>
     <string name="settings_lock_enabled">Password active. Asked after leaving while idle, except when returning from the floating panel.</string>
     <string name="settings_lock_disabled">Password is not active.</string>
@@ -256,6 +261,7 @@
     <string name="runtime_limit_reached">Runtime paused a loop; agent is preparing status from available evidence.</string>
     <string name="runtime_image_retry">Model refused image — retried with file path only</string>
     <string name="runtime_model_waiting">Waiting for model (max 20s) - step %1$d</string>
+    <string name="runtime_model_waiting_seconds">Waiting for model (max %1$d s) - step %2$d</string>
     <string name="runtime_model_reconnecting">Model connection lost - retrying %1$d/%2$d</string>
     <string name="runtime_model_reconnecting_detail">Model connection lost. Retrying %1$d/%2$d. Status: %3$s</string>
     <string name="runtime_model_no_response">No response from model provider</string>

@@ -82,8 +82,8 @@ final class AiClient {
     /** set by Stop, cleared when a new run starts - so a cancel is never lost to a race */
     private static volatile boolean cancelled;
 
-    /** User-visible provider wait window: if no model response arrives in 20 seconds, stop. */
-    private static final int MODEL_WAIT_TIMEOUT_MS = 20000;
+    /** Default user-visible provider wait window when model fallback is off. */
+    private static final int DEFAULT_MODEL_WAIT_TIMEOUT_MS = 20000;
 
     static void cancel() {
         cancelled = true;
@@ -175,7 +175,8 @@ final class AiClient {
             out.ok = true;
             return out;
         } catch (java.net.SocketTimeoutException t) {
-            out.error = "model wait timed out after 20 seconds; no commands were executed";
+            out.error = "provider test timed out after " + Math.max(1, timeoutSec)
+                    + " seconds";
             return out;
         } catch (Throwable t) {
             out.error = String.valueOf(t);
@@ -276,6 +277,9 @@ final class AiClient {
                                       int maxTokens, StreamCb cb, boolean minimal) {
         Reply out = new Reply();
         HttpURLConnection conn = null;
+        int waitMs = timeoutSec > 0
+                ? Math.max(1000, Math.min(600000, timeoutSec * 1000))
+                : DEFAULT_MODEL_WAIT_TIMEOUT_MS;
         try {
             if (cancelled) {
                 out.error = "stopped";
@@ -322,8 +326,8 @@ final class AiClient {
             conn = (HttpURLConnection) new URL(url).openConnection();
             active = conn;
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(MODEL_WAIT_TIMEOUT_MS);
-            conn.setReadTimeout(MODEL_WAIT_TIMEOUT_MS);
+            conn.setConnectTimeout(waitMs);
+            conn.setReadTimeout(waitMs);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Accept", "text/event-stream, application/json");
@@ -522,7 +526,8 @@ final class AiClient {
             }
             return out;
         } catch (java.net.SocketTimeoutException t) {
-            out.error = "model wait timed out after 20 seconds; no commands were executed";
+            out.error = "model wait timed out after " + Math.max(1, waitMs / 1000)
+                    + " seconds; no commands were executed";
             return out;
         } catch (Throwable t) {
             out.error = String.valueOf(t);

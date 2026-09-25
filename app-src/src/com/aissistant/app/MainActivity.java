@@ -1229,6 +1229,21 @@ public class MainActivity extends Activity {
         autoHelpLp.setMargins(0, dp(2), 0, 0);
         panel.addView(autoHelp, autoHelpLp);
 
+        final Switch modelFallback = new Switch(this);
+        modelFallback.setText(uiText(R.string.settings_model_fallback));
+        modelFallback.setTextColor(FG);
+        modelFallback.setTextSize(14);
+        modelFallback.setChecked(store.modelFallbackEnabled());
+        modelFallback.setMinHeight(dp(48));
+        LinearLayout.LayoutParams fallbackLp = new LinearLayout.LayoutParams(-1, -2);
+        fallbackLp.setMargins(0, dp(12), 0, 0);
+        panel.addView(modelFallback, fallbackLp);
+        TextView fallbackHelp = tv(12, MUTED, Typeface.NORMAL);
+        fallbackHelp.setText(uiText(R.string.settings_model_fallback_help));
+        LinearLayout.LayoutParams fallbackHelpLp = new LinearLayout.LayoutParams(-1, -2);
+        fallbackHelpLp.setMargins(0, dp(2), 0, 0);
+        panel.addView(fallbackHelp, fallbackHelpLp);
+
         LinearLayout.LayoutParams securityHeaderLp = new LinearLayout.LayoutParams(-1, -2);
         securityHeaderLp.setMargins(0, dp(22), 0, dp(6));
         panel.addView(sectionLabel(uiText(R.string.settings_section_app_lock)), securityHeaderLp);
@@ -1329,7 +1344,7 @@ public class MainActivity extends Activity {
                 Integer timeoutValue = wholeNumber(timeout, 20, 1800, "Timeout");
                 if (tempValue == null || timeoutValue == null) return;
                 store.save(tempValue, timeoutValue,
-                        auto.isChecked(), thinking[0]);
+                        auto.isChecked(), thinking[0], modelFallback.isChecked());
                 refreshStatus();
                 toast(uiText(R.string.settings_saved));
             }
@@ -3005,6 +3020,48 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    private JSONObject nextEnabledModelAfter(String afterId, java.util.Set<String> triedIds) {
+        JSONArray ms = models();
+        if (ms.length() == 0) return null;
+        int start = 0;
+        for (int i = 0; i < ms.length(); i++) {
+            JSONObject o = ms.optJSONObject(i);
+            if (o != null && afterId != null && afterId.equals(o.optString("id"))) {
+                start = (i + 1) % ms.length();
+                break;
+            }
+        }
+        for (int step = 0; step < ms.length(); step++) {
+            JSONObject o = ms.optJSONObject((start + step) % ms.length());
+            if (o == null) continue;
+            String id = o.optString("id");
+            if (id.isEmpty()) continue;
+            if (triedIds != null && triedIds.contains(id)) continue;
+            if (o.optBoolean("enabled", true) && providerOf(o) != null) return o;
+        }
+        return null;
+    }
+
+    private boolean shouldFallbackModel(AiClient.Reply reply) {
+        if (reply == null || reply.ok || reply.responseStarted || stop) return false;
+        String e = reply.error == null ? "" : reply.error.toLowerCase(Locale.ENGLISH);
+        if (e.contains("stopped")) return false;
+        return e.contains("timed out") || e.contains("timeout")
+                || e.contains("stream disconnected") || e.contains("connection reset")
+                || e.contains("connection refused") || e.contains("broken pipe")
+                || e.contains("network is unreachable") || e.contains("unable to resolve host")
+                || e.contains("eofexception") || e.contains("unexpected end of stream")
+                || e.contains("no response") || e.contains("no endpoint") || e.contains("no model")
+                || e.contains("quota") || e.contains("rate limit") || e.contains("rate_limit")
+                || e.contains("billing") || e.contains("credit") || e.contains("insufficient")
+                || e.contains("unauthorized") || e.contains("invalid api key")
+                || e.contains("invalid_api_key") || e.contains("authentication")
+                || e.startsWith("http 400") || e.startsWith("http 401") || e.startsWith("http 403")
+                || e.startsWith("http 404") || e.startsWith("http 408") || e.startsWith("http 409")
+                || e.startsWith("http 429") || e.startsWith("http 500") || e.startsWith("http 502")
+                || e.startsWith("http 503") || e.startsWith("http 504");
+    }
+
     private void ensureActiveStillValid() {
         JSONObject a = activeModelObj();
         if (a != null && a.optBoolean("enabled", true) && providerOf(a) != null) { updateSubtitle(); return; }
@@ -4386,26 +4443,60 @@ public class MainActivity extends Activity {
                         + "Budget exhaustion alone is never a blocker.]"));
                 android.util.Log.i("AIssistant", "req step=" + stepNow + " msgs=" + msgs.length()
                         + " payloadChars=" + msgs.toString().length());
-                final boolean hadImage = hasImagePart(msgs);
-                setRunStatus(uiText(R.string.runtime_model_waiting, stepNow));
+                final boolean fallbackModels = store.modelFallbackEnabled();
+                final java.util.Set<String> triedModelIds = new java.util.HashSet<>();
                 final AiClient.StreamCb streamCb = new AiClient.StreamCb() {
                     @Override public void onDelta(String text, String reasoning) { streamUpdate(text, reasoning); }
                 };
                 final AiClient.StatusCb statusCb = modelStatusCallback(stepNow);
-                AiClient.Reply reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
-                        msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300,
-                        streamCb, statusCb);
-                if (!reply.ok && hadImage && reply.error != null && reply.error.indexOf("400") >= 0) {
-                    // this model cannot take image parts - fall back to the file path and retry once
-                    stripImageParts(msgs);
-                    addBubble("note", uiText(R.string.runtime_image_retry));
-                    setRunStatus(uiText(R.string.runtime_model_waiting, stepNow));
-                    reply = AiClient.complete(activeBaseUrl(), activeApiKey(), activeModelName(),
-                            msgs, (finalTurn ? null : tools()), store.temperature() / 100.0, thinkNow, 300,
-                            streamCb, statusCb);
+                boolean imagePartsStripped = false;
+                AiClient.Reply reply = null;
+                JSONObject requestModel = activeModelObj();
+                String successfulModelId = "";
+                while (!stop) {
+                    if (requestModel == null || !requestModel.optBoolean("enabled", true) || providerOf(requestModel) == null) {
+                        reply = new AiClient.Reply();
+                        reply.error = "no usable model configured";
+                        break;
+                    }
+                    JSONObject provider = providerOf(requestModel);
+                    String modelId = requestModel.optString("id");
+                    if (!modelId.isEmpty()) triedModelIds.add(modelId);
+                    String modelLabel = shortLabel(requestModel);
+                    setRunStatus(uiText(R.string.runtime_model_waiting_seconds, fallbackModels ? 5 : 20, stepNow));
+                    reply = AiClient.complete(provider.optString("baseUrl", ""), provider.optString("apiKey", ""),
+                            requestModel.optString("name", ""), msgs, (finalTurn ? null : tools()),
+                            store.temperature() / 100.0, thinkNow, fallbackModels ? 5 : 20, streamCb, statusCb);
+                    if (!reply.ok && !imagePartsStripped && hasImagePart(msgs)
+                            && reply.error != null && reply.error.indexOf("400") >= 0) {
+                        // this model cannot take image parts - fall back to the file path and retry once
+                        stripImageParts(msgs);
+                        imagePartsStripped = true;
+                        addBubble("note", uiText(R.string.runtime_image_retry));
+                        setRunStatus(uiText(R.string.runtime_model_waiting_seconds, fallbackModels ? 5 : 20, stepNow));
+                        reply = AiClient.complete(provider.optString("baseUrl", ""), provider.optString("apiKey", ""),
+                                requestModel.optString("name", ""), msgs, (finalTurn ? null : tools()),
+                                store.temperature() / 100.0, thinkNow, fallbackModels ? 5 : 20, streamCb, statusCb);
+                    }
+                    streamReset();
+                    if (reply.ok) {
+                        successfulModelId = modelId;
+                        break;
+                    }
+                    if (!fallbackModels || !shouldFallbackModel(reply)) break;
+                    JSONObject nextModel = nextEnabledModelAfter(modelId, triedModelIds);
+                    if (nextModel == null) {
+                        addBubble("note", uiText(R.string.runtime_model_no_fallback));
+                        break;
+                    }
+                    addBubble("note", uiText(R.string.runtime_model_switching, modelLabel, shortLabel(nextModel)));
+                    requestModel = nextModel;
                 }
-                streamReset();
                 if (stop) break;
+                if (reply == null) {
+                    reply = new AiClient.Reply();
+                    reply.error = "no response from model provider";
+                }
                 if (reply.retries > 0) {
                     addBubble("note", uiText(R.string.runtime_provider_retry, reply.retries));
                 }
@@ -4419,6 +4510,12 @@ public class MainActivity extends Activity {
                     addBubble("note", modelErrorDetail(reply.error));
                     brokeEarly = true;
                     break;
+                }
+                if (fallbackModels && !successfulModelId.isEmpty()
+                        && !successfulModelId.equals(store.activeModelId())) {
+                    store.setActiveModelId(successfulModelId);
+                    ui.post(new Runnable() { @Override public void run() { updateSubtitle(); } });
+                    addBubble("note", uiText(R.string.runtime_model_switched, shortLabel(requestModel)));
                 }
                 boolean hasToolCalls = !finalTurn && reply.toolCalls != null && reply.toolCalls.length() > 0;
                 List<String> cmds = extractCommands(reply.text);
@@ -6092,6 +6189,28 @@ public class MainActivity extends Activity {
 
         JSONArray ps = providers();
         JSONArray ms = models();
+
+        final Switch modelFallback = new Switch(this);
+        modelFallback.setText(uiText(R.string.settings_model_fallback));
+        modelFallback.setTextColor(FG);
+        modelFallback.setTextSize(14);
+        modelFallback.setChecked(store.modelFallbackEnabled());
+        modelFallback.setMinHeight(dp(48));
+        modelFallback.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean checked) {
+                store.setModelFallbackEnabled(checked);
+                toast(uiText(R.string.settings_saved));
+            }
+        });
+        LinearLayout.LayoutParams fallbackSwitchLp = new LinearLayout.LayoutParams(-1, -2);
+        fallbackSwitchLp.setMargins(0, dp(6), 0, 0);
+        list.addView(modelFallback, fallbackSwitchLp);
+
+        TextView modelFallbackHelp = tv(12, MUTED, Typeface.NORMAL);
+        modelFallbackHelp.setText(uiText(R.string.settings_model_fallback_help));
+        LinearLayout.LayoutParams modelFallbackHelpLp = new LinearLayout.LayoutParams(-1, -2);
+        modelFallbackHelpLp.setMargins(0, dp(2), 0, dp(10));
+        list.addView(modelFallbackHelp, modelFallbackHelpLp);
 
         LinearLayout.LayoutParams h1 = new LinearLayout.LayoutParams(-1, -2);
         h1.setMargins(0, dp(10), 0, dp(8));

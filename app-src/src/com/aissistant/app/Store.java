@@ -28,6 +28,8 @@ final class Store {
     int temperature() { return sp.getInt("temperature", 30); }        // percent, 0..100
     int timeoutSec() { return sp.getInt("timeoutSec", 180); }
     boolean autoRun() { return true; }  // always live; a stored "false" from earlier builds must not queue commands
+    boolean modelFallbackEnabled() { return sp.getBoolean("modelFallbackEnabled", false); }
+    void setModelFallbackEnabled(boolean enabled) { sp.edit().putBoolean("modelFallbackEnabled", enabled).apply(); }
     int thinking() { return sp.getInt("thinking", 3); }   // 0 off, 1 low, 2 high, 3 auto
 
     /** cached inventory of the device's tools, injected into the system prompt */
@@ -35,12 +37,13 @@ final class Store {
     long toolProbeAt() { return sp.getLong("toolProbeAt", 0L); }
     void setToolProbe(String s) { sp.edit().putString("toolProbe", s).putLong("toolProbeAt", System.currentTimeMillis()).apply(); }
 
-    void save(int temperature, int timeoutSec, boolean autoRun, int thinking) {
+    void save(int temperature, int timeoutSec, boolean autoRun, int thinking, boolean modelFallbackEnabled) {
         sp.edit()
                 .putInt("temperature", Math.max(0, Math.min(100, temperature)))
                 .putInt("timeoutSec", Math.max(20, Math.min(1800, timeoutSec)))
                 .putBoolean("autoRun", autoRun)
                 .putInt("thinking", Math.max(0, Math.min(3, thinking)))
+                .putBoolean("modelFallbackEnabled", modelFallbackEnabled)
                 .apply();
     }
 
